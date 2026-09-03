@@ -84,8 +84,14 @@ vet: ## Run go vet against code.
 #
 # Each layer is built behind its own tag, so the ones you did not ask for are
 # not compiled and there is nothing to skip.
+#
+# kustomize is a prerequisite because the tests that read the rendered manifests
+# -- the cert-manager wiring, the flags a patch can drop, the token volume, the
+# DNS name budget -- shell out to bin/kustomize and skip themselves when it is
+# not there. go test still prints ok for the package, so without this line a
+# fresh clone's first green run is eight assertions short and says so nowhere.
 .PHONY: test
-test: manifests generate fmt vet setup-envtest ## Run the tests that need nothing.
+test: manifests generate fmt vet kustomize setup-envtest ## Run the tests that need nothing.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /test/) -coverprofile cover.out
 
 # These answer questions only Databricks can answer, against somebody's
