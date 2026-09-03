@@ -31,27 +31,9 @@ One line rather than none, deliberately: nothing this operator sets is a name an
 Databricks SDK reads, so a workload that brought its own configuration keeps it.
 See [What your workload writes](#what-your-workload-writes).
 
-## Two other people have to have said yes
-
-The annotation is a request, not a permission. It does nothing until both of
-these are already true:
-
-| Who                                     | Says                                | Where                                                   |
-|-----------------------------------------|-------------------------------------|---------------------------------------------------------|
-| A cluster admin                         | this namespace may be served at all | `databricks.workload-identity.io/mint` on the Namespace |
-| The team holding the Databricks account | I will spend my credential here     | `spec.namespaces` on their DatabricksAccount            |
-
-Neither can say the other's, and neither can say yours. Withhold any of the three
-and nothing happens, and nothing says so: until an identity exists there is no
-object to carry a condition, and an object in every namespace announcing that it
-has nothing would be this operator answering a question nobody asked. All three
-are read rather than reported — the label on the Namespace, the list on the
-DatabricksAccount, and the annotation you wrote.
-
-[Opening a namespace](#opening-a-namespace) is both, in full.
-
-This operator grants nothing. What that principal may read or run is decided in
-Databricks.
+The annotation is a request, not a permission: two other people have to have
+said yes first, and both of them are below. This operator grants nothing either
+— what that principal may read or run is decided in Databricks.
 
 > **Not released.** All of this has run — one pod on EKS holding two identities
 > the operator created, exchanging each of its two tokens and acting as a
@@ -59,45 +41,6 @@ Databricks.
 > against one account. Nobody has used it for anything.
 
 ---
-
-# What it will not do
-
-It creates identities. It grants them nothing, and it will not — not a group
-membership, not a workspace assignment, not a permission on anything in Unity
-Catalog. That is a boundary rather than an unfinished half, and two things rest
-on it.
-
-**It is the only thing about this operator the account can check.** The
-operator's own service principal has to be an account admin, because writing a
-federation policy allows nothing narrower; step 1 spends a while on why. An
-account admin can grant Databricks permissions, so the account cannot rule out
-that this one does by reading its permissions — the only thing left to read is
-the code, and today that reading is short, because there is no call in it that
-grants anything. The moment one identity gets a group membership from here, the
-answer becomes "it grants only what it should", which is a claim about a running
-program rather than a fact about a file. The account admin the operator already
-paid for then buys nothing.
-
-**It is what makes `mint` safe to hand out.** Annotating a ServiceAccount is a
-namespace-level act: whoever can write ServiceAccounts in `team-a` can mint an
-identity there. That is acceptable only because a minted identity holds nothing
-— it is why "mint is not a security boundary", below, is true. If minting also
-granted, write access to a namespace would become a way to acquire Databricks
-permissions, by a route nobody in Databricks reviews.
-
-A third, smaller one: every permission in the account has a single origin, so
-"who can read this table" is answered in Databricks alone, rather than
-reconstructed from annotations anyone holding a namespace can change.
-
-What this costs is real, and it is the cost being chosen. `status.clientID`
-names the identity and stops there; putting it in a group is somebody else's
-work, done with somebody else's credential — one that needs none of the account
-admin this operator does. Whether that somebody is Terraform, a person, or
-another controller is a governance decision, and not this operator's to make.
-
----
-
-# Installing
 
 ## Requirements
 
@@ -158,7 +101,7 @@ ideally in Terraform:
    Databricks permissions. This operator does not, and holds no code that could
    -- but the account can no longer prove that from the permissions alone, only
    from what the operator is. That is why it does not grant, and will not:
-   "What it will not do", above.
+   [What it will not do](#what-it-will-not-do).
 
 [manage-sp]: https://docs.databricks.com/aws/en/admin/users-groups/manage-service-principals
 [sp-acl]: https://docs.databricks.com/aws/en/security/auth/access-control/service-principal-acl
@@ -181,7 +124,19 @@ spec:
   host: https://accounts.cloud.databricks.com
   accountId: <account id>
   clientId: <applicationId from step 1>
+  namespaces:
+  - team-a
 ```
+
+`namespaces` is where this operator will act, by name, and it is the half of the
+answer that belongs to whoever holds this account: it says which namespaces their
+account admin credential may be spent on. Naming none serves none, and that is
+the default — a fresh install is inert until its owner says where it may act, so
+a `DatabricksAccount` written without this field is correct and does nothing.
+
+It is the second of the two yeses below, and
+[Saying where the account may be spent](#saying-where-the-account-may-be-spent)
+is the rest of it.
 
 Check it:
 
@@ -199,11 +154,27 @@ Installation is done. The rest is per-team and per-workload.
 
 ---
 
-# Running it
+## Two people have to say yes first
 
-## Opening a namespace
+An annotation does nothing until both of these are already true. The two sections
+after this one are those two, in this order:
 
-Cluster-admin does this, once per namespace, with two labels:
+| Who                                     | Says                                | Where                                                   |
+|-----------------------------------------|-------------------------------------|---------------------------------------------------------|
+| A cluster admin                         | this namespace may be served at all | `databricks.workload-identity.io/mint` on the Namespace |
+| The team holding the Databricks account | I will spend my credential here     | `spec.namespaces` on their DatabricksAccount            |
+
+Neither can say the other's, and neither can say the third: the annotation
+itself, written by whoever holds the namespace. Withhold any of the three and
+nothing happens, and nothing says so — until an identity exists there is no
+object to carry a condition, and an object in every namespace announcing that it
+has nothing would be this operator answering a question nobody asked. All three
+are read rather than reported: the label on the Namespace, the list on the
+DatabricksAccount, and the annotation on the ServiceAccount.
+
+## Saying a namespace may be served
+
+A cluster admin does this, once per namespace, with two labels:
 
 ```sh
 kubectl label namespace team-a \
@@ -232,24 +203,22 @@ call per pod and nothing else — a pod whose ServiceAccount has no identity is
 admitted unchanged. Forgetting it is cheap.
 
 **Neither label revokes.** To end a workload's access, remove the annotation key
-below — by whoever asked for it, which is the point of them being two separate
-things.
+— by whoever asked for it, which is the point of them being two separate things.
+See [Destroying an identity](#destroying-an-identity).
 
-**And neither label commits an operator.** The cluster saying a namespace may be
-served is not the same as a platform team agreeing to spend their account admin
-credential on it. That answer lives on their own DatabricksAccount, in their own
-namespace, and no namespace can add itself to it:
+## Saying where the account may be spent
 
-```yaml
-spec:
-  namespaces:
-  - team-a
-```
+The cluster saying a namespace may be served is not the same as a platform team
+agreeing to spend their account admin credential on it. Those are two people, and
+`spec.namespaces` from step 3 is the second one's answer.
 
-Naming nothing serves nothing, which is the default: a fresh install is inert
-until its owner says where it may act.
+It is theirs and nobody else's, by where it lives: the `DatabricksAccount` is in
+the operator's own namespace, so writing to it needs the access that could
+already replace the operator's image. A namespace cannot add itself to the list,
+and a team that wants in asks the team holding the account rather than editing
+anything of their own.
 
-## Two Databricks accounts in one cluster
+### Two Databricks accounts in one cluster
 
 One operator serves one Databricks account, because it holds that account's
 credential and that credential is an account admin. Two accounts need two
@@ -272,11 +241,6 @@ spec:
 `team-a` and `team-b` use the finance account, so that operator serves both;
 `risk` is named on the other operator's account instead.
 
-This is where a platform team says what their account admin credential may be
-spent on, and the answer is theirs alone: the object lives in their own
-namespace, and no namespace can add itself to it. **Naming nothing serves
-nothing** — a fresh install is inert until its owner says where it may act.
-
 A namespace this operator does not serve is left entirely alone — not served, and
 not revoked.
 
@@ -290,7 +254,11 @@ minted for whatever its own operator's token carries, and a pod holds one token
 per identity — so nobody has to go round asking the other platform teams what
 theirs is.
 
+---
+
 ## Giving one workload an identity
+
+Whoever holds the namespace does all of this, and none of it needs a cluster admin.
 
 ### First, find the operator you are asking
 
@@ -338,43 +306,9 @@ whole of the common case.
 **Grant to a group rather than to that applicationId** — worth weighing before
 you settle on how to grant. If the service principal is ever deleted in
 Databricks, nothing rebuilds it: the identity reports `RemovedInDatabricks` and
-waits, and what you ask for in its place carries a new applicationId. Anything
-that named the old one directly has to be redone; anything that went through a
-group is adding the new principal to it.
-
-### The workspace is yours to name
-
-The annotation names an operator and nothing else — no workspace. Your workload
-names its own, in its own Deployment, with the SDK's own variable:
-
-```yaml
-env:
-- name: DATABRICKS_HOST
-  value: https://dbc-example.cloud.databricks.com
-```
-
-That composes with what this operator gives you rather than replacing it —
-measured against the SDK: the profile supplies `auth_type`, `client_id` and the
-token path, and `DATABRICKS_HOST` supplies the host.
-
-It is not here because this operator issues identities, and a host is a
-destination. It could not check one if it carried it: it knows the Databricks
-account it acts in, and a workload wants a workspace. Carrying it would be
-repeating a string nobody verifies, in an object that is not where the rest of
-your configuration lives.
-
-A key that cannot be read is refused on its own, and refusing it changes nothing:
-no identity is made for it, none is destroyed, and every other key is acted on as
-if it were not there. Nothing is said about it anywhere either — what you have is
-the edit you made not taking effect. Whether a key reads is decided by the
-characters in it and by nothing about the cluster, so the line you wrote is the
-whole of what there is to check: an operator's reference is
-`<its namespace>/<its DatabricksAccount>`, and an identity's name goes after a
-`.` on the key.
-
-So a typo costs you the edit and nothing else. What withdraws an identity is a key
-that is *gone*; a key that is there and unreadable holds whatever it already
-named. See [Destroying an identity](#destroying-an-identity).
+waits rather than making another, and what you ask for in its place carries a new
+applicationId. Anything that named the old one directly has to be redone;
+anything that went through a group is adding the new principal to it.
 
 ### More than one identity
 
@@ -395,12 +329,15 @@ holds unchanged for the one-identity case.
 ### Recreate pods that were already running
 
 A pod is equipped when it is created, and nothing rewrites a running one. The
-object names the pods that are missing what they should have:
+object's `Equipped` condition names the pods that are missing what they should
+have:
 
 ```sh
 kubectl -n team-a get databricksserviceprincipal etl \
   -o jsonpath='{.status.conditions[?(@.type=="Equipped")].message}'
 ```
+
+---
 
 ## What your workload writes
 
@@ -441,6 +378,27 @@ contains.
 So it publishes instead of configuring, and the act of using what was published
 is yours. That is the price of never displacing anything you brought.
 
+### The workspace is yours to name
+
+The annotation names an operator and nothing else — no workspace. Your workload
+names its own, in its own Deployment, with the SDK's own variable:
+
+```yaml
+env:
+- name: DATABRICKS_HOST
+  value: https://dbc-example.cloud.databricks.com
+```
+
+That composes with what this operator gives you rather than replacing it —
+measured against the SDK: the profile supplies `auth_type`, `client_id` and the
+token path, and `DATABRICKS_HOST` supplies the host.
+
+It is not here because this operator issues identities, and a host is a
+destination. It could not check one if it carried it: it knows the Databricks
+account it acts in, and a workload wants a workspace. Carrying it would be
+repeating a string nobody verifies, in an object that is not where the rest of
+your configuration lives.
+
 ### What is actually in the pod
 
 ```
@@ -464,14 +422,12 @@ audience = databricks
 An identity asked for under a named key is named by that name instead, and its
 profile is `[reader]`: [docs/several-identities.md](docs/several-identities.md).
 
-No `host`, and that is the whole of what this operator leaves to you: the profile
-says who the workload is, and `DATABRICKS_HOST` in your Deployment says where it
-goes.
-
 **The tokens expire and are replaced, and that is not your problem.** kubelet
 rewrites each file well before its token expires, and the SDK re-reads the file
 on every exchange. Point it at the path and it stays working; nothing has to be
 restarted, and nothing has to notice.
+
+---
 
 ## Destroying an identity
 
@@ -495,11 +451,17 @@ removing.
 
 **A key that is gone is the only thing that destroys**, together with a key whose
 value now names a different operator, which is the same sentence read from this
-operator's side: a person moved that identity elsewhere. A key that is still there
-and cannot be read destroys nothing — the identity it names is left exactly as it
-stands. Deleting a key and mistyping a value are edits to
-different entries of a map, so the operator never has to decide which of the two
-you meant.
+operator's side: a person moved that identity elsewhere. A key that is still
+there and cannot be read destroys nothing — the identity it names is left exactly
+as it stands. Deleting a key and mistyping a value are edits to different entries
+of a map, so the operator never has to decide which of the two you meant.
+
+So a typo costs you the edit and nothing else, and nothing anywhere says so —
+what you have is an edit that did not take effect. Whether a key reads is decided
+by the characters in it and by nothing about the cluster, so the line you wrote is
+the whole of what there is to check: an operator's reference is
+`<its namespace>/<its DatabricksAccount>`, and an identity's name goes after a
+`.` on the key.
 
 Ending one of several is deleting that one key, and the others are untouched:
 [docs/several-identities.md](docs/several-identities.md).
@@ -511,6 +473,45 @@ deleting the namespace.**
 identities and leaves existing ones alone. Deleting the
 `DatabricksServicePrincipal` in your namespace does nothing at all: that object
 is a projection, and it is rebuilt on the next pass.
+
+---
+
+## What it will not do
+
+It creates identities. It grants them nothing, and it will not — not a group
+membership, not a workspace assignment, not a permission on anything in Unity
+Catalog. That is a boundary rather than an unfinished half, and two things rest
+on it.
+
+**It is the only thing about this operator the account can check.** The
+operator's own service principal has to be an account admin, because writing a
+federation policy allows nothing narrower; step 1 spends a while on why. An
+account admin can grant Databricks permissions, so the account cannot rule out
+that this one does by reading its permissions — the only thing left to read is
+the code, and today that reading is short, because there is no call in it that
+grants anything. The moment one identity gets a group membership from here, the
+answer becomes "it grants only what it should", which is a claim about a running
+program rather than a fact about a file. The account admin the operator already
+paid for then buys nothing.
+
+**It is what makes `mint` safe to hand out.** Annotating a ServiceAccount is a
+namespace-level act: whoever can write ServiceAccounts in `team-a` can mint an
+identity there. That is acceptable only because a minted identity holds nothing
+— it is why "mint is not a security boundary", below, is true. If minting also
+granted, write access to a namespace would become a way to acquire Databricks
+permissions, by a route nobody in Databricks reviews.
+
+A third, smaller one: every permission in the account has a single origin, so
+"who can read this table" is answered in Databricks alone, rather than
+reconstructed from annotations anyone holding a namespace can change.
+
+What this costs is real, and it is the cost being chosen. `status.clientID`
+names the identity and stops there; putting it in a group is somebody else's
+work, done with somebody else's credential — one that needs none of the account
+admin this operator does. Whether that somebody is Terraform, a person, or
+another controller is a governance decision, and not this operator's to make.
+
+---
 
 ## Where the operator remembers what it issued
 
