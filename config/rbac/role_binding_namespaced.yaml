@@ -1,0 +1,27 @@
+# The namespaced half of what the manager may do.
+#
+# Two kinds belong to this operator rather than to the cluster: the
+# DatabricksAccount that says which Databricks account to act in, and the records
+# of what it issued. Both live in the operator's own namespace, the manager's
+# cache is scoped to that namespace, and this is the permission that matches --
+# so an operator cannot read or write another operator's, whatever its code does.
+#
+# The credential each operator holds is an account admin, which Databricks
+# requires for writing a federation policy. That makes the operator the trust
+# boundary, and a permission wider than the boundary would be one nothing needs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: databricks-service-principal-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: manager-rolebinding
+  namespace: system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: manager-role
+subjects:
+- kind: ServiceAccount
+  name: controller-manager
+  namespace: system

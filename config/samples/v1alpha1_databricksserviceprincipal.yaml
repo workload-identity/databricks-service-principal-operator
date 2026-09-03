@@ -1,0 +1,9 @@
+apiVersion: databricks.workload-identity.io/v1alpha1
+kind: DatabricksServicePrincipal
+metadata:
+  labels:
+    app.kubernetes.io/name: databricks-service-principal-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: databricksserviceprincipal-sample
+spec:
+  # TODO(user): Add fields here

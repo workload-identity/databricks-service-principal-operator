@@ -1,0 +1,15 @@
+resources:
+- manager.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Left as the scaffold's placeholder, deliberately.
+#
+# `make deploy IMG=...` runs `kustomize edit set image`, which writes the
+# registry here and leaves it. A registry names an account -- an AWS account id
+# is in the hostname -- and this file is tracked, so a deploy silently commits
+# whose infrastructure this was built against. Whoever deploys passes IMG; what
+# is checked in names nobody.
+images:
+- name: controller
+  newName: controller
+  newTag: latest

@@ -1,0 +1,61 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: databricks-token
+webhooks:
+- name: podtoken.databricks.workload-identity.io
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-v1-pod
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+  # Asked again when a later webhook changes the pod.
+  #
+  # The default is Never, and what it costs is a container added after this
+  # ran -- a mesh sidecar, a policy engine -- that has no token, no mount and
+  # no variables, in a pod that carries all of them at pod level and is
+  # therefore reported as equipped. Its workload fails on its first call to
+  # Databricks with an error naming Databricks.
+  #
+  # Safe to ask twice because being asked twice does nothing: a pod already
+  # carrying this volume is left untouched, so the second pass adds the
+  # containers that appeared and changes nothing that was already there.
+  #
+  # It does not cover a later webhook rewriting spec.serviceAccountName. The
+  # pod then holds the client id and the token of the identity it had before
+  # the change, and this webhook, seeing its own volume, leaves it alone. That
+  # is a deliberate limit and not an oversight: rewriting a volume somebody
+  # may have written themselves is the opposite of what this promises.
+  reinvocationPolicy: IfNeeded
+  # Ignore, deliberately, and the reasoning is worth keeping.
+  #
+  # This stands on the pod creation path for every pod matched below. With
+  # Fail, an outage of this webhook stops workloads from starting -- including
+  # ones that have nothing to do with Databricks, if the selector is ever
+  # widened by mistake. That is a much larger failure than the one it prevents.
+  #
+  # What Ignore costs is a pod that starts without its token and fails on its
+  # first call to Databricks. That failure is legible: the workload's
+  # DatabricksServicePrincipal says whether the identity is ready, and the pod
+  # is missing a volume anybody can see is missing. Trading a legible failure
+  # for cluster-wide unschedulability is the wrong way round.
+  failurePolicy: Ignore
+  # Only namespaces that were allowed to ask. The same label gates minting, so
+  # a namespace nobody enabled is one this webhook is never consulted for --
+  # which is also what keeps the blast radius of the line above small.
+  namespaceSelector:
+    matchLabels:
+      databricks.workload-identity.io/inject: "enabled"

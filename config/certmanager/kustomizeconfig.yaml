@@ -1,0 +1,12 @@
+# kustomize does not know that a Certificate's issuerRef names an Issuer, so
+# without this the namePrefix renames the Issuer and leaves the reference behind.
+# Nothing catches that until cert-manager is asked to issue and cannot find it —
+# and with failurePolicy Ignore, what follows is pods quietly starting without a
+# token.
+nameReference:
+- kind: Issuer
+  group: cert-manager.io
+  fieldSpecs:
+  - kind: Certificate
+    group: cert-manager.io
+    path: spec/issuerRef/name

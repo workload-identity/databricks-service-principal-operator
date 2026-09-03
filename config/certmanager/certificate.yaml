@@ -1,0 +1,34 @@
+# A self-signed issuer and one certificate for the webhook's serving TLS.
+#
+# Self-signed is right here: the only client is the API server, and it is told
+# which CA to trust by the caBundle injected into the MutatingWebhookConfiguration
+# below. Nothing else ever connects, so there is nobody for a public chain to
+# convince.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned-issuer
+  namespace: system
+  labels:
+    app.kubernetes.io/name: databricks-service-principal-operator
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: serving-cert
+  namespace: system
+  labels:
+    app.kubernetes.io/name: databricks-service-principal-operator
+spec:
+  # Renewed well before it expires. An expired cert here is not loud: with
+  # failurePolicy Ignore, pods keep starting and quietly get no token, and the
+  # only thing that says so is the Equipped condition on each identity.
+  dnsNames:
+  - SERVICE_NAME.SERVICE_NAMESPACE.svc
+  - SERVICE_NAME.SERVICE_NAMESPACE.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: selfsigned-issuer
+  secretName: webhook-server-cert

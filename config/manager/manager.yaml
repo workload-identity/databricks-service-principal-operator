@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: databricks-service-principal-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: databricks-service-principal-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: databricks-service-principal-operator
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        control-plane: controller-manager
+        app.kubernetes.io/name: databricks-service-principal-operator
+    spec:
+      # TODO(user): Uncomment the following code to configure the nodeAffinity expression
+      # according to the platforms which are supported by your solution.
+      # It is considered best practice to support multiple architectures. You can
+      # build your manager image using the makefile target docker-buildx.
+      # affinity:
+      #   nodeAffinity:
+      #     requiredDuringSchedulingIgnoredDuringExecution:
+      #       nodeSelectorTerms:
+      #         - matchExpressions:
+      #           - key: kubernetes.io/arch
+      #             operator: In
+      #             values:
+      #               - amd64
+      #               - arm64
+      #               - ppc64le
+      #               - s390x
+      #           - key: kubernetes.io/os
+      #             operator: In
+      #             values:
+      #               - linux
+      securityContext:
+        # Projects are configured by default to adhere to the "restricted" Pod Security Standards.
+        # This ensures that deployments meet the highest security requirements for Kubernetes.
+        # For more details, see: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - command:
+        - /manager
+        args:
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        # The DatabricksAccount in this namespace that says which Databricks
+        # account to act in. The default is this same name, so an operator
+        # that does not rename anything need not set it.
+        - --databricks-account=databricks-account
+        image: controller:latest
+        name: manager
+        ports:
+        - containerPort: 8081
+          name: health
+          protocol: TCP
+        env:
+        # Where the projected token below is mounted. Setting this is what
+        # selects the SDK's file-oidc auth type; the operator authenticates by
+        # exchanging that token, and holds no key of its own.
+        - name: DATABRICKS_OIDC_TOKEN_FILEPATH
+          value: /var/run/secrets/databricks/token
+        # Has to equal the audience on the projected volume below, and the aud
+        # named by the operator's federation policy in Databricks.
+        - name: DATABRICKS_TOKEN_AUDIENCE
+          value: databricks
+        # The operator's own namespace, which is where it looks for its
+        # DatabricksAccount. Kubernetes fills this in, so nothing here has to
+        # know what this repository names things.
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        # Which Databricks account, and as whom, is not here: it is a
+        # DatabricksAccount in this namespace. That way it can be changed
+        # without editing a Deployment, and the operator can answer back --
+        # its status carries the subject it actually presents, which is the
+        # string the federation policy has to name.
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - "ALL"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        # TODO(user): Configure the resources accordingly based on the project requirements.
+        # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        volumeMounts:
+        - name: databricks-token
+          mountPath: /var/run/secrets/databricks
+          readOnly: true
+      volumes:
+      # The token the operator presents, on exactly the terms it gives the
+      # workloads it serves: kubelet mints it, it expires, and it is never
+      # written anywhere this project controls. There is no credential in this
+      # manifest to leak, rotate, or forget to rotate.
+      #
+      # The audience must match the aud of the operator's federation policy in
+      # Databricks, and DATABRICKS_TOKEN_AUDIENCE above must match it too. All
+      # three are the same value; changing one alone breaks token exchange with
+      # an error that blames the policy.
+      - name: databricks-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              audience: databricks
+              expirationSeconds: 3600
+      serviceAccountName: controller-manager
+      terminationGracePeriodSeconds: 10

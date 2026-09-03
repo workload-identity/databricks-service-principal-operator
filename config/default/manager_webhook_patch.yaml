@@ -1,0 +1,21 @@
+# Written as JSON patch operations rather than as a strategic merge.
+#
+# A strategic merge that sets `args` replaces the whole list: args is a list of
+# scalars with no merge key, so there is nothing for kustomize to match on. That
+# silently drops every flag the base Deployment sets — and every one of them has
+# a default, so the operator still starts and still looks correct.
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+- op: add
+  path: /spec/template/spec/containers/0/volumeMounts/-
+  value:
+    name: webhook-certs
+    mountPath: /tmp/k8s-webhook-server/serving-certs
+    readOnly: true
+- op: add
+  path: /spec/template/spec/volumes/-
+  value:
+    name: webhook-certs
+    secret:
+      secretName: webhook-server-cert
