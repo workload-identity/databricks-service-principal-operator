@@ -1,0 +1,470 @@
+package databricks
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+)
+
+// TestCreateServicePrincipalTakesBothIdsFromDatabricks covers two ids that look
+// alike and are not interchangeable.
+//
+// The numeric id is what federation policies hang off and what this operator
+// records; the applicationId is what a workload presents when it exchanges its
+// token. Neither can be chosen --
+// applicationId is refused on create -- so both are read back from the answer,
+// and a workload has to be told its client id rather than deriving it.
+func TestCreateServicePrincipalTakesBothIdsFromDatabricks(t *testing.T) {
+	t.Parallel()
+	server := &recording{t: t, answer: map[string]string{
+		"POST " + servicePrincipalsAPI: `{"id":"71630475020656","applicationId":"11111111-1111-1111-1111-111111111111"}`,
+	}}
+	c := server.clients()
+
+	id, clientID, err := c.CreateServicePrincipal(context.Background(),
+		Issuing{Issuer: testIssuer, Namespace: "team-a", Name: "etl", ServiceAccountUID: "uid-etl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "71630475020656" || clientID != "11111111-1111-1111-1111-111111111111" {
+		t.Errorf("read id=%q clientId=%q, want both as Databricks gave them", id, clientID)
+	}
+
+	sent := server.wrote(servicePrincipalsAPI)
+	if strings.Contains(sent, "applicationId") {
+		t.Errorf("sent %s; applicationId is refused on create and cannot be chosen here", sent)
+	}
+	if !strings.Contains(sent, DisplayNameFor("team-a", "etl", "")) {
+		t.Errorf("sent %s, want the display name for team-a/etl", sent)
+	}
+}
+
+// TestDisplayNameIsForPeopleAndMayBeCut covers a name that does not fit.
+//
+// A subject reaches 149 characters -- "system:serviceaccount:" and two DNS
+// labels -- and Databricks caps the display name well below that, so the tail
+// goes. Nothing depends on this being unique or reversible: Databricks does not
+// enforce uniqueness on it, and this operator finds its service principals by
+// the id it wrote down.
+func TestDisplayNameIsForPeopleAndMayBeCut(t *testing.T) {
+	t.Parallel()
+	short := DisplayNameFor("team-a", "etl", "")
+	if !strings.Contains(short, "team-a") || !strings.Contains(short, "etl") {
+		t.Errorf("display name is %q, want it to name the ServiceAccount", short)
+	}
+	long := DisplayNameFor(strings.Repeat("n", 63), strings.Repeat("m", 63), "")
+	if len(long) > displayNameLimit {
+		t.Errorf("display name is %d characters, want no more than %d", len(long), displayNameLimit)
+	}
+	if !strings.HasPrefix(long, displayNamePrefix) {
+		t.Errorf("display name is %q; the prefix is what marks it as this operator's", long)
+	}
+}
+
+// TestSubjectIsTheClaimKubernetesPuts covers the one string that has to match
+// exactly, because a federation policy compares it literally.
+func TestSubjectIsTheClaimKubernetesPuts(t *testing.T) {
+	t.Parallel()
+	if got := SubjectFor("team-a", "etl"); got != "system:serviceaccount:team-a:etl" {
+		t.Errorf("subject is %q, want the sub claim a projected token carries", got)
+	}
+}
+
+// TestAServicePrincipalThatIsGoneIsAbsentRatherThanAFailure covers the answer
+// this call exists to give.
+//
+// Nothing in Kubernetes hears about a service principal being deleted in
+// Databricks. Asked on every pass, a 404 has to mean "not there" rather than
+// "the call failed" -- reading it as a failure would leave the object naming a
+// dead id while reporting that tokens can still be exchanged for it.
+func TestAServicePrincipalThatIsGoneIsAbsentRatherThanAFailure(t *testing.T) {
+	t.Parallel()
+	server := &recording{t: t, status: map[string]int{
+		"GET " + servicePrincipalsAPI + "/7788": 404,
+	}}
+	c := server.clients()
+
+	there, err := c.ServicePrincipalExists(context.Background(), "7788")
+	if err != nil {
+		t.Fatalf("a 404 came back as a failure: %v", err)
+	}
+	if there {
+		t.Error("reported as there; Databricks looked and it is not")
+	}
+}
+
+// TestDeletingOneThatIsAlreadyGoneIsDone covers the finalizer being able to end.
+//
+// Revocation is deleting the service principal, and the finalizer is not dropped
+// until that succeeds. If "already deleted" were a failure, an object whose
+// service principal somebody removed by hand could never finish deleting, and
+// would sit there until a person took the finalizer off.
+func TestDeletingOneThatIsAlreadyGoneIsDone(t *testing.T) {
+	t.Parallel()
+	server := &recording{t: t, status: map[string]int{
+		"DELETE " + servicePrincipalsAPI + "/7788": 404,
+	}}
+	c := server.clients()
+
+	if err := c.DeleteServicePrincipal(context.Background(), "7788"); err != nil {
+		t.Errorf("error is %v; it is gone, which is what was asked for", err)
+	}
+}
+
+const (
+	testIssuer   = "https://oidc.example/cluster"
+	testSubject  = "system:serviceaccount:team-a:etl"
+	testAudience = "databricks"
+)
+
+// TestAFederationPolicyIsNotAddedTwice covers the read that makes this
+// idempotent.
+//
+// Policies live under a service principal and there is no lookup by subject, so
+// the ones on that principal are listed and an exact match ends it. Adding a
+// second policy for a subject already trusted is a duplicate nobody would ever
+// clean up, on every pass, forever.
+func TestAFederationPolicyIsNotAddedTwice(t *testing.T) {
+	t.Parallel()
+	server := &recording{t: t, answer: map[string]string{
+		"GET " + federationPoliciesAPI("7788"): `{"policies":[{"oidc_policy":{
+			"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}}]}`,
+	}}
+	c := server.clients()
+
+	if err := c.EnsureFederationPolicy(context.Background(), "7788", testIssuer, testSubject, testAudience); err != nil {
+		t.Fatal(err)
+	}
+	if n := server.made("POST", federationPoliciesAPI("7788")); n != 0 {
+		t.Errorf("added %d policies; this subject is already trusted", n)
+	}
+}
+
+// TestAPolicyThatIsNotThisOneIsNotAMatch covers the three claims all having to
+// agree, and the audiences having to be the one.
+//
+// A policy is what makes a token exchangeable, so a near-match that is treated
+// as a match leaves the workload unable to exchange anything, with this operator
+// reporting it as ready. The audience list is compared as a list of one: a
+// policy trusting two audiences trusts something this operator did not ask for.
+func TestAPolicyThatIsNotThisOneIsNotAMatch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		policy string
+	}{
+		{"another subject", `{"issuer":"` + testIssuer + `","subject":"system:serviceaccount:team-b:loader","audiences":["` + testAudience + `"]}`},
+		{"another issuer", `{"issuer":"https://oidc.example/other","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}`},
+		{"another audience", `{"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["something-else"]}`},
+		{"one audience too many", `{"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["` + testAudience + `","other"]}`},
+		{"no oidc policy at all", `null`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &recording{t: t, answer: map[string]string{
+				"GET " + federationPoliciesAPI("7788"): `{"policies":[{"oidc_policy":` + tc.policy + `}]}`,
+			}}
+			c := server.clients()
+
+			if err := c.EnsureFederationPolicy(context.Background(), "7788",
+				testIssuer, testSubject, testAudience); err != nil {
+				t.Fatal(err)
+			}
+			sent := server.wrote(federationPoliciesAPI("7788"))
+			for _, want := range []string{testIssuer, testSubject, testAudience} {
+				if !strings.Contains(sent, want) {
+					t.Errorf("added %s, want it to carry %s", sent, want)
+				}
+			}
+		})
+	}
+}
+
+// TestAFederationPolicyRefusesAnIdThatIsNotANumber covers a coordinate that is
+// a string here and a number on the wire.
+func TestAFederationPolicyRefusesAnIdThatIsNotANumber(t *testing.T) {
+	t.Parallel()
+	server := &recording{t: t}
+	c := server.clients()
+
+	var malformed *ErrMalformedCoordinate
+	err := c.EnsureFederationPolicy(context.Background(), "not-a-number", testIssuer, testSubject, testAudience)
+	if !errors.As(err, &malformed) {
+		t.Errorf("error is %v, want a malformed coordinate", err)
+	}
+	if len(server.calls) != 0 {
+		t.Errorf("made %+v for an id that could not be read", server.calls)
+	}
+}
+
+// TestTheIssuerComesFromTheOperatorsOwnToken covers where the one value a
+// federation policy cannot be wrong about comes from.
+//
+// Every ServiceAccount in a cluster gets tokens from the same issuer, so the one
+// on the operator's own token is the one a workload's will carry. A value read
+// from what is actually presented cannot disagree with what is presented; a
+// configured one can, and the disagreement shows up as a token exchange that
+// fails for a reason nothing here reports.
+func TestTheIssuerComesFromTheOperatorsOwnToken(t *testing.T) {
+	t.Parallel()
+	got, err := IssuerOf(TokenClaims{Issuer: "https://oidc.example/cluster"})
+	if err != nil || got != "https://oidc.example/cluster" {
+		t.Errorf("read %q, %v; want the iss claim as it was presented", got, err)
+	}
+
+	// Blank is refused rather than sent. A policy trusting an empty issuer is
+	// one nothing can satisfy, written without a word about why.
+	for _, blank := range []string{"", "   "} {
+		if _, err := IssuerOf(TokenClaims{Issuer: blank}); err == nil {
+			t.Errorf("accepted %q as an issuer", blank)
+		}
+	}
+}
+
+// TestTheMarkerFitsWhatDatabricksWillStore covers the one limit that cannot be
+// found out by trying.
+//
+// externalId holds 36 characters, measured: 36 is accepted and 37 is refused
+// with "Azure object id cannot be over 36 characters". What makes it worth a
+// test rather than a comment is how it fails -- a create carrying an oversized
+// one returns the error and creates the service principal anyway, so a caller
+// that trusts the error leaves an identity behind that nothing recorded.
+func TestTheMarkerFitsWhatDatabricksWillStore(t *testing.T) {
+	t.Parallel()
+	for _, issuing := range []Issuing{
+		{Issuer: "https://oidc.example/cluster", Namespace: "team-a", Name: "etl",
+			ServiceAccountUID: "6a5f0d1e-0b2c-4c3d-9e8f-1a2b3c4d5e6f"},
+		{Issuer: "https://oidc.eks.ap-northeast-1.amazonaws.com/id/" + strings.Repeat("A", 200),
+			Namespace: strings.Repeat("n", 63), Name: strings.Repeat("s", 253),
+			ServiceAccountUID: strings.Repeat("u", 200)},
+		{},
+	} {
+		if got := len(MarkerFor(issuing)); got != markerLimit {
+			t.Errorf("MarkerFor(%d, %d, %d, %d characters) is %d characters, want %d",
+				len(issuing.Issuer), len(issuing.Namespace), len(issuing.Name),
+				len(issuing.ServiceAccountUID), got, markerLimit)
+		}
+	}
+}
+
+// TestTheMarkerTellsOneServiceAccountFromAnother covers what finding a service
+// principal again rests on.
+//
+// The display name identifies nothing: its hyphens are ambiguous, so
+// DisplayNameFor("team-a", "x", "") and DisplayNameFor("team", "a-x", "") are one
+// string, and it is truncated at 100 characters besides. A lookup that narrows
+// by name and then confirms on the marker is only sound if the marker tells them
+// apart -- otherwise the holder of one namespace is handed another's identity,
+// gains everything granted to it, and destroys it on the way out.
+func TestTheMarkerTellsOneServiceAccountFromAnother(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://oidc.example/cluster"
+
+	if DisplayNameFor("team-a", "x", "") != DisplayNameFor("team", "a-x", "") {
+		t.Fatal("the display names no longer collide; this test is about what happens when they do")
+	}
+	one := Issuing{Issuer: issuer, Namespace: "team-a", Name: "x", ServiceAccountUID: "uid-one"}
+	two := Issuing{Issuer: issuer, Namespace: "team", Name: "a-x", ServiceAccountUID: "uid-two"}
+	if MarkerFor(one) == MarkerFor(two) {
+		t.Error("two ServiceAccounts sharing a display name share a marker; one namespace can " +
+			"be handed the other's identity, and destroy it by withdrawing its own annotation")
+	}
+}
+
+// TestARecreatedServiceAccountIsNotTheOneBefore covers the property the whole
+// ownership design now rests on, and the one a marker built from the subject
+// could not have.
+//
+// A namespace deleted and recreated under the same name can hold a
+// ServiceAccount with the same name, whose subject -- which is all Databricks
+// matches -- is character for character the one before it. If the marker were
+// the subject, the operator would find the dead one's service principal and hand
+// it to the new occupant along with everything granted to it. A uid is issued
+// once and never again, so it is what the marker is made of.
+func TestARecreatedServiceAccountIsNotTheOneBefore(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://oidc.example/cluster"
+	before := Issuing{Issuer: issuer, Namespace: "team-a", Name: "etl", ServiceAccountUID: "uid-before"}
+	after := Issuing{Issuer: issuer, Namespace: "team-a", Name: "etl", ServiceAccountUID: "uid-after"}
+
+	if before.Subject() != after.Subject() {
+		t.Fatal("the subjects differ; this test is about what happens when they cannot")
+	}
+	if MarkerFor(before) == MarkerFor(after) {
+		t.Error("a ServiceAccount recreated under the same names carries the marker of the one " +
+			"before it; the new occupant of a namespace inherits the old identity")
+	}
+}
+
+// TestEveryIdentityOfOneClusterSharesItsFirstHalf covers the half that is not
+// about telling them apart.
+//
+// Whoever governs the Databricks account has to be able to ask which of its
+// service principals came from a given cluster before they can act on any of
+// them, and externalId cannot be filtered on -- so the question is answered by
+// reading the list and matching a prefix. That only works if the prefix is
+// shared, which is the opposite of what the second half does.
+func TestEveryIdentityOfOneClusterSharesItsFirstHalf(t *testing.T) {
+	t.Parallel()
+	const a = "https://oidc.example/cluster-a"
+	const b = "https://oidc.example/cluster-b"
+
+	for _, uid := range []string{"uid-one", "uid-two"} {
+		got := MarkerFor(Issuing{Issuer: a, Namespace: "team-a", Name: "etl", ServiceAccountUID: uid})
+		if got[:len(ClusterMarker(a))] != ClusterMarker(a) {
+			t.Errorf("the identity of %s does not carry its cluster's marker", uid)
+		}
+	}
+	if ClusterMarker(a) == ClusterMarker(b) {
+		t.Error("two clusters share a marker; the set of identities from one cannot be asked for")
+	}
+}
+
+// TestWhatIsSentIsTheNameAndTheMarker covers the two fields a create carries,
+// and why it carries exactly those.
+func TestWhatIsSentIsTheNameAndTheMarker(t *testing.T) {
+	t.Parallel()
+	server := &recording{t: t, answer: map[string]string{
+		"POST " + servicePrincipalsAPI: `{"id":"7788","applicationId":"app-uuid"}`,
+	}}
+	c := server.clients()
+
+	issuing := Issuing{Issuer: testIssuer, Namespace: "team-a", Name: "etl", ServiceAccountUID: "uid-etl"}
+	if _, _, err := c.CreateServicePrincipal(context.Background(), issuing); err != nil {
+		t.Fatal(err)
+	}
+	sent := server.wrote(servicePrincipalsAPI)
+
+	// The name can be filtered on and is not unique. The marker is unique to a
+	// cluster and cannot be filtered on. Finding one again needs both.
+	if !strings.Contains(sent, DisplayNameFor("team-a", "etl", "")) {
+		t.Errorf("sent %s, want the display name -- it is what a lookup filters on", sent)
+	}
+	if !strings.Contains(sent, MarkerFor(issuing)) {
+		t.Errorf("sent %s, want this cluster's marker -- it is what tells one of its "+
+			"identities from another cluster's of the same name", sent)
+	}
+}
+
+// TestTwoIdentitiesOfOneServiceAccountCarryDifferentMarkers is what the third
+// part of the marker is for.
+//
+// Both are issued to one ServiceAccount by one operator, so their issuer, their
+// operator and their uid are identical, and their subject is identical too --
+// Databricks matches the subject, and both federation policies name the same
+// one. The marker is what tells them apart, and it is how a crashed pass finds
+// the service principal it made rather than its neighbour.
+func TestTwoIdentitiesOfOneServiceAccountCarryDifferentMarkers(t *testing.T) {
+	t.Parallel()
+	base := Issuing{
+		Issuer: testIssuer, Namespace: "team-a", Name: "etl",
+		ServiceAccountUID: "uid-etl", Operator: "ops-a/databricks-account",
+	}
+	reader, writer, only := base, base, base
+	reader.Identity, writer.Identity = "reader", "writer"
+
+	for _, pair := range [][2]Issuing{{reader, writer}, {reader, only}, {writer, only}} {
+		if MarkerFor(pair[0]) == MarkerFor(pair[1]) {
+			t.Errorf("%q marks both %q and %q; a pass that crashed after creating one would "+
+				"find the other and record it as its own",
+				MarkerFor(pair[0]), pair[0].Identity, pair[1].Identity)
+		}
+	}
+}
+
+// TestTwoOperatorsInOneAccountDoNotFindEachOthers is what the second part is
+// for.
+//
+// Two platform teams may point their operators at one Databricks account. Every
+// other input is then identical -- one cluster, one ServiceAccount, one identity
+// name -- so without the operator in the marker each would list the account,
+// find the other's service principal, and record it as the one it made.
+func TestTwoOperatorsInOneAccountDoNotFindEachOthers(t *testing.T) {
+	t.Parallel()
+	mine := Issuing{
+		Issuer: testIssuer, Namespace: "team-a", Name: "etl", ServiceAccountUID: "uid-etl",
+		Operator: "ops-a/databricks-account",
+	}
+	theirs := mine
+	theirs.Operator = "ops-b/databricks-account"
+
+	if MarkerFor(mine) == MarkerFor(theirs) {
+		t.Error("two operators sharing one Databricks account produce one marker; each adopts " +
+			"the other's identities, and both then believe they own it")
+	}
+}
+
+// TestEverythingThisClusterIssuedIsStillOneQuestion covers what the first part
+// has to keep doing.
+//
+// Databricks refuses to filter on externalId, so the only way to ask for a set
+// is to list and match a prefix. That is the whole of the answer to "how does an
+// account admin find everything one cluster put here", and adding the operator
+// and the identity may not take it away.
+func TestEverythingThisClusterIssuedIsStillOneQuestion(t *testing.T) {
+	t.Parallel()
+	prefix := ClusterMarker(testIssuer)
+	for _, issuing := range []Issuing{
+		{Issuer: testIssuer, Namespace: "team-a", Name: "etl",
+			ServiceAccountUID: "uid-etl", Operator: "ops-a/databricks-account"},
+		{Issuer: testIssuer, Namespace: "team-a", Name: "etl", Identity: "reader",
+			ServiceAccountUID: "uid-etl", Operator: "ops-a/databricks-account"},
+		{Issuer: testIssuer, Namespace: "team-b", Name: "loader",
+			ServiceAccountUID: "uid-loader", Operator: "ops-b/databricks-account"},
+	} {
+		if !strings.HasPrefix(MarkerFor(issuing), prefix) {
+			t.Errorf("%+v carries %q, which does not start with this cluster's %q",
+				issuing, MarkerFor(issuing), prefix)
+		}
+	}
+	if MarkerFor(Issuing{Issuer: "https://oidc.example/another", Namespace: "team-a",
+		Name: "etl", ServiceAccountUID: "uid-etl"})[:len(prefix)] == prefix {
+		t.Error("another cluster carries this one's prefix; the set is not one cluster's")
+	}
+}
+
+// TestTheConsoleCanTellTwoIdentitiesApart covers the display name, which is for
+// people and nothing else.
+//
+// Two identities of one ServiceAccount would otherwise show as two rows with the
+// same name in the Databricks console, and whoever is granting permissions there
+// has no way to say which is the one meant to read.
+func TestTheConsoleCanTellTwoIdentitiesApart(t *testing.T) {
+	t.Parallel()
+	reader := DisplayNameFor("team-a", "etl", "reader")
+	writer := DisplayNameFor("team-a", "etl", "writer")
+	if reader == writer {
+		t.Fatalf("both are shown as %q", reader)
+	}
+	if !strings.Contains(reader, "reader") {
+		t.Errorf("%q does not carry the name its asker gave it", reader)
+	}
+	if only := DisplayNameFor("team-a", "etl", ""); !strings.HasSuffix(only, "etl") {
+		t.Errorf("%q gained something for an identity with no name", only)
+	}
+}
+
+// TestExistsRefusesAnEmptyID pins what was measured against a live account on
+// 2026-09-03: an empty id makes the request URL the collection's own, and
+// Databricks answers it with 200 and every service principal there is. So the
+// call succeeds, and "does this exist" answers yes about nothing.
+//
+// The one caller in this repository guards against it, which is why nothing was
+// wrong. The guard is on the method because it belongs to whoever can see the
+// URL being built, not to everyone who ever calls it.
+//
+// The client is a zero value, and that is the assertion: it holds no account, so
+// any call at all panics. Reaching the end of this means the refusal happened
+// before anything was asked.
+func TestExistsRefusesAnEmptyID(t *testing.T) {
+	t.Parallel()
+	c := &clients{}
+	there, err := c.ServicePrincipalExists(context.Background(), "")
+	if err == nil {
+		t.Fatal("an empty service principal id was looked up; it asks Databricks for the whole " +
+			"collection, which answers 200, and the answer comes back as 'it exists'")
+	}
+	if there {
+		t.Error("it reported the service principal as present as well")
+	}
+}
