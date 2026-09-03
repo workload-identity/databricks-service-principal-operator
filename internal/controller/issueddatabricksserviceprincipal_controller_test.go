@@ -164,14 +164,37 @@ func TestARecordWithNoIdStillDestroysWhatItMade(t *testing.T) {
 	}
 }
 
-// TestTheDestroyingReadIsNotTakenFromTheCache covers which reader answers the
-// one question that destroys things.
+// TestADeletionIsNotHeldOverAValueItDiscards covers a deletion that could not
+// happen because of a claim nothing on that path reads.
 //
-// A cache that has not caught up reports a ServiceAccount that exists as absent,
-// and absent is the answer that deletes a service principal and everything
-// granted to it. Being a pass late costs nothing; being wrong is not
-// recoverable, because Databricks assigns the applicationId of whatever is made
-// in its place.
+// The audience is what a federation policy names, and destroying an identity
+// writes no policy: it finds the service principal this record made and removes
+// it. Asking for the audience anyway held the deletion, on an object whose
+// finalizer keeps it in the cluster until the call lands, with a message about
+// federation policies on the one path that writes none.
+func TestADeletionIsNotHeldOverAValueItDiscards(t *testing.T) {
+	t.Parallel()
+	account := asking(testNamespace, testName)
+	issued := recordFor(account)
+	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
+	h := newHarness(t, stub, mintingNamespace(testNamespace), account, issued)
+	// A token with an issuer and no aud claim. The issuer is what the search
+	// needs and it is there; the audience is what is missing and it is not.
+	h.Issued.TokenPath = writeTokenAs(t, testIssuer,
+		"system:serviceaccount:operators:controller-manager", "")
+
+	withdraw(t, h.Client)
+	h.settle(t)
+
+	if len(stub.deleted) != 1 || stub.deleted[0] != "7788" {
+		t.Errorf("deleted %v, want the service principal this record made; it is still there, "+
+			"and nothing outside this record knows it exists", stub.deleted)
+	}
+	if h.issuedOf(t, account) != nil {
+		t.Error("the record is still held, over a claim its remaining work never reads")
+	}
+}
+
 func TestTheDestroyingReadIsNotTakenFromTheCache(t *testing.T) {
 	t.Parallel()
 	account := asking(testNamespace, testName)
@@ -437,12 +460,16 @@ func TestAnIdRecordedWithNoAccountIsNotConcludedFrom(t *testing.T) {
 // wrong" and "nothing has been checked", which this project has a rule about and
 // broke in one of the two places it applies.
 //
-// reasonNotConfigured's own doc says Unknown and pointedly not False: nothing
-// has been asked of Databricks, so False reports a declaration as wrong on the
-// strength of never having looked. destroy said Unknown and converge said False
-// for the same cause -- the operator being unable to read its own token -- so
-// the same condition meant two things depending on which way the object was
-// going.
+// Unknown and pointedly not False: nothing has been asked of Databricks, so
+// False reports a declaration as wrong on the strength of never having looked.
+// destroy said Unknown and converge said False for the same cause -- the
+// operator being unable to read its own token -- so the same condition meant two
+// things depending on which way the object was going.
+//
+// The reason is the same both ways for the same reason. One root cause reported
+// under two names is one an alert on either misses half the time, and the token
+// this operator cannot read is nothing to do with which Databricks account it
+// was told to act in.
 func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
 	t.Parallel()
 	for _, going := range []struct {
@@ -473,8 +500,10 @@ func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
 				t.Fatal("the record is gone")
 			}
 			ready := meta.FindStatusCondition(issued.Status.Conditions, conditionReady)
-			if ready == nil || ready.Reason != reasonNotConfigured {
-				t.Fatalf("Ready is %v, want it to say the operator cannot read its own token", ready)
+			if ready == nil || ready.Reason != reasonUnprepared {
+				t.Fatalf("Ready is %v, want %s -- NotConfigured sends whoever reads it to a "+
+					"DatabricksAccount with nothing wrong in it, and leaves the file that "+
+					"could not be read unnamed", ready, reasonUnprepared)
 			}
 			if ready.Status != metav1.ConditionUnknown {
 				t.Errorf("Ready is %s/%s; nothing has been asked of Databricks, and False says "+

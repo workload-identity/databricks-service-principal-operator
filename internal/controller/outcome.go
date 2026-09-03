@@ -48,18 +48,33 @@ func outcomeFor(err error) outcome {
 	const retryAfter = servicePrincipalRetryAfterAwaited
 	message := databricks.Reason(err)
 	switch databricks.KindOf(err) {
-	case databricks.NotFound, databricks.Rejected:
-		// Databricks looked and said no. The declaration names something that is
-		// not there, or is not a thing of that type. Someone has to edit the
-		// spec, and that will raise an event of its own.
+	case databricks.NotFound:
+		// Databricks looked and the thing is not there. What answers it is
+		// somebody restoring it, or pointing this at something else, and either
+		// raises an event of its own.
 		return outcome{
 			Status: metav1.ConditionFalse, Reason: reasonNotFound, Message: message,
 			Result: ctrl.Result{RequeueAfter: retryAfter},
 		}
-	case databricks.Malformed:
-		// The request was never made: a value in the spec cannot be a coordinate.
+	case databricks.Rejected:
+		// Databricks refused the request itself rather than what it named, and
+		// it is kept apart from NotFound because the two are answered by
+		// different people doing different things: this one by whoever can
+		// change what is sent, and nothing done in Databricks makes the same
+		// request acceptable.
 		return outcome{
-			Status: metav1.ConditionFalse, Reason: reasonInvalidSpec, Message: message,
+			Status: metav1.ConditionFalse, Reason: reasonRejected, Message: message,
+			Result: ctrl.Result{RequeueAfter: retryAfter},
+		}
+	case databricks.Malformed:
+		// The request was never made: a value will not parse as the coordinate
+		// the call takes. The call that produces this reads the service
+		// principal id off the record, which this operator wrote from what
+		// Databricks answered -- so nothing anybody declared is wrong, and a
+		// reason naming the spec sends its reader to a file with nothing wrong
+		// in it.
+		return outcome{
+			Status: metav1.ConditionFalse, Reason: reasonMalformedRecord, Message: message,
 			Result: ctrl.Result{RequeueAfter: retryAfter},
 		}
 	case databricks.NotConfigured:

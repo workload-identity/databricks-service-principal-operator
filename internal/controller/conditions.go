@@ -98,6 +98,21 @@ const (
 	reasonNotConfigured = "NotConfigured"
 	reasonLookupFailed  = "LookupFailed"
 
+	// reasonRejected is Databricks refusing the request itself as invalid, which
+	// it answers 400 rather than 404. NotFound next to it is answered by
+	// restoring what was named or pointing this at something else; this one is
+	// answered only by changing what is sent, and no act in Databricks makes the
+	// same request acceptable.
+	reasonRejected = "Rejected"
+
+	// reasonMalformedRecord is a value this operator wrote down that it can no
+	// longer act on: the service principal id on the record will not parse as
+	// the coordinate the call takes, so nothing is asked of Databricks at all.
+	// Not InvalidSpec, which is next to it for a declaration that is wrong --
+	// nobody declared this value, and sending whoever reads it to the spec sends
+	// them to a file with nothing wrong in it.
+	reasonMalformedRecord = "MalformedRecord"
+
 	// reasonPrepared is the operator knowing what it will write; reasonUnprepared
 	// is it not, with the message saying which value is missing and where it is
 	// read from.
@@ -122,9 +137,11 @@ const (
 	// this operator's part in it is to report it and leave it alone.
 	reasonRemovedInDatabricks = "RemovedInDatabricks"
 
-	// reasonNotEquipped is one or more pods running without the token. It is not
-	// a fault of the identity, and it does not heal on its own: the pods have to
-	// be recreated.
+	// reasonNotEquipped is one or more pods running without what they were to be
+	// given. It is not a fault of the identity, and it does not heal on its own:
+	// nothing rewrites a running pod. What ends it is in the message, which is
+	// not always recreating the pods -- a namespace that injects nothing, and a
+	// pod whose volume name was already taken, both come back the same.
 	reasonNotEquipped = "NotEquipped"
 
 	// reasonEquipped is every pod under this ServiceAccount carrying the token.

@@ -243,9 +243,12 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 		// create never ran or one whose create ran and whose answer was never
 		// written down. The second leaves a service principal nothing names, so
 		// it is looked for rather than assumed away.
-		issuer, _, err := r.issued(ctx)
+		// The issuer alone. Asking for the pair would hold this deletion over a
+		// token carrying no aud claim -- a value only a federation policy needs,
+		// and this path writes none.
+		issuer, err := r.issuer(ctx)
 		if err != nil {
-			return r.report(ctx, issued, metav1.ConditionUnknown, reasonNotConfigured, err.Error())
+			return r.report(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
 		}
 		found, _, ok, err := clients.FindServicePrincipal(ctx, r.issuing(issued, issuer))
 		if err != nil {
@@ -301,7 +304,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 	// the strength of never having looked at it.
 	issuer, audience, err := r.issued(ctx)
 	if err != nil {
-		return r.report(ctx, issued, metav1.ConditionUnknown, reasonNotConfigured, err.Error())
+		return r.report(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
 	}
 
 	// Written before the first call and not with its answer. A pass that creates
@@ -488,6 +491,17 @@ func (r *IssuedDatabricksServicePrincipalReconciler) issued(context.Context) (is
 				"a federation policy naming none is one no token can satisfy")
 	}
 	return issuer, claims.Audience[0], nil
+}
+
+// issuer is the half of that a deletion needs, and the only half it may be held
+// over. A record on its way out has a service principal to find and remove and
+// no policy to write, so the audience is not its business.
+func (r *IssuedDatabricksServicePrincipalReconciler) issuer(context.Context) (string, error) {
+	claims, err := databricks.ReadTokenClaims(r.TokenPath)
+	if err != nil {
+		return "", err
+	}
+	return databricks.IssuerOf(claims)
 }
 
 func (r *IssuedDatabricksServicePrincipalReconciler) report(ctx context.Context,

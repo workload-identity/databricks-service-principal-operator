@@ -186,8 +186,14 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	r.Holder.Set(cfg, clients)
 
+	// The subject as the status holds it, not as this pass read it. Verification
+	// goes on passing for about an hour after the token file becomes unreadable
+	// -- the SDK holds the access token it already exchanged -- so this line is
+	// reached with the claims at their zero value, and rendering from them puts
+	// "as " on a Ready account. The status keeps the last one read for the same
+	// reason it is not blanked above: the value is not wrong, it was not read.
 	return r.report(ctx, &account, metav1.ConditionTrue, reasonAccountReady,
-		fmt.Sprintf("acting in account %s as %s", account.Spec.AccountID, claims.Subject))
+		fmt.Sprintf("acting in account %s as %s", account.Spec.AccountID, account.Status.Subject))
 }
 
 // reportAgreement counts the identities this operator issued that were made in

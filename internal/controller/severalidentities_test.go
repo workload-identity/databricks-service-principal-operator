@@ -346,7 +346,7 @@ func TestEquipmentIsReportedPerNamedIdentity(t *testing.T) {
 		// whoever reads it to fix different things -- recreate the pod versus
 		// wait for Databricks. Asserting only True or False lets a lookup that
 		// finds any token at all still read as correct here.
-		{writer, metav1.ConditionFalse, "running without the Databricks token",
+		{writer, metav1.ConditionFalse, "running without this identity's Databricks token",
 			"the pod has no token for this identity, whatever it holds for another"},
 	} {
 		entry, carried := projected.Status.Identity(want.request)

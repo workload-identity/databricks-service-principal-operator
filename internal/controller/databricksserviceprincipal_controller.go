@@ -45,6 +45,13 @@ import (
 )
 
 const (
+	// Two names and one value, because this controller has no second question to
+	// ask. Everything it reports is read from objects it watches -- the record,
+	// the pods, the ServiceAccount, the namespace, the DatabricksAccount -- so an
+	// object that is not Ready learns nothing by asking again that the event it
+	// waits for would not have brought sooner. What the interval is for is a
+	// missed event, and that risk is the same either side of Ready.
+	//
 	// A failure is retried sooner than a settled object is re-read. The first is
 	// something still owed; the second is a check that what was done is still
 	// true, which nothing in Kubernetes reports.
@@ -606,10 +613,21 @@ func (r *DatabricksServicePrincipalReconciler) equipment(ctx context.Context,
 			return outcome{}, err
 		}
 		if injecting {
+			// Named rather than chosen between. The webhook being unable to
+			// answer is one of three ways here, and the other two are it working
+			// as intended: it drops an identity with no client id rather than
+			// write a profile nothing can be exchanged for, and it leaves a pod
+			// that already carries a volume of that name alone. Nothing in this
+			// pass tells them apart -- a pod equipped for one identity and not
+			// another carries the volume too -- and the one that recreating does
+			// not fix is the one whose owner would be left recreating for ever.
 			said = append(said, fmt.Sprintf(
-				"%d pod(s) are running without the Databricks token; they were created while the "+
-					"webhook could not answer, and recreating them is what fixes it: %s",
-				len(noToken), strings.Join(noToken, ", ")))
+				"%d pod(s) are running without this identity's Databricks token: %s. A pod is "+
+					"admitted without one when the webhook could not answer, when this identity "+
+					"had no client id yet, or when the pod already carried a volume named %s, "+
+					"which this operator does not overwrite; recreating the pod answers the "+
+					"first two and not the third",
+				len(noToken), strings.Join(noToken, ", "), dbxwebhook.TokenVolume))
 		} else {
 			said = append(said, fmt.Sprintf(
 				"%d pod(s) are running without the Databricks token, and namespace %s does not "+
@@ -627,11 +645,23 @@ func (r *DatabricksServicePrincipalReconciler) equipment(ctx context.Context,
 			len(wrongAudience), strings.Join(wrongAudience, ", ")))
 	}
 	if len(stale) > 0 {
-		said = append(said, fmt.Sprintf(
-			"%d pod(s) carry this identity's token and a configuration written before it said "+
-				"what it says now; they were created earlier, and recreating them is what fixes "+
-				"it: %s",
-			len(stale), strings.Join(stale, ", ")))
+		if entry.ClientID == "" {
+			// The identity has no client id to write, so a pod created now would
+			// carry no profile at all and the advice above is one nobody can
+			// act on. What to do instead is on Ready, which is where the reason
+			// the client id is gone is written.
+			said = append(said, fmt.Sprintf(
+				"%d pod(s) carry a profile naming a client id this identity no longer has, so "+
+					"nothing they hold can be exchanged; Ready says why and what starts a new "+
+					"identity: %s",
+				len(stale), strings.Join(stale, ", ")))
+		} else {
+			said = append(said, fmt.Sprintf(
+				"%d pod(s) carry this identity's token and a configuration written before it said "+
+					"what it says now; they were created earlier, and recreating them is what fixes "+
+					"it: %s",
+				len(stale), strings.Join(stale, ", ")))
+		}
 	}
 	return outcome{
 		Status: metav1.ConditionFalse, Reason: reasonNotEquipped,
@@ -651,8 +681,17 @@ func (r *DatabricksServicePrincipalReconciler) equipment(ctx context.Context,
 // will not match. That is the right report: this operator did not equip it, and
 // saying so is not the same as saying it is broken.
 func describes(pod *corev1.Pod, entry dbxv1alpha1.ProjectedIdentity) bool {
-	return strings.Contains(pod.Annotations[dbxwebhook.ConfigAnnotation],
-		dbxwebhook.Configuration([]dbxv1alpha1.ProjectedIdentity{entry}))
+	written := dbxwebhook.Configuration([]dbxv1alpha1.ProjectedIdentity{entry})
+	if written == "" {
+		// An identity with no client id is one the webhook writes nothing for,
+		// and every string contains the empty one -- so without this the check
+		// answers yes for every pod in the namespace and Equipped reports True
+		// for pods carrying a profile for a service principal that is not there.
+		// Recording one as removed in Databricks clears the client id, which is
+		// exactly when those pods are worth reporting.
+		return false
+	}
+	return strings.Contains(pod.Annotations[dbxwebhook.ConfigAnnotation], written)
 }
 
 // serviceAccountOf is the ServiceAccount a pod actually runs as. An empty name

@@ -45,9 +45,14 @@ const (
 	Denied FailureKind = "Denied"
 )
 
-// ErrMalformedCoordinate reports a spec value that cannot be a Databricks
-// coordinate. A run of digits longer than an int64 gets past the CRD's pattern
-// and lands here.
+// ErrMalformedCoordinate reports a value this operator recorded that it can no
+// longer use.
+//
+// Every producer parses an id Databricks returned and the operator wrote into
+// status, so nothing anybody typed reaches here and there is nothing in a spec
+// to correct. The id is carried as a string and the federation policy API wants
+// an int64; nothing between the two checks that it fits, because the only writer
+// is Databricks.
 type ErrMalformedCoordinate struct {
 	Field string
 	Value string

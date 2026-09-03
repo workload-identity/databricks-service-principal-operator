@@ -629,4 +629,18 @@ func TestNothingIsBlankedByAReadThatFailed(t *testing.T) {
 	if after.Status.Audience != reported.Status.Audience {
 		t.Errorf("audience went from %q to %q", reported.Status.Audience, after.Status.Audience)
 	}
+
+	// Including the sentence Ready is made of. The account is still reachable on
+	// the access token the SDK already exchanged, so this reads "acting in
+	// account X as" and then stops -- on a condition that says True, at the one
+	// moment somebody is comparing that subject against a federation policy.
+	ready := accountCondition(t, c, accountObject)
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Fatalf("Ready is %v; the account was reached and read, which is what it reports", ready)
+	}
+	if !strings.Contains(ready.Message, reported.Status.Subject) {
+		t.Errorf("Ready says %q, want it to name %q -- the same read that failed already left "+
+			"the value on the object, deliberately",
+			ready.Message, reported.Status.Subject)
+	}
 }

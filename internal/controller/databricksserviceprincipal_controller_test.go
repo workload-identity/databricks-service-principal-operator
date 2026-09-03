@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/databricks/databricks-sdk-go/apierr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -267,6 +268,72 @@ func TestAFailedPolicyIsNotReportedAsWorking(t *testing.T) {
 	}
 }
 
+// TestARefusedRequestIsNotReportedAsSomethingMissing covers two answers that
+// call for different people.
+//
+// Databricks answers some refusals 400 rather than 404, and the two mean
+// opposite things: what was named is not there, or the request itself is not
+// acceptable. Under one reason, whoever matched on it goes looking for a service
+// principal that was never missing, and nothing they can do in Databricks makes
+// the refused request land.
+func TestARefusedRequestIsNotReportedAsSomethingMissing(t *testing.T) {
+	t.Parallel()
+	for _, answer := range []struct {
+		name string
+		gave error
+		want string
+	}{
+		{"refused", &apierr.APIError{
+			ErrorCode:  "INVALID_PARAMETER_VALUE",
+			StatusCode: 400,
+			Message:    "the subject is not acceptable",
+		}, reasonRejected},
+		{"not there", apierr.ErrResourceDoesNotExist, reasonNotFound},
+	} {
+		t.Run(answer.name, func(t *testing.T) {
+			h := newHarness(t, &stubClients{policyErr: answer.gave},
+				mintingNamespace(testNamespace), asking(testNamespace, testName))
+			h.settle(t)
+
+			ready := meta.FindStatusCondition(
+				identityIn(t, principalOf(t, h.Client)).Conditions, conditionReady)
+			if ready == nil || ready.Reason != answer.want {
+				t.Errorf("Ready is %v, want %s; the reason is what people match and alert on, "+
+					"and these two are ended by different acts", ready, answer.want)
+			}
+		})
+	}
+}
+
+// TestAnIdThisOperatorWroteDownIsNotReportedAsABadSpec covers where a reason
+// sends the person who reads it.
+//
+// The only value that can fail to parse as a coordinate is the service principal
+// id on the record, which this operator wrote from what Databricks answered.
+// Nobody declared it. Reported as a bad spec, whoever reads it opens the
+// ServiceAccount and the DatabricksAccount, finds nothing wrong with either, and
+// still has an identity that cannot converge.
+func TestAnIdThisOperatorWroteDownIsNotReportedAsABadSpec(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, &stubClients{policyErr: &dbx.ErrMalformedCoordinate{
+		Field: "servicePrincipalId",
+		Value: "99999999999999999999",
+		Cause: errors.New("value out of range"),
+	}}, mintingNamespace(testNamespace), asking(testNamespace, testName))
+	h.settle(t)
+
+	ready := meta.FindStatusCondition(
+		identityIn(t, principalOf(t, h.Client)).Conditions, conditionReady)
+	if ready == nil || ready.Reason != reasonMalformedRecord {
+		t.Errorf("Ready is %v, want %s; nothing anybody declared is wrong here",
+			ready, reasonMalformedRecord)
+	}
+	if ready != nil && !strings.Contains(ready.Message, "servicePrincipalId") {
+		t.Errorf("message is %q; it has to name the value that will not parse, which is the "+
+			"only way to find it on an object holding several ids", ready.Message)
+	}
+}
+
 // TestOneDeletedInDatabricksIsNotReplaced is the whole of what makes this a
 // bridge into somebody else's governance rather than a second one.
 //
@@ -470,8 +537,9 @@ func TestAnEmptyIssuerIsReportedRatherThanSent(t *testing.T) {
 	}
 	principal := principalOf(t, h.Client)
 	ready := meta.FindStatusCondition(identityIn(t, principal).Conditions, conditionReady)
-	if ready == nil || ready.Reason != reasonNotConfigured {
-		t.Errorf("Ready is %v, want it to name the operator's own configuration", ready)
+	if ready == nil || ready.Reason != reasonUnprepared {
+		t.Errorf("Ready is %v, want %s -- what could not be read is the operator's own token, "+
+			"and NotConfigured names the account instead", ready, reasonUnprepared)
 	}
 }
 
@@ -589,6 +657,18 @@ func TestAPodRunningWithoutTheTokenIsReported(t *testing.T) {
 		t.Errorf("message is %q; it has to say what fixes it, because waiting does not and "+
 			"nothing else says so", condition.Message)
 	}
+	// And it has to stop at what is known. A pod admitted while this identity
+	// had no client id, and a pod that already carried a volume of that name,
+	// arrive here identically -- and recreating the third comes back the same,
+	// so a message naming only the webhook sends its reader to look at a webhook
+	// that was up and to recreate a pod for ever.
+	for _, cause := range []string{"client id", dbxwebhook.TokenVolume} {
+		if !strings.Contains(condition.Message, cause) {
+			t.Errorf("message is %q, want it to name %q as well; what is established is that "+
+				"this pod has no token, and three things produce that",
+				condition.Message, cause)
+		}
+	}
 }
 
 // TestAFullyEquippedPodIsNotReported is the other half. Reporting a pod that is
@@ -636,6 +716,46 @@ func TestAPodCarryingAnOlderConfigurationIsReported(t *testing.T) {
 	}
 	if !strings.Contains(condition.Message, "recreating") {
 		t.Errorf("message is %q, want it to say what fixes it", condition.Message)
+	}
+}
+
+// TestPodsHoldingAProfileForAServicePrincipalThatIsGoneAreNotCalledEquipped
+// covers the state where being equipped stops meaning anything.
+//
+// A service principal deleted in Databricks clears the client id and leaves the
+// audience, so the webhook would now write nothing for this identity -- and what
+// is written for nothing is the empty string, which every pod in the namespace
+// contains. Equipped then reports True for pods carrying a profile naming a
+// client that resolves to nothing, which is the one moment their owner needs to
+// be told otherwise.
+func TestPodsHoldingAProfileForAServicePrincipalThatIsGoneAreNotCalledEquipped(t *testing.T) {
+	t.Parallel()
+	stub := &stubClients{}
+	h := newHarness(t, stub,
+		mintingNamespace(testNamespace), asking(testNamespace, testName),
+		equippedPod(testName))
+	h.settle(t)
+
+	if condition := equipment(t, h.Client); condition == nil ||
+		condition.Status != metav1.ConditionTrue {
+		t.Fatalf("Equipped is %v before anything was deleted; the rest of this test says "+
+			"nothing unless it starts from a pod that was equipped", condition)
+	}
+
+	stub.gone = identityIn(t, principalOf(t, h.Client)).ServicePrincipalID
+	h.settle(t)
+
+	if got := identityIn(t, principalOf(t, h.Client)).ClientID; got != "" {
+		t.Fatalf("clientId is %q; this test is about what is reported once it is cleared", got)
+	}
+	condition := equipment(t, h.Client)
+	if condition == nil || condition.Status != metav1.ConditionFalse {
+		t.Fatalf("Equipped is %v for a pod carrying a profile for a service principal that is "+
+			"not there; that pod cannot reach Databricks and the object says it can", condition)
+	}
+	if !strings.Contains(condition.Message, "runner-"+testName) {
+		t.Errorf("message is %q; it has to name the pod, because finding it by hand means "+
+			"reading every pod spec in the namespace", condition.Message)
 	}
 }
 
@@ -1183,8 +1303,9 @@ func TestATokenThatCouldNotBeReadRecoversWhenItCan(t *testing.T) {
 		t.Fatal("nothing was projected, so nothing says why this is stuck")
 	}
 	ready := meta.FindStatusCondition(identityIn(t, principal).Conditions, conditionReady)
-	if ready == nil || ready.Reason != reasonNotConfigured {
-		t.Fatalf("Ready is %v, want it to say the operator cannot read its own token", ready)
+	if ready == nil || ready.Reason != reasonUnprepared {
+		t.Fatalf("Ready is %v, want %s -- the DatabricksAccount is fine and NotConfigured is "+
+			"what sends its reader there", ready, reasonUnprepared)
 	}
 
 	// And the file appears, as it does a moment after a pod starts.
