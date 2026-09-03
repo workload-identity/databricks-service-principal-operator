@@ -1,0 +1,50 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/*
+Dockerfile.cross
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Go workspace file
+go.work
+
+# Kubernetes Generated files - skip generated files, except for vendored files
+!vendor/**/zz_generated.*
+
+# editor and IDE paraphernalia
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Kubeconfig might contain secrets
+*.kubeconfig
+
+# Coordinates for a live Databricks account. The live tests read these from the
+# environment rather than a file precisely so that none of it can be committed:
+# a host and an account id name somebody's account and the data in it.
+.env
+.env.*
+.envrc
+.databrickscfg
+
+# Working notes. Not version controlled: they are a thinking record rather than
+# a document, they go stale against the code within days, and nothing may link
+# to them because a clone does not have them.
+draft.md
+draft/
+
+# Working review notes. Same reason as draft.md.
+review.md
+
+# The state machine walk. Same reason as the others.
+paths.md
