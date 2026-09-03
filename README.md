@@ -1,0 +1,573 @@
+# databricks-service-principal-operator
+
+Your workload reaches Databricks with no credential anywhere — no token in a
+Secret, nothing to rotate, nothing to leak.
+
+You annotate a ServiceAccount, naming the operator to ask:
+
+```sh
+kubectl -n team-a annotate serviceaccount etl \
+  databricks.workload-identity.io/service-principal=ops-a/databricks-account
+```
+
+A Databricks service principal is created for `team-a/etl` (`<namespace>/<name>`),
+Databricks is told to trust that ServiceAccount's token as that principal, and
+every pod running under it comes up holding the identity:
+
+```sh
+$ kubectl -n team-a get databricksserviceprincipal etl
+NAME   CLIENT ID                              READY   AGE
+etl    11111111-1111-1111-1111-111111111111   True    4s
+```
+
+Your workload uses it by naming what it was given, in one line:
+
+```sh
+export DATABRICKS_CONFIG_FILE=$WORKLOAD_IDENTITY_DATABRICKS_CONFIG_FILE
+export DATABRICKS_CONFIG_PROFILE=$WORKLOAD_IDENTITY_DATABRICKS_CONFIG_PROFILE
+```
+
+One line rather than none, deliberately: nothing this operator sets is a name any
+Databricks SDK reads, so a workload that brought its own configuration keeps it.
+See [What your workload writes](#what-your-workload-writes).
+
+## Two other people have to have said yes
+
+The annotation is a request, not a permission. It does nothing until both of
+these are already true:
+
+| Who                                     | Says                                | Where                                                   |
+|-----------------------------------------|-------------------------------------|---------------------------------------------------------|
+| A cluster admin                         | this namespace may be served at all | `databricks.workload-identity.io/mint` on the Namespace |
+| The team holding the Databricks account | I will spend my credential here     | `spec.namespaces` on their DatabricksAccount            |
+
+Neither can say the other's, and neither can say yours. Withhold any of the three
+and nothing happens, and nothing says so: until an identity exists there is no
+object to carry a condition, and an object in every namespace announcing that it
+has nothing would be this operator answering a question nobody asked. All three
+are read rather than reported — the label on the Namespace, the list on the
+DatabricksAccount, and the annotation you wrote.
+
+[Opening a namespace](#opening-a-namespace) is both, in full.
+
+This operator grants nothing. What that principal may read or run is decided in
+Databricks.
+
+> **Not released.** All of this has run — one pod on EKS holding two identities
+> the operator created, exchanging each of its two tokens and acting as a
+> different Databricks service principal with each — once, on one cluster,
+> against one account. Nobody has used it for anything.
+
+---
+
+# What it will not do
+
+It creates identities. It grants them nothing, and it will not — not a group
+membership, not a workspace assignment, not a permission on anything in Unity
+Catalog. That is a boundary rather than an unfinished half, and two things rest
+on it.
+
+**It is the only thing about this operator the account can check.** The
+operator's own service principal has to be an account admin, because writing a
+federation policy allows nothing narrower; step 1 spends a while on why. An
+account admin can grant Databricks permissions, so the account cannot rule out
+that this one does by reading its permissions — the only thing left to read is
+the code, and today that reading is short, because there is no call in it that
+grants anything. The moment one identity gets a group membership from here, the
+answer becomes "it grants only what it should", which is a claim about a running
+program rather than a fact about a file. The account admin the operator already
+paid for then buys nothing.
+
+**It is what makes `mint` safe to hand out.** Annotating a ServiceAccount is a
+namespace-level act: whoever can write ServiceAccounts in `team-a` can mint an
+identity there. That is acceptable only because a minted identity holds nothing
+— it is why "mint is not a security boundary", below, is true. If minting also
+granted, write access to a namespace would become a way to acquire Databricks
+permissions, by a route nobody in Databricks reviews.
+
+A third, smaller one: every permission in the account has a single origin, so
+"who can read this table" is answered in Databricks alone, rather than
+reconstructed from annotations anyone holding a namespace can change.
+
+What this costs is real, and it is the cost being chosen. `status.clientID`
+names the identity and stops there; putting it in a group is somebody else's
+work, done with somebody else's credential — one that needs none of the account
+admin this operator does. Whether that somebody is Terraform, a person, or
+another controller is a governance decision, and not this operator's to make.
+
+---
+
+# Installing
+
+## Requirements
+
+- **cert-manager**, any version serving `cert-manager.io/v1`. The webhook serves
+  TLS and cert-manager issues its certificate. `make deploy` refuses rather than
+  installing half of itself when the CRDs are absent.
+- **A cluster whose OIDC issuer Databricks can reach.** EKS and GKE publish a
+  managed issuer and are fine. A private one does not work until it is published
+  somewhere Databricks can read.
+- **A Databricks service principal for the operator, and it has to be an account
+  admin.** Writing a service principal's federation policy is
+  [documented as account admin only][fed-policy], and this operator writes one
+  for every identity it creates. Step 1 below.
+
+[fed-policy]: https://docs.databricks.com/aws/en/dev-tools/auth/oauth-federation-policy
+
+Check the issuer first; nothing else helps if it fails.
+
+```sh
+kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
+```
+
+Databricks fetches that issuer's OpenID configuration when a federation policy
+is written -- not later when a token is exchanged -- so an unreachable one fails
+on the first reconcile with "Unable to load valid OpenID configuration for
+issuer".
+
+## 1. Give the operator an identity, in Databricks
+
+The operator authenticates by exchanging its own token, so its identity must
+exist before it runs — it cannot create its own. Once, as an account admin,
+ideally in Terraform:
+
+1. Create a service principal for the operator. Keep its `applicationId`.
+2. Write a federation policy on it:
+   - `issuer` — from the command in Requirements
+   - `subject` — `system:serviceaccount:<operator namespace>:<operator ServiceAccount>`
+   - `audiences` — exactly one, matching `DATABRICKS_TOKEN_AUDIENCE` in
+     `config/manager/manager.yaml` (`databricks` by default)
+3. Make it an **account admin**.
+
+   This is a large grant and it is not avoidable today. The two halves of what
+   the operator does have different requirements, and the wider one decides:
+
+| What it does                | Who may                                 | Source                                      |
+|-----------------------------|-----------------------------------------|---------------------------------------------|
+| Create a service principal  | Account admins **and workspace admins** | [Manage service principals][manage-sp]      |
+| Write its federation policy | **Account admins** only                 | [Configure a federation policy][fed-policy] |
+
+   There is no narrower role. `roles/servicePrincipal.manager` is not it -- it
+   [manages the roles on an existing service principal][sp-acl], not the
+   creation of new ones and not their federation policies. Granting it changes
+   nothing here; that was checked against a live account.
+
+   (Those are the AWS pages. The Azure and GCP doc sets say the same thing.)
+
+   What follows from it is worth stating plainly. An account admin can grant
+   Databricks permissions. This operator does not, and holds no code that could
+   -- but the account can no longer prove that from the permissions alone, only
+   from what the operator is. That is why it does not grant, and will not:
+   "What it will not do", above.
+
+[manage-sp]: https://docs.databricks.com/aws/en/admin/users-groups/manage-service-principals
+[sp-acl]: https://docs.databricks.com/aws/en/security/auth/access-control/service-principal-acl
+
+## 2. Deploy
+
+```sh
+make deploy IMG=<registry>/databricks-service-principal-operator:<tag>
+```
+
+## 3. Point it at the account
+
+```yaml
+apiVersion: databricks.workload-identity.io/v1alpha1
+kind: DatabricksAccount
+metadata:
+  name: databricks-account
+  namespace: dbxsp-operator-system
+spec:
+  host: https://accounts.cloud.databricks.com
+  accountId: <account id>
+  clientId: <applicationId from step 1>
+```
+
+Check it:
+
+```sh
+kubectl -n dbxsp-operator-system \
+  get databricksaccount databricks-account -o yaml
+```
+
+`Ready` means the operator can act. If it is not Ready, `status.subject` and
+`status.audience` are what the operator actually presents — the federation policy
+from step 1 must name those exact values. They are reported even on failure,
+which is when you need them.
+
+Installation is done. The rest is per-team and per-workload.
+
+---
+
+# Running it
+
+## Opening a namespace
+
+Cluster-admin does this, once per namespace, with two labels:
+
+```sh
+kubectl label namespace team-a \
+  databricks.workload-identity.io/inject=enabled \
+  databricks.workload-identity.io/mint=enabled
+```
+
+| Label    | What it decides                                 | When to remove it                                                                      |
+|----------|-------------------------------------------------|----------------------------------------------------------------------------------------|
+| `mint`   | Whether new identities may be minted here       | As soon as you have minted what you meant to. Nothing that already exists is affected. |
+| `inject` | Whether pods created here are given their token | Only when this namespace has stopped using Databricks altogether.                      |
+
+They are separate because they end at different times. Minting is an event —
+open it, mint, close it. Equipping pods is continuous: an identity minted while
+minting was open needs every new pod under it equipped for as long as it is used.
+One label for both would mean closing the minting switch quietly broke every
+workload there on its next rollout.
+
+`mint` is not a security boundary. The identity a ServiceAccount can ask for
+is `system:serviceaccount:<its own namespace>:<itself>` and it is created holding
+nothing, so it does not stop anybody reaching something they could not reach
+anyway. It decides which teams are in.
+
+`inject` left on a namespace that no longer uses Databricks costs one admission
+call per pod and nothing else — a pod whose ServiceAccount has no identity is
+admitted unchanged. Forgetting it is cheap.
+
+**Neither label revokes.** To end a workload's access, remove the annotation key
+below — by whoever asked for it, which is the point of them being two separate
+things.
+
+**And neither label commits an operator.** The cluster saying a namespace may be
+served is not the same as a platform team agreeing to spend their account admin
+credential on it. That answer lives on their own DatabricksAccount, in their own
+namespace, and no namespace can add itself to it:
+
+```yaml
+spec:
+  namespaces:
+  - team-a
+```
+
+Naming nothing serves nothing, which is the default: a fresh install is inert
+until its owner says where it may act.
+
+## Two Databricks accounts in one cluster
+
+One operator serves one Databricks account, because it holds that account's
+credential and that credential is an account admin. Two accounts need two
+operators, and each account admin then trusts only their own.
+
+An operator is named after the account it serves, not after a team — several
+teams can share one account, and they then share one operator.
+
+Each one runs in its own namespace, and says which namespaces it will serve on
+its own DatabricksAccount:
+
+```yaml
+# in the finance operator's namespace
+spec:
+  namespaces:
+  - team-a
+  - team-b
+```
+
+`team-a` and `team-b` use the finance account, so that operator serves both;
+`risk` is named on the other operator's account instead.
+
+This is where a platform team says what their account admin credential may be
+spent on, and the answer is theirs alone: the object lives in their own
+namespace, and no namespace can add itself to it. **Naming nothing serves
+nothing** — a fresh install is inert until its owner says where it may act.
+
+A namespace this operator does not serve is left entirely alone — not served, and
+not revoked.
+
+Both operators are asked about the same pods, and they agree without
+coordinating: each reads the same `DatabricksServicePrincipal`, which carries
+every identity the ServiceAccount was issued, so whichever is asked first equips
+the pod with all of them and the second finds its work already done.
+
+That is also why they need not agree on an audience. Each identity's token is
+minted for whatever its own operator's token carries, and a pod holds one token
+per identity — so nobody has to go round asking the other platform teams what
+theirs is.
+
+## Giving one workload an identity
+
+### First, find the operator you are asking
+
+An operator is named by its DatabricksAccount: the namespace it runs in and the
+name of that object, joined by `/`. Ask the cluster:
+
+```sh
+kubectl get databricksaccounts -A
+```
+
+```
+NAMESPACE               NAME                 HOST                                    READY
+dbxsp-operator-system   databricks-account   https://accounts.cloud.databricks.com   True
+```
+
+That operator's reference is the two columns joined:
+
+```
+dbxsp-operator-system/databricks-account
+```
+
+It is an address rather than a nickname, because the API server will not hold two
+objects of one kind at one address — so two operators cannot be confused for each
+other, and nobody has to keep a list of who chose which name.
+
+### Then annotate
+
+```sh
+OPERATOR=dbxsp-operator-system/databricks-account
+
+kubectl -n team-a annotate serviceaccount etl \
+  databricks.workload-identity.io/service-principal=$OPERATOR
+
+kubectl -n team-a get databricksserviceprincipal etl
+```
+
+```
+NAME   CLIENT ID                              READY   AGE
+etl    11111111-1111-1111-1111-111111111111   True    4s
+```
+
+`CLIENT ID` is the applicationId to grant Databricks permissions to. That is the
+whole of the common case.
+
+**Grant to a group rather than to that applicationId** — worth weighing before
+you settle on how to grant. If the service principal is ever deleted in
+Databricks, nothing rebuilds it: the identity reports `RemovedInDatabricks` and
+waits, and what you ask for in its place carries a new applicationId. Anything
+that named the old one directly has to be redone; anything that went through a
+group is adding the new principal to it.
+
+### The workspace is yours to name
+
+The annotation names an operator and nothing else — no workspace. Your workload
+names its own, in its own Deployment, with the SDK's own variable:
+
+```yaml
+env:
+- name: DATABRICKS_HOST
+  value: https://dbc-example.cloud.databricks.com
+```
+
+That composes with what this operator gives you rather than replacing it —
+measured against the SDK: the profile supplies `auth_type`, `client_id` and the
+token path, and `DATABRICKS_HOST` supplies the host.
+
+It is not here because this operator issues identities, and a host is a
+destination. It could not check one if it carried it: it knows the Databricks
+account it acts in, and a workload wants a workspace. Carrying it would be
+repeating a string nobody verifies, in an object that is not where the rest of
+your configuration lives.
+
+A key that cannot be read is refused on its own, and refusing it changes nothing:
+no identity is made for it, none is destroyed, and every other key is acted on as
+if it were not there. Nothing is said about it anywhere either — what you have is
+the edit you made not taking effect. Whether a key reads is decided by the
+characters in it and by nothing about the cluster, so the line you wrote is the
+whole of what there is to check: an operator's reference is
+`<its namespace>/<its DatabricksAccount>`, and an identity's name goes after a
+`.` on the key.
+
+So a typo costs you the edit and nothing else. What withdraws an identity is a key
+that is *gone*; a key that is there and unreadable holds whatever it already
+named. See [Destroying an identity](#destroying-an-identity).
+
+### More than one identity
+
+A workload that reads with one service principal and writes with another asks for
+each under its own key, naming it there:
+
+```sh
+kubectl -n team-a annotate serviceaccount etl \
+  databricks.workload-identity.io/service-principal.reader=$OPERATOR \
+  databricks.workload-identity.io/service-principal.writer=$OPERATOR
+```
+
+The name after the `.` is the profile name your code asks for, and the value is
+the same operator reference as above. That is
+[docs/several-identities.md](docs/several-identities.md), and everything above
+holds unchanged for the one-identity case.
+
+### Recreate pods that were already running
+
+A pod is equipped when it is created, and nothing rewrites a running one. The
+object names the pods that are missing what they should have:
+
+```sh
+kubectl -n team-a get databricksserviceprincipal etl \
+  -o jsonpath='{.status.conditions[?(@.type=="Equipped")].message}'
+```
+
+## What your workload writes
+
+One line, and this operator sets nothing else.
+
+```sh
+export DATABRICKS_CONFIG_FILE=$WORKLOAD_IDENTITY_DATABRICKS_CONFIG_FILE
+export DATABRICKS_CONFIG_PROFILE=$WORKLOAD_IDENTITY_DATABRICKS_CONFIG_PROFILE
+```
+
+or in code, naming them yourself:
+
+```python
+import os
+from databricks.sdk import WorkspaceClient
+
+w = WorkspaceClient(
+    config_file=os.environ["WORKLOAD_IDENTITY_DATABRICKS_CONFIG_FILE"],
+    profile=os.environ["WORKLOAD_IDENTITY_DATABRICKS_CONFIG_PROFILE"],
+)
+```
+
+`WORKLOAD_IDENTITY_DATABRICKS_CONFIG_PROFILE` names the identity your
+ServiceAccount asked for with the bare key — the one everything above is about. A
+workload holding several picks between them by name:
+[docs/several-identities.md](docs/several-identities.md).
+
+### Why you have to write that line
+
+**Nothing this operator sets is a name any Databricks SDK reads.** Setting
+`DATABRICKS_CONFIG_FILE` would not add a value to your workload — it would take
+over the SDK's whole resolution. A workload carrying its own `.databrickscfg`,
+baked into its image or mounted, would find that file still there, untouched, and
+never read again. An environment variable beats a profile silently, so nothing
+inside the workload could find out, and this operator cannot see what an image
+contains.
+
+So it publishes instead of configuring, and the act of using what was published
+is yours. That is the price of never displacing anything you brought.
+
+### What is actually in the pod
+
+```
+/var/run/secrets/databricks/
+├── config
+└── ops-a/databricks-account/token
+```
+
+`config` is the SDK's own format. The one identity asked for with the bare key
+has no name of its own, so its profile is named by what that key held — the
+operator:
+
+```ini
+[ops-a/databricks-account]
+auth_type = file-oidc
+client_id = 11111111-1111-1111-1111-111111111111
+databricks_id_token_filepath = /var/run/secrets/databricks/ops-a/databricks-account/token
+audience = databricks
+```
+
+An identity asked for under a named key is named by that name instead, and its
+profile is `[reader]`: [docs/several-identities.md](docs/several-identities.md).
+
+No `host`, and that is the whole of what this operator leaves to you: the profile
+says who the workload is, and `DATABRICKS_HOST` in your Deployment says where it
+goes.
+
+**The tokens expire and are replaced, and that is not your problem.** kubelet
+rewrites each file well before its token expires, and the SDK re-reads the file
+on every exchange. Point it at the path and it stays working; nothing has to be
+restarted, and nothing has to notice.
+
+## Destroying an identity
+
+Remove the key. In `kubectl annotate`, a key with a `-` on the end means "delete
+this one" — the same shape as `key=value` for setting it:
+
+```sh
+kubectl -n team-a annotate serviceaccount etl \
+  databricks.workload-identity.io/service-principal-
+#                                                  ^ not a typo: this deletes it
+```
+
+That trailing hyphen is easy to miss here, because the key ends in `-principal`
+and already has hyphens of its own. Editing the ServiceAccount by hand and
+deleting the line does exactly the same thing.
+
+The key is the request, so a key that is gone is the workload saying it no longer
+needs that identity. The service principal is deleted in Databricks — everything
+Databricks recorded against that principal goes with it, Databricks doing the
+removing.
+
+**A key that is gone is the only thing that destroys**, together with a key whose
+value now names a different operator, which is the same sentence read from this
+operator's side: a person moved that identity elsewhere. A key that is still there
+and cannot be read destroys nothing — the identity it names is left exactly as it
+stands. Deleting a key and mistyping a value are edits to
+different entries of a map, so the operator never has to decide which of the two
+you meant.
+
+Ending one of several is deleting that one key, and the others are untouched:
+[docs/several-identities.md](docs/several-identities.md).
+
+**Deleting the ServiceAccount does the same thing, for the same reason. So does
+deleting the namespace.**
+
+**Nothing else destroys one.** Removing the namespace's `mint` label stops new
+identities and leaves existing ones alone. Deleting the
+`DatabricksServicePrincipal` in your namespace does nothing at all: that object
+is a projection, and it is rebuilt on the next pass.
+
+## Where the operator remembers what it issued
+
+Every identity has a second object, an `IssuedDatabricksServicePrincipal`, in the
+operator's own namespace:
+
+```sh
+kubectl -n dbxsp-operator-system get isdbxsp
+```
+
+That object is the record. The one in your namespace is a projection of it:
+delete it and it comes back, write to it and the next pass overwrites you.
+
+The record is what deletes the service principal in Databricks, and it lives
+outside your namespace so that tearing your namespace down cannot lose it: what
+is in Databricks outlives a Kubernetes namespace, so what remembers it has to as
+well.
+
+It is named after the ServiceAccount's uid rather than its name, so a
+ServiceAccount deleted and recreated under the same name gets a new identity
+rather than the old one. `status.identities[].issued` on your object names the
+record it came from.
+
+Deleting a record destroys the identity it holds. Nothing else should ever write
+one.
+
+## When something is wrong
+
+| Look at                                 | Answers                                                             |
+|-----------------------------------------|---------------------------------------------------------------------|
+| `DatabricksAccount` `Ready`             | Whether this Databricks account was reached and read                |
+| `DatabricksAccount` `Prepared`          | Whether the operator can issue anything at all                      |
+| `DatabricksServicePrincipal` `Ready`    | Whether the operator is getting this identity to where it should be |
+| `DatabricksServicePrincipal` `Equipped` | Whether its pods carry what they need to reach Databricks           |
+| `IssuedDatabricksServicePrincipal`      | The same answers, on the object the operator actually acts on       |
+
+`DatabricksAccount` Ready does not mean the operator can create anything —
+verification is a read. If it is Ready and an identity says `Denied`, the
+operator is short of a permission in Databricks, and no retry supplies it.
+
+**`Prepared` is the one to alert on.** It is false when the operator cannot read
+its own projected token, and it therefore does not know the issuer to write into
+every federation policy or the audience to give every pod. Nothing new can be
+issued while it is false, and Ready stays true throughout — the account is still
+reachable, on an access token already exchanged, for about an hour. Existing
+workloads are unaffected either way: exchanging a token does not go through this
+operator.
+
+`Ready` on an identity carries more than one kind of answer, and the reason says
+which:
+
+| Reason                | Means                                                                                                                                                                                                            |
+|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Exchangeable`        | This subject's token can be exchanged for this service principal                                                                                                                                                 |
+| `RemovedInDatabricks` | Somebody deleted the service principal there. It is not replaced; `status.removedServicePrincipalId` is the id to search the audit log for. Remove that identity's key and write it again to be issued a new one |
+| `AccountMismatch`     | This identity was made in a different Databricks account than the operator is acting in. Nothing is done for it and nothing about it is concluded                                                                |
+| `Denied`              | The operator lacks a Databricks permission. No retry supplies it                                                                                                                                                 |
+| `AwaitingRecord`      | The record was just written and has not been acted on yet                                                                                                                                                        |
+| `NotConfigured`       | There is no usable `DatabricksAccount` yet                                                                                                                                                                       |
+| `RevokeFailed`        | Deletion is being held because the service principal is still there. This is reported on the record, in the operator's namespace                                                                                 |
