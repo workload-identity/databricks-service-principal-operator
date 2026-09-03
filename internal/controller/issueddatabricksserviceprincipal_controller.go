@@ -37,8 +37,19 @@ import (
 )
 
 const (
+	// issuedRetryAfterAwaited is how long a record that is not Ready waits. What
+	// it is waiting on is a person acting in Databricks, which raises no event
+	// here.
 	issuedRetryAfterAwaited = time.Minute
-	issuedRetryAfterSettled = time.Minute
+
+	// issuedRetryAfterSettled is the interval on a converged identity, and it is
+	// ten times the other because nobody is waiting on it. It exists to notice a
+	// service principal deleted in Databricks, which raises no event either; a
+	// minute of it costs every identity in the account an existence check and a
+	// federation policy listing, once a minute, for as long as the operator
+	// runs. Ten minutes is what the account's own liveness check settled on for
+	// the same question.
+	issuedRetryAfterSettled = 10 * time.Minute
 )
 
 // IssuedDatabricksServicePrincipalReconciler owns everything this operator does

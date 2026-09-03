@@ -52,9 +52,8 @@ const (
 	// waits for would not have brought sooner. What the interval is for is a
 	// missed event, and that risk is the same either side of Ready.
 	//
-	// A failure is retried sooner than a settled object is re-read. The first is
-	// something still owed; the second is a check that what was done is still
-	// true, which nothing in Kubernetes reports.
+	// The awaited one is also what outcomeFor hands back, so it is how long a
+	// failure against Databricks waits in every controller here.
 	servicePrincipalRetryAfterAwaited = time.Minute
 	servicePrincipalRetryAfterSettled = time.Minute
 )

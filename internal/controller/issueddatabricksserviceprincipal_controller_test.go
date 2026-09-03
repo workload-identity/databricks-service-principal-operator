@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 )
@@ -195,6 +197,62 @@ func TestADeletionIsNotHeldOverAValueItDiscards(t *testing.T) {
 	}
 }
 
+// TestASettledIdentityIsNotAskedAboutAsOftenAsAFailingOne covers what coming
+// back costs.
+//
+// Every record that comes back re-runs an existence check and a federation
+// policy listing, and there is one record per identity in the account. An
+// identity somebody is waiting on is worth that once a minute -- what it waits
+// for is a person acting in Databricks, which raises no event here. A converged
+// one has nobody waiting: it is only being watched for a deletion made in
+// Databricks, and paying the same rate for that is paying it for ever.
+func TestASettledIdentityIsNotAskedAboutAsOftenAsAFailingOne(t *testing.T) {
+	t.Parallel()
+	comeBackIn := func(t *testing.T, stub *stubClients) (time.Duration, *metav1.Condition) {
+		t.Helper()
+		account := asking(testNamespace, testName)
+		h := newHarness(t, stub, mintingNamespace(testNamespace), account)
+		h.settle(t)
+		record := h.issuedOf(t, account)
+		if record == nil {
+			t.Fatal("nothing was issued to ask about")
+		}
+		result, err := h.Issued.Reconcile(context.Background(), reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(record),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.RequeueAfter, meta.FindStatusCondition(
+			h.issuedOf(t, account).Status.Conditions, conditionReady)
+	}
+
+	settled, ready := comeBackIn(t, &stubClients{})
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Fatalf("Ready is %v; this half of the comparison has to be a converged identity", ready)
+	}
+	awaited, waiting := comeBackIn(t, &stubClients{
+		policyErr: errors.New("the service is temporarily unavailable"),
+	})
+	if waiting == nil || waiting.Status == metav1.ConditionTrue {
+		t.Fatalf("Ready is %v; this half has to be an identity that is still owed something", waiting)
+	}
+
+	if settled <= awaited {
+		t.Errorf("a converged identity comes back in %v and one that is not in %v; every "+
+			"identity in the account then pays a lookup and a policy listing at the rate meant "+
+			"for the ones somebody is waiting on", settled, awaited)
+	}
+}
+
+// TestTheDestroyingReadIsNotTakenFromTheCache covers which reader answers the
+// one question that destroys things.
+//
+// A cache that has not caught up reports a ServiceAccount that exists as absent,
+// and absent is the answer that deletes a service principal and everything
+// granted to it. Being a pass late costs nothing; being wrong is not
+// recoverable, because Databricks assigns the applicationId of whatever is made
+// in its place.
 func TestTheDestroyingReadIsNotTakenFromTheCache(t *testing.T) {
 	t.Parallel()
 	account := asking(testNamespace, testName)
