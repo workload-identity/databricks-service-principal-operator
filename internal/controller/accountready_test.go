@@ -1,0 +1,111 @@
+package controller
+
+import (
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+
+	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
+)
+
+func accountWith(name string, ready metav1.ConditionStatus) *dbxv1alpha1.DatabricksAccount {
+	object := account(name)
+	setCondition(&object.Status.Conditions, 0, conditionReady, ready, reasonAccountReady, "checked")
+	return object
+}
+
+// TestOnlyTheCrossingWakesTheIdentities covers the predicate that keeps a
+// wake-up from being a loop.
+//
+// Every reconcile of the account writes its status, and most of those writes
+// change nothing an identity cares about. Waking every identity in the cluster
+// on each of them would put the whole set back in the queue once a minute,
+// forever, for no reason. Only the crossing into or out of usable matters.
+func TestOnlyTheCrossingWakesTheIdentities(t *testing.T) {
+	t.Parallel()
+	selected := types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
+	p := accountBecameUsable(selected)
+
+	notReady := accountWith(accountObject, metav1.ConditionFalse)
+	ready := accountWith(accountObject, metav1.ConditionTrue)
+
+	if !p.Update(event.UpdateEvent{ObjectOld: notReady, ObjectNew: ready}) {
+		t.Error("becoming usable did not wake anything; every identity would wait out its own interval")
+	}
+	if !p.Update(event.UpdateEvent{ObjectOld: ready, ObjectNew: notReady}) {
+		t.Error("ceasing to be usable did not wake anything")
+	}
+	if p.Update(event.UpdateEvent{ObjectOld: ready, ObjectNew: accountWith(accountObject, metav1.ConditionTrue)}) {
+		t.Error("a status write that changed nothing woke every identity in the cluster; " +
+			"that happens once a minute and never stops")
+	}
+	if !p.Create(event.CreateEvent{Object: ready}) {
+		t.Error("an account that arrives already usable did not wake anything")
+	}
+	if p.Create(event.CreateEvent{Object: notReady}) {
+		t.Error("an account that arrives unusable woke everything, and there is nothing to answer with")
+	}
+}
+
+// TestAnotherAccountWakesNothing covers the operator being told which account to
+// act in. Any other one is somebody else's object in the same cluster, and its
+// condition says nothing about whether this operator can act.
+func TestAnotherAccountWakesNothing(t *testing.T) {
+	t.Parallel()
+	selected := types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
+	p := accountBecameUsable(selected)
+
+	other := accountWith("someone-elses", metav1.ConditionTrue)
+	if p.Create(event.CreateEvent{Object: other}) {
+		t.Error("an account this operator was not told to use woke everything")
+	}
+	if p.Update(event.UpdateEvent{
+		ObjectOld: accountWith("someone-elses", metav1.ConditionFalse),
+		ObjectNew: other,
+	}) {
+		t.Error("an account this operator was not told to use woke everything on its transition")
+	}
+
+	// Deletion is the exception, and only for the selected one: the clients it
+	// installed are about to be withdrawn, and every identity has to hear that.
+	if !p.Delete(event.DeleteEvent{Object: accountWith(accountObject, metav1.ConditionTrue)}) {
+		t.Error("the selected account being deleted woke nothing")
+	}
+	if p.Delete(event.DeleteEvent{Object: other}) {
+		t.Error("another account being deleted woke everything")
+	}
+}
+
+// TestEveryRecordIsWokenOnce covers the listing that turns one account event
+// into the requests it stands for.
+//
+// It is the records that are woken, not the projections. A projection reaches
+// nothing outside the cluster, so an account becoming usable changes nothing
+// about it; what was waiting on the account is the controller that acts in it.
+func TestEveryRecordIsWokenOnce(t *testing.T) {
+	t.Parallel()
+	list := &dbxv1alpha1.IssuedDatabricksServicePrincipalList{
+		Items: []dbxv1alpha1.IssuedDatabricksServicePrincipal{
+			{ObjectMeta: metav1.ObjectMeta{Namespace: "operators", Name: "team-a.etl-aaaa"}},
+			{ObjectMeta: metav1.ObjectMeta{Namespace: "operators", Name: "team-b.loader-bbbb"}},
+		},
+	}
+	requests := issuedRequests(list)
+	if len(requests) != 2 {
+		t.Fatalf("made %d requests for two records: %+v", len(requests), requests)
+	}
+	seen := map[string]bool{}
+	for _, request := range requests {
+		seen[request.String()] = true
+	}
+	for _, want := range []string{"operators/team-a.etl-aaaa", "operators/team-b.loader-bbbb"} {
+		if !seen[want] {
+			t.Errorf("requests are %+v, want one for %s", requests, want)
+		}
+	}
+}
+
+var _ client.Object = (*dbxv1alpha1.IssuedDatabricksServicePrincipal)(nil)

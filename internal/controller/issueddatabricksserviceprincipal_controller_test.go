@@ -1,0 +1,486 @@
+package controller
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
+)
+
+// TestANamespaceTeardownDestroysTheIdentityInEitherOrder covers the failure this
+// whole shape was built for.
+//
+// A namespace controller deletes the kinds in a namespace in an order nothing
+// specifies. When the record of an identity lived in that namespace, the order
+// decided the outcome: deleted before the ServiceAccount, the operator woke
+// holding a deletion it had to interpret while the ServiceAccount still asked,
+// and whatever it guessed, one of the two orders left a live service principal
+// in Databricks that nothing in the cluster recorded -- inherited by the next
+// occupant of that namespace name, because a federation policy names a subject
+// and a subject is a pair of names.
+//
+// The record is not in that namespace, so there is no order to get right.
+func TestANamespaceTeardownDestroysTheIdentityInEitherOrder(t *testing.T) {
+	t.Parallel()
+	for _, order := range []struct {
+		name  string
+		first func(t *testing.T, h *harness, account *corev1.ServiceAccount)
+	}{
+		{"the projection is deleted first", func(t *testing.T, h *harness, _ *corev1.ServiceAccount) {
+			principal := principalOf(t, h.Client)
+			if principal == nil {
+				t.Fatal("nothing was projected")
+			}
+			if err := h.Client.Delete(context.Background(), principal); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"the ServiceAccount is deleted first", func(t *testing.T, h *harness, account *corev1.ServiceAccount) {
+			if err := h.Client.Delete(context.Background(), account); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			account := asking(testNamespace, testName)
+			stub := &stubClients{}
+			h := newHarness(t, stub, mintingNamespace(testNamespace), account)
+			h.settle(t)
+
+			created := h.issuedOf(t, account)
+			if created == nil || created.Status.ServicePrincipalID == "" {
+				t.Fatal("nothing was issued to tear down")
+			}
+
+			// Whichever went first, everything in the namespace is gone by the
+			// end of a teardown.
+			order.first(t, h, account)
+			deleteEverythingIn(t, h.Client, testNamespace)
+			h.settle(t)
+
+			if len(stub.deleted) != 1 {
+				t.Errorf("deleted %v in Databricks, want the one identity whose ServiceAccount "+
+					"is gone; what is left is a service principal nothing records, and the next "+
+					"namespace of this name inherits it", stub.deleted)
+			}
+			if h.issuedOf(t, account) != nil {
+				t.Error("the record is still there after its service principal was deleted")
+			}
+		})
+	}
+}
+
+// TestARecreatedServiceAccountDoesNotInheritTheOldIdentity covers what the
+// subject cannot do.
+//
+// Databricks matches the subject in a federation policy, and the subject is
+// system:serviceaccount:<namespace>:<name> -- two names, both reusable. A
+// namespace recreated under its old name, holding a ServiceAccount of its old
+// name, presents a token that satisfies the old policy exactly. The only thing
+// that can tell them apart is the uid, so the uid is what the record is named
+// for, what the marker is made of, and what is compared here.
+func TestARecreatedServiceAccountDoesNotInheritTheOldIdentity(t *testing.T) {
+	t.Parallel()
+	before := asking(testNamespace, testName)
+	stub := &stubClients{}
+	h := newHarness(t, stub, mintingNamespace(testNamespace), before)
+	h.settle(t)
+
+	inherited := h.issuedOf(t, before)
+	if inherited == nil || inherited.Status.ServicePrincipalID == "" {
+		t.Fatal("nothing was issued to inherit")
+	}
+
+	// The same names, a different ServiceAccount. This is a namespace deleted
+	// and recreated, or simply a ServiceAccount deleted and recreated: from
+	// Databricks' side the two are indistinguishable.
+	if err := h.Client.Delete(context.Background(), before); err != nil {
+		t.Fatal(err)
+	}
+	after := asking(testNamespace, testName)
+	after.UID = types.UID("a-different-uid")
+	after.ResourceVersion = ""
+	if err := h.Client.Create(context.Background(), after); err != nil {
+		t.Fatal(err)
+	}
+	stub.newServicePrincipalID, stub.newClientID = "9900", "app-uuid-2"
+	h.settle(t)
+
+	if len(stub.deleted) != 1 || stub.deleted[0] != inherited.Status.ServicePrincipalID {
+		t.Errorf("deleted %v, want the identity of the ServiceAccount that is gone; leaving it "+
+			"gives its permissions to whoever holds this namespace next", stub.deleted)
+	}
+	if h.issuedOf(t, before) != nil {
+		t.Error("the old record survived the ServiceAccount it was issued to")
+	}
+
+	issued := h.issuedOf(t, after)
+	if issued == nil {
+		t.Fatal("the new ServiceAccount was issued nothing")
+	}
+	if issued.Status.ServicePrincipalID == inherited.Status.ServicePrincipalID {
+		t.Errorf("the new ServiceAccount was handed %s, which belonged to the one before it",
+			issued.Status.ServicePrincipalID)
+	}
+}
+
+// TestARecordWithNoIdStillDestroysWhatItMade covers the one window the ordering
+// cannot close.
+//
+// The record is written before the create, so a pass that creates a service
+// principal and then stops leaves a record naming no id. Deleting that record by
+// its id would delete nothing and leave the service principal behind, which is
+// exactly the outcome the record exists to prevent -- so it is looked for by the
+// marker it was created carrying.
+func TestARecordWithNoIdStillDestroysWhatItMade(t *testing.T) {
+	t.Parallel()
+	account := asking(testNamespace, testName)
+	issued := recordFor(account)
+	// Nothing recorded, and something out there: what a crash between the two
+	// calls leaves behind.
+	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
+	h := newHarness(t, stub, mintingNamespace(testNamespace), account, issued)
+
+	withdraw(t, h.Client)
+	h.settle(t)
+
+	if len(stub.deleted) != 1 || stub.deleted[0] != "7788" {
+		t.Errorf("deleted %v, want the service principal this record made and never named; "+
+			"nothing else in the cluster knows it exists", stub.deleted)
+	}
+	if h.issuedOf(t, account) != nil {
+		t.Error("the record is still there after what it made was deleted")
+	}
+}
+
+// TestTheDestroyingReadIsNotTakenFromTheCache covers which reader answers the
+// one question that destroys things.
+//
+// A cache that has not caught up reports a ServiceAccount that exists as absent,
+// and absent is the answer that deletes a service principal and everything
+// granted to it. Being a pass late costs nothing; being wrong is not
+// recoverable, because Databricks assigns the applicationId of whatever is made
+// in its place.
+func TestTheDestroyingReadIsNotTakenFromTheCache(t *testing.T) {
+	t.Parallel()
+	account := asking(testNamespace, testName)
+	issued := recordFor(account)
+	issued.Status.ServicePrincipalID = "7788"
+	issued.Status.ClientID = "app-uuid"
+
+	// The cached client does not have the ServiceAccount; the live one does.
+	stub := &stubClients{}
+	h := newHarness(t, stub, mintingNamespace(testNamespace), issued)
+	live, _ := newFakeClient(t, mintingNamespace(testNamespace), account)
+	h.Issued.Live = live
+
+	h.records(t)
+	h.records(t)
+
+	if len(stub.deleted) != 0 {
+		t.Errorf("deleted %v on a cache that had not caught up; the ServiceAccount is there and "+
+			"still asking", stub.deleted)
+	}
+	held := h.issuedOf(t, account)
+	if held == nil {
+		t.Fatal("the record was dropped on a stale read")
+	}
+	// Marked for deletion is already the whole of it: the finalizer is what runs
+	// next, and there is no way back from a deletionTimestamp.
+	if !held.DeletionTimestamp.IsZero() {
+		t.Error("the record was marked for deletion on a stale read; the finalizer deletes the " +
+			"service principal from here and nothing can call that back")
+	}
+}
+
+// TestARecordIsHeldRatherThanActedOnInTheWrongAccount covers switching the
+// DatabricksAccount and switching it back.
+//
+// An id means nothing in another account: deleting it there removes something
+// this operator never made, or answers 404 and reads as already gone. So a
+// record whose account is not the one being acted in waits, and says so. It
+// costs nothing to wait -- the record is in the operator's own namespace, so
+// nothing anybody else owns is held up by it.
+func TestARecordIsHeldRatherThanActedOnInTheWrongAccount(t *testing.T) {
+	t.Parallel()
+	account := asking(testNamespace, testName)
+	issued := recordFor(account)
+	issued.Status.ServicePrincipalID = "7788"
+	issued.Status.AccountID = "the-account-it-was-made-in"
+
+	// Already on its way out, and stuck: the delete has not landed yet. That is
+	// what makes the account able to change underneath a revoke, which is the
+	// case this is about.
+	stub := &stubClients{
+		accountID: "the-account-it-was-made-in",
+		deleteErr: errors.New("the service is temporarily unavailable"),
+	}
+	h := newHarness(t, stub, mintingNamespace(testNamespace), account, issued)
+	withdraw(t, h.Client)
+	h.settle(t)
+
+	if h.issuedOf(t, account).DeletionTimestamp.IsZero() {
+		t.Fatal("the record is not on its way out; this test is about one that is")
+	}
+
+	// And now the operator is pointed somewhere else.
+	stub.accountID = "somewhere-else"
+	stub.deleteErr = nil
+	h.settle(t)
+
+	held := h.issuedOf(t, account)
+	if held == nil {
+		t.Fatal("the record went while its service principal is alive in another account")
+	}
+	if len(stub.deleted) != 0 {
+		t.Errorf("deleted %v while acting in another account; that id names something this "+
+			"operator never made, or nothing at all", stub.deleted)
+	}
+	ready := meta.FindStatusCondition(held.Status.Conditions, conditionReady)
+	if ready == nil || ready.Reason != reasonAccountMismatch {
+		t.Fatalf("Ready is %v, want it to name the account to point back at", ready)
+	}
+
+	// It resumes when the operator comes back, without anybody having to
+	// remember that it was waiting.
+	stub.accountID = "the-account-it-was-made-in"
+	h.settle(t)
+
+	if len(stub.deleted) != 1 || stub.deleted[0] != "7788" {
+		t.Errorf("deleted %v after the operator came back to the account it was made in, "+
+			"want the identity it was holding", stub.deleted)
+	}
+	if h.issuedOf(t, account) != nil {
+		t.Error("the record is still there after what it held was deleted")
+	}
+}
+
+// deleteEverythingIn removes what a namespace teardown removes, which is
+// everything namespaced in it.
+func deleteEverythingIn(t *testing.T, c client.Client, namespace string) {
+	t.Helper()
+	ctx := context.Background()
+
+	var accounts corev1.ServiceAccountList
+	if err := c.List(ctx, &accounts, client.InNamespace(namespace)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range accounts.Items {
+		if err := client.IgnoreNotFound(c.Delete(ctx, &accounts.Items[i])); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var principals dbxv1alpha1.DatabricksServicePrincipalList
+	if err := c.List(ctx, &principals, client.InNamespace(namespace)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range principals.Items {
+		if err := client.IgnoreNotFound(c.Delete(ctx, &principals.Items[i])); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var namespaceObject corev1.Namespace
+	if err := c.Get(ctx, types.NamespacedName{Name: namespace}, &namespaceObject); err == nil {
+		namespaceObject.DeletionTimestamp = &metav1.Time{Time: metav1.Now().Time}
+		if err := client.IgnoreNotFound(c.Delete(ctx, &namespaceObject)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestARecordWithNoFinalizerGetsOneBeforeAnythingIsCreated covers an orphan
+// reachable by an object missing one string.
+//
+// The finalizer is written when the record is made, and nothing put it back. A
+// record without one converges like any other -- it creates a real service
+// principal and records the id -- and is then let go without deleting anything,
+// which is the exact outcome this object exists to prevent. Whatever manages the
+// operator's namespace from a manifest writes records without finalizers.
+func TestARecordWithNoFinalizerGetsOneBeforeAnythingIsCreated(t *testing.T) {
+	t.Parallel()
+	account := asking(testNamespace, testName)
+	bare := recordFor(account)
+	bare.Finalizers = nil
+
+	stub := &stubClients{}
+	h := newHarness(t, stub, mintingNamespace(testNamespace), account, bare)
+	h.records(t)
+
+	issued := h.issuedOf(t, account)
+	if issued == nil {
+		t.Fatal("the record is gone")
+	}
+	if !slices.Contains(issued.Finalizers, dbxv1alpha1.ServicePrincipalFinalizer) {
+		t.Fatalf("finalizers are %v; whatever this record makes in Databricks, nothing will "+
+			"delete it", issued.Finalizers)
+	}
+	if len(stub.created) != 0 {
+		t.Errorf("created %v on the same pass; the finalizer has to be there before there is "+
+			"anything for it to hold", stub.created)
+	}
+
+	// And the next pass builds, so this costs a pass and not the identity.
+	h.records(t)
+	if len(stub.created) != 1 {
+		t.Errorf("created %v on the pass after; adding the finalizer stopped it building at all",
+			stub.created)
+	}
+}
+
+// TestRemovingTheFinalizerByHandIsNotArguedWith covers the documented way out.
+//
+// A record can be held by something that will not resolve -- a Databricks that
+// stays unreachable, an account it was not made in -- and the answer is a person
+// who can see what is left behind removing the finalizer. Putting it back every
+// pass would be the operator arguing with them on a timer, and the object would
+// never go.
+func TestRemovingTheFinalizerByHandIsNotArguedWith(t *testing.T) {
+	t.Parallel()
+	account := asking(testNamespace, testName)
+	held := recordFor(account)
+	held.Status.ServicePrincipalID = "7788"
+	held.Status.AccountID = testAccountID
+
+	// A second finalizer, so the record survives ours being removed. Without one
+	// the object goes the instant the last finalizer does, and the operator
+	// never gets a pass in which it could put ours back -- which is the whole of
+	// what this is about. Something else holding an object of ours is ordinary:
+	// whatever manages the operator's namespace often adds its own.
+	held.Finalizers = append(held.Finalizers, "example.com/held-by-something-else")
+
+	stub := &stubClients{deleteErr: errors.New("the service is temporarily unavailable")}
+	h := newHarness(t, stub, mintingNamespace(testNamespace), account, held)
+
+	withdraw(t, h.Client)
+	h.settle(t)
+
+	stuck := h.issuedOf(t, account)
+	if stuck == nil || stuck.DeletionTimestamp.IsZero() {
+		t.Fatal("the record is not being held on its way out; this test is about one that is")
+	}
+
+	// The person who can see what is left behind decides.
+	controllerutil.RemoveFinalizer(stuck, dbxv1alpha1.ServicePrincipalFinalizer)
+	if err := h.Client.Update(context.Background(), stuck); err != nil {
+		t.Fatal(err)
+	}
+	h.settle(t)
+
+	got := h.issuedOf(t, account)
+	if got == nil {
+		t.Fatal("the record went; something else is still holding it")
+	}
+	if slices.Contains(got.Finalizers, dbxv1alpha1.ServicePrincipalFinalizer) {
+		t.Errorf("finalizers are %v; the operator put back what somebody removed, so the way "+
+			"out documented for a record that will not resolve does not work", got.Finalizers)
+	}
+	if len(stub.deleted) != 0 {
+		t.Errorf("deleted %v after being let go by hand; letting go is the person saying they "+
+			"will deal with what is left", stub.deleted)
+	}
+}
+
+// TestAnIdRecordedWithNoAccountIsNotConcludedFrom covers the inference that is
+// only available when both are known.
+//
+// A 404 from Databricks means "gone" or "not in this account", and the code
+// treats it as the first: it records the removal and never rebuilds. That is
+// unrecoverable. With no account recorded there is nothing to tell the two
+// apart, and the comment saying an empty value is not evidence of anything sat
+// above code that proceeded as though it were evidence of sameness.
+func TestAnIdRecordedWithNoAccountIsNotConcludedFrom(t *testing.T) {
+	t.Parallel()
+	account := asking(testNamespace, testName)
+	carried := recordFor(account)
+	carried.Status.ServicePrincipalID = "7788"
+	carried.Status.ClientID = "app-uuid"
+	// No account: a record written before this was kept, or edited by hand.
+
+	stub := &stubClients{gone: "7788"}
+	h := newHarness(t, stub, mintingNamespace(testNamespace), account, carried)
+	h.settle(t)
+
+	issued := h.issuedOf(t, account)
+	if issued == nil {
+		t.Fatal("the record is gone")
+	}
+	if issued.Status.RemovedServicePrincipalID != "" {
+		t.Errorf("recorded %s as deleted in Databricks on the strength of a 404 that could as "+
+			"readily have meant 'not in this account'", issued.Status.RemovedServicePrincipalID)
+	}
+	if issued.Status.ServicePrincipalID != "7788" {
+		t.Errorf("servicePrincipalId is %q, want it untouched", issued.Status.ServicePrincipalID)
+	}
+	ready := meta.FindStatusCondition(issued.Status.Conditions, conditionReady)
+	if ready == nil || ready.Reason != reasonAccountUnknown {
+		t.Fatalf("Ready is %v, want it to say the account is unknown", ready)
+	}
+	if !strings.Contains(ready.Message, "accountId") {
+		t.Errorf("message is %q; it has to say what would unstick it", ready.Message)
+	}
+}
+
+// TestNotHavingLookedIsSaidAsUnknown covers the difference between "this is
+// wrong" and "nothing has been checked", which this project has a rule about and
+// broke in one of the two places it applies.
+//
+// reasonNotConfigured's own doc says Unknown and pointedly not False: nothing
+// has been asked of Databricks, so False reports a declaration as wrong on the
+// strength of never having looked. destroy said Unknown and converge said False
+// for the same cause -- the operator being unable to read its own token -- so
+// the same condition meant two things depending on which way the object was
+// going.
+func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
+	t.Parallel()
+	for _, going := range []struct {
+		name string
+		run  func(t *testing.T, h *harness, account *corev1.ServiceAccount)
+	}{
+		{"converging", func(*testing.T, *harness, *corev1.ServiceAccount) {}},
+		{"on its way out", func(t *testing.T, h *harness, _ *corev1.ServiceAccount) {
+			withdraw(t, h.Client)
+		}},
+	} {
+		t.Run(going.name, func(t *testing.T) {
+			account := asking(testNamespace, testName)
+			existing := recordFor(account)
+			// No id recorded, which is what makes both directions need the
+			// token: converging reads it to write a policy, and destroying
+			// reads it to find what this record may have made and never named.
+			existing.Status.AccountID = testAccountID
+
+			stub := &stubClients{}
+			h := newHarness(t, stub, mintingNamespace(testNamespace), account, existing)
+			h.Issued.TokenPath = filepath.Join(t.TempDir(), "not-there")
+			going.run(t, h, account)
+			h.settle(t)
+
+			issued := h.issuedOf(t, account)
+			if issued == nil {
+				t.Fatal("the record is gone")
+			}
+			ready := meta.FindStatusCondition(issued.Status.Conditions, conditionReady)
+			if ready == nil || ready.Reason != reasonNotConfigured {
+				t.Fatalf("Ready is %v, want it to say the operator cannot read its own token", ready)
+			}
+			if ready.Status != metav1.ConditionUnknown {
+				t.Errorf("Ready is %s/%s; nothing has been asked of Databricks, and False says "+
+					"this identity is wrong on the strength of never having looked",
+					ready.Status, ready.Reason)
+			}
+		})
+	}
+}
