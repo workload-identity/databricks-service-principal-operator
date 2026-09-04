@@ -1008,10 +1008,11 @@ func stopAskingForIdentity(team, serviceAccount, identity string) {
 }
 
 // profilesOn lists the identities the DatabricksServiceAccount carries, by the
-// profile name each is keyed under. That name is the asker's own, and is what a
-// workload later passes to the SDK, so it is the only field that says an entry
-// answers the identity it was asked for rather than merely that some entry is
-// there.
+// profile name each is keyed under.
+//
+// Not "as the asker wrote them": a named identity is keyed by the name in its
+// key, but the unnamed one is keyed by the operator's reference, which nobody
+// wrote anywhere.
 func profilesOn(team, serviceAccount string) []string {
 	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", serviceAccount, "-n", team,
 		"-o", "jsonpath={.status.identities[*].profile}")
