@@ -3,6 +3,7 @@ package databricks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,7 @@ import (
 // and a workload has to be told its client id rather than deriving it.
 func TestCreateServicePrincipalTakesBothIdsFromDatabricks(t *testing.T) {
 	t.Parallel()
-	server := &recording{t: t, answer: map[string]string{
+	server := &stubAccount{t: t, answer: map[string]string{
 		"POST " + servicePrincipalsAPI: `{"id":"71630475020656","applicationId":"11111111-1111-1111-1111-111111111111"}`,
 	}}
 	c := server.clients()
@@ -80,7 +81,7 @@ func TestSubjectIsTheClaimKubernetesPuts(t *testing.T) {
 // dead id while reporting that tokens can still be exchanged for it.
 func TestAServicePrincipalThatIsGoneIsAbsentRatherThanAFailure(t *testing.T) {
 	t.Parallel()
-	server := &recording{t: t, status: map[string]int{
+	server := &stubAccount{t: t, status: map[string]int{
 		"GET " + servicePrincipalsAPI + "/7788": 404,
 	}}
 	c := server.clients()
@@ -94,6 +95,50 @@ func TestAServicePrincipalThatIsGoneIsAbsentRatherThanAFailure(t *testing.T) {
 	}
 }
 
+// TestOnlyDatabricksHavingLookedMakesItAbsent covers the other half of the same
+// answer, and the more expensive half to get wrong.
+//
+// The caller reads false as "this service principal was deleted in Databricks",
+// latches it into the record, and never rebuilds the identity. A 500 or a
+// refusal reported as absence would therefore destroy a live identity
+// permanently, off one bad minute. Only Databricks having looked and found
+// nothing is an absence; everything else is an error the caller waits on.
+//
+// The two statuses are the two things that are not a 404 and mean different
+// things to a controller: Denied is the operator's own standing, which no retry
+// supplies, and Unavailable is Databricks not having answered. Neither is
+// retried by the SDK, so both come back in one call.
+func TestOnlyDatabricksHavingLookedMakesItAbsent(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		code int
+		want FailureKind
+	}{
+		{"refused on privilege", 403, Denied},
+		{"Databricks could not answer", 500, Unavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &stubAccount{t: t, status: map[string]int{
+				"GET " + servicePrincipalsAPI + "/7788": tc.code,
+			}}
+			c := server.clients()
+
+			there, err := c.ServicePrincipalExists(context.Background(), "7788")
+			if err == nil {
+				t.Fatalf("a %d came back as an answer; the caller latches absence and never "+
+					"rebuilds the identity", tc.code)
+			}
+			if got := KindOf(err); got != tc.want {
+				t.Errorf("a %d classifies as %s, want %s", tc.code, got, tc.want)
+			}
+			if there {
+				t.Error("reported as there as well")
+			}
+		})
+	}
+}
+
 // TestDeletingOneThatIsAlreadyGoneIsDone covers the finalizer being able to end.
 //
 // Revocation is deleting the service principal, and the finalizer is not dropped
@@ -102,13 +147,49 @@ func TestAServicePrincipalThatIsGoneIsAbsentRatherThanAFailure(t *testing.T) {
 // would sit there until a person took the finalizer off.
 func TestDeletingOneThatIsAlreadyGoneIsDone(t *testing.T) {
 	t.Parallel()
-	server := &recording{t: t, status: map[string]int{
+	server := &stubAccount{t: t, status: map[string]int{
 		"DELETE " + servicePrincipalsAPI + "/7788": 404,
 	}}
 	c := server.clients()
 
 	if err := c.DeleteServicePrincipal(context.Background(), "7788"); err != nil {
 		t.Errorf("error is %v; it is gone, which is what was asked for", err)
+	}
+}
+
+// TestOnlyDatabricksAgreeingItIsGoneEndsTheDelete covers what the finalizer
+// rests on.
+//
+// The caller reads a nil error as "the delete is done" and drops the finalizer.
+// A delete Databricks refused, reported as done, takes the record out of
+// Kubernetes while the service principal is still live in the account -- and
+// nothing left in the cluster then names it, so nobody is going to find it. Only
+// a 404 means it is gone.
+func TestOnlyDatabricksAgreeingItIsGoneEndsTheDelete(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		code int
+		want FailureKind
+	}{
+		{"refused on privilege", 403, Denied},
+		{"Databricks could not answer", 500, Unavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &stubAccount{t: t, status: map[string]int{
+				"DELETE " + servicePrincipalsAPI + "/7788": tc.code,
+			}}
+			c := server.clients()
+
+			err := c.DeleteServicePrincipal(context.Background(), "7788")
+			if err == nil {
+				t.Fatalf("a %d came back as a completed delete; the finalizer goes and the "+
+					"service principal stays alive with nothing naming it", tc.code)
+			}
+			if got := KindOf(err); got != tc.want {
+				t.Errorf("a %d classifies as %s, want %s", tc.code, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -127,7 +208,7 @@ const (
 // clean up, on every pass, forever.
 func TestAFederationPolicyIsNotAddedTwice(t *testing.T) {
 	t.Parallel()
-	server := &recording{t: t, answer: map[string]string{
+	server := &stubAccount{t: t, answer: map[string]string{
 		"GET " + federationPoliciesAPI("7788"): `{"policies":[{"oidc_policy":{
 			"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}}]}`,
 	}}
@@ -161,7 +242,7 @@ func TestAPolicyThatIsNotThisOneIsNotAMatch(t *testing.T) {
 		{"no oidc policy at all", `null`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := &recording{t: t, answer: map[string]string{
+			server := &stubAccount{t: t, answer: map[string]string{
 				"GET " + federationPoliciesAPI("7788"): `{"policies":[{"oidc_policy":` + tc.policy + `}]}`,
 			}}
 			c := server.clients()
@@ -184,7 +265,7 @@ func TestAPolicyThatIsNotThisOneIsNotAMatch(t *testing.T) {
 // a string here and a number on the wire.
 func TestAFederationPolicyRefusesAnIdThatIsNotANumber(t *testing.T) {
 	t.Parallel()
-	server := &recording{t: t}
+	server := &stubAccount{t: t}
 	c := server.clients()
 
 	var malformed *ErrMalformedCoordinate
@@ -324,7 +405,7 @@ func TestEveryIdentityOfOneClusterSharesItsFirstHalf(t *testing.T) {
 // and why it carries exactly those.
 func TestWhatIsSentIsTheNameAndTheMarker(t *testing.T) {
 	t.Parallel()
-	server := &recording{t: t, answer: map[string]string{
+	server := &stubAccount{t: t, answer: map[string]string{
 		"POST " + servicePrincipalsAPI: `{"id":"7788","applicationId":"app-uuid"}`,
 	}}
 	c := server.clients()
@@ -441,6 +522,91 @@ func TestTheConsoleCanTellTwoIdentitiesApart(t *testing.T) {
 	}
 	if only := DisplayNameFor("team-a", "etl", ""); !strings.HasSuffix(only, "etl") {
 		t.Errorf("%q gained something for an identity with no name", only)
+	}
+}
+
+// found is one service principal as Databricks returns it in a list.
+func found(id, marker string) string {
+	return fmt.Sprintf(`{"id":%q,"applicationId":"app-%s","displayName":%q,"externalId":%q}`,
+		id, id, DisplayNameFor("team-a", "etl", ""), marker)
+}
+
+// page is a SCIM page holding all of them. The paging fields are what end the
+// iteration: a page that leaves them out is followed by a request for the same
+// page, forever.
+func page(principals ...string) string {
+	return fmt.Sprintf(`{"totalResults":%d,"startIndex":1,"itemsPerPage":%d,"Resources":[%s]}`,
+		len(principals), len(principals), strings.Join(principals, ","))
+}
+
+// lookedFor is the issuing every lookup test below is about.
+var lookedFor = Issuing{
+	Issuer: testIssuer, Namespace: "team-a", Name: "etl",
+	ServiceAccountUID: "uid-etl", Operator: "ops-a/databricks-account",
+}
+
+// TestTheMarkerDecidesWhichOfTheNamesakesIsTaken covers the second half of the
+// lookup, which is the half that identifies anything.
+//
+// The filter is on the display name, which is not unique and is truncated
+// besides, so what comes back is this operator's service principal alongside
+// every namesake in the account -- another cluster's, another operator's,
+// another ServiceAccount's whose name collided. Taking one of those records it
+// as this workload's identity, which hands the workload everything granted to
+// somebody else and destroys it when the annotation is withdrawn.
+func TestTheMarkerDecidesWhichOfTheNamesakesIsTaken(t *testing.T) {
+	t.Parallel()
+	elsewhere := Issuing{Issuer: "https://oidc.example/another", Namespace: "team-a", Name: "etl",
+		ServiceAccountUID: "uid-etl", Operator: "ops-a/databricks-account"}
+	otherOperator := lookedFor
+	otherOperator.Operator = "ops-b/databricks-account"
+
+	server := &stubAccount{t: t, answer: map[string]string{
+		"GET " + servicePrincipalsAPI: page(
+			found("1100", MarkerFor(elsewhere)),
+			found("7788", MarkerFor(lookedFor)),
+			found("9900", MarkerFor(otherOperator)),
+		),
+	}}
+	c := server.clients()
+
+	id, clientID, ok, err := c.FindServicePrincipal(context.Background(), lookedFor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("found nothing; the one carrying this issuing's marker is in the list")
+	}
+	if id != "7788" || clientID != "app-7788" {
+		t.Errorf("adopted id=%q clientId=%q, want the one carrying %q", id, clientID, MarkerFor(lookedFor))
+	}
+}
+
+// TestTwoCarryingOneMarkerIsRefusedRatherThanGuessed covers the answer that is
+// neither of the two obvious ones.
+//
+// Nothing this operator does makes a second, so a pair is a duplicate somebody
+// else made or one left behind by a create whose record was lost twice over.
+// Taking either is a guess, and a guess that goes wrong hands this workload an
+// identity somebody else's grants hang off -- and deletes that one when the
+// object goes. There is nothing here that says which, so it says so instead.
+func TestTwoCarryingOneMarkerIsRefusedRatherThanGuessed(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, answer: map[string]string{
+		"GET " + servicePrincipalsAPI: page(
+			found("7788", MarkerFor(lookedFor)),
+			found("9900", MarkerFor(lookedFor)),
+		),
+	}}
+	c := server.clients()
+
+	id, clientID, ok, err := c.FindServicePrincipal(context.Background(), lookedFor)
+	if err == nil {
+		t.Fatalf("adopted id=%q of two carrying one marker; which of them belongs to %s cannot "+
+			"be told from here", id, lookedFor.Subject())
+	}
+	if ok || id != "" || clientID != "" {
+		t.Errorf("reported found=%v id=%q clientId=%q alongside the refusal", ok, id, clientID)
 	}
 }
 

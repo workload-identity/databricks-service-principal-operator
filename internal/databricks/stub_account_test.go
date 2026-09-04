@@ -18,14 +18,14 @@ type call struct {
 	body   string
 }
 
-// recording is a Databricks account that answers from a table and remembers
-// what it was asked.
+// stubAccount is a Databricks account that answers from a table and remembers
+// what it was asked. Its live counterpart is live_test.go.
 //
 // What reaches Databricks is what these tests are about, and it lives in the
 // request body: which field a value goes in, whether a call is made at all,
 // what a 404 means. A fake standing in for this package cannot cover any of
 // that -- it would assert that a call happened, not what was in it.
-type recording struct {
+type stubAccount struct {
 	t      *testing.T
 	answer map[string]string
 
@@ -33,12 +33,30 @@ type recording struct {
 	// It is a route rather than a flag because half of what these calls promise
 	// is what they do with a 404: a service principal that is already gone is
 	// deleted, and one that never existed is absent rather than unreachable.
+	//
+	// The body that goes with it is refusals[code]. The SDK classifies on the
+	// body's error_code first and falls back to the status only when that names
+	// nothing it knows, so one body for every code decides the answer for all of
+	// them -- and the calls whose whole promise is telling a 404 from everything
+	// else would be tested against a server that only ever says one thing.
 	status map[string]int
 
 	calls []call
 }
 
-func (r *recording) clients() *clients {
+// refusals is what Databricks answers each failing status with, so that a route
+// set to one classifies as that one.
+//
+// 429 and 503 are absent on purpose. The SDK retries both, so a route serving
+// one is asked until the retry budget runs out, and what fails then is a
+// timeout rather than the property under test.
+var refusals = map[int]string{
+	403: `{"error_code":"PERMISSION_DENIED","message":"the caller is not permitted to do this"}`,
+	404: `{"error_code":"RESOURCE_DOES_NOT_EXIST","message":"not there"}`,
+	500: `{"error_code":"INTERNAL_ERROR","message":"an invariant on our side was broken"}`,
+}
+
+func (r *stubAccount) clients() *clients {
 	r.t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		body, _ := io.ReadAll(req.Body)
@@ -64,8 +82,13 @@ func (r *recording) clients() *clients {
 			return
 		}
 		if code, failing := r.status[route]; failing {
+			body, known := refusals[code]
+			if !known {
+				r.t.Errorf("nothing says what Databricks answers %d with; a status served with "+
+					"another one's error_code classifies as the other one's failure", code)
+			}
 			w.WriteHeader(code)
-			_, _ = w.Write([]byte(`{"error_code":"NOT_FOUND","message":"not there"}`))
+			_, _ = w.Write([]byte(body))
 			return
 		}
 		answer, ok := r.answer[route]
@@ -84,6 +107,12 @@ func (r *recording) clients() *clients {
 	ac, err := databricks.NewAccountClient(&databricks.Config{
 		Host: server.URL, AccountID: testAccountID,
 		Token: "not-a-credential", Credentials: config.PatCredentials{},
+		// The SDK retries what it takes for transient against a five-minute
+		// budget by default. Nothing served here is transient -- a route
+		// answers the same however often it is asked -- so a test serving a
+		// retried status would spend the whole budget and then fail as a
+		// timeout, naming neither the call nor the status it was about.
+		RetryTimeoutSeconds: 1,
 	})
 	if err != nil {
 		r.t.Fatal(err)
@@ -104,7 +133,7 @@ func federationPoliciesAPI(servicePrincipalID string) string {
 }
 
 // made counts the calls to one path.
-func (r *recording) made(method, path string) int {
+func (r *stubAccount) made(method, path string) int {
 	n := 0
 	for _, c := range r.calls {
 		if c.method == method && c.path == path {
@@ -116,7 +145,7 @@ func (r *recording) made(method, path string) int {
 
 // wrote returns the body of the one write to path, and fails if there was not
 // exactly one.
-func (r *recording) wrote(path string) string {
+func (r *stubAccount) wrote(path string) string {
 	r.t.Helper()
 	var bodies []string
 	for _, c := range r.calls {

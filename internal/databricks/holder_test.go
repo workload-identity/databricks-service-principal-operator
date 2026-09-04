@@ -10,19 +10,25 @@ import (
 	"github.com/databricks/databricks-sdk-go"
 )
 
-// namingClients answers every call by recording which one it was.
+// namingClients answers every call by recording which one it was and what it
+// was given.
 //
-// The Holder is twenty-nine methods that each do the same two things: ask for
-// the clients, and pass the call on. That shape is where a copy-paste goes
-// unnoticed -- a delegate that reaches the neighbouring call still compiles,
-// still returns the right types, and is wrong in a way no signature catches.
-// LeaveAccountGroup calling JoinAccountGroup would put a workload back into the
-// group it was being taken out of, and report success.
+// Both are recorded because both can be wrong with nothing to say so. The Holder
+// is a method per call, each asking for the clients and passing the call on, and
+// EnsureFederationPolicy holds a service principal id and returns a plain error
+// -- which is exactly what DeleteServicePrincipal takes and returns, so a
+// delegate that reached the neighbour compiles, destroys the identity it was
+// asked to make exchangeable, and reports the pass as done.
+//
+// EnsureFederationPolicy also takes four strings in a row, so two of them handed
+// on transposed compiles as well, reaches the right call, and writes a policy
+// that trusts something nobody asked to trust.
 type namingClients struct {
 	called string
+	given  []any
 }
 
-func (n *namingClients) name(what string) { n.called = what }
+func (n *namingClients) name(what string, given ...any) { n.called, n.given = what, given }
 
 func (n *namingClients) Account() *databricks.AccountClient { n.name("Account"); return nil }
 
@@ -30,29 +36,31 @@ func (n *namingClients) Snapshot() Clients { n.name("Snapshot"); return n }
 
 func (n *namingClients) AccountID() string { n.name("AccountID"); return "" }
 
-func (n *namingClients) CreateServicePrincipal(context.Context, Issuing) (string, string, error) {
-	n.name("CreateServicePrincipal")
+func (n *namingClients) CreateServicePrincipal(_ context.Context, issuing Issuing) (
+	string, string, error) {
+	n.name("CreateServicePrincipal", issuing)
 	return "", "", nil
 }
 
-func (n *namingClients) FindServicePrincipal(context.Context, Issuing) (
+func (n *namingClients) FindServicePrincipal(_ context.Context, issuing Issuing) (
 	string, string, bool, error) {
-	n.name("FindServicePrincipal")
+	n.name("FindServicePrincipal", issuing)
 	return "", "", false, nil
 }
 
-func (n *namingClients) ServicePrincipalExists(context.Context, string) (bool, error) {
-	n.name("ServicePrincipalExists")
+func (n *namingClients) ServicePrincipalExists(_ context.Context, id string) (bool, error) {
+	n.name("ServicePrincipalExists", id)
 	return false, nil
 }
 
-func (n *namingClients) DeleteServicePrincipal(context.Context, string) error {
-	n.name("DeleteServicePrincipal")
+func (n *namingClients) DeleteServicePrincipal(_ context.Context, id string) error {
+	n.name("DeleteServicePrincipal", id)
 	return nil
 }
 
-func (n *namingClients) EnsureFederationPolicy(context.Context, string, string, string, string) error {
-	n.name("EnsureFederationPolicy")
+func (n *namingClients) EnsureFederationPolicy(
+	_ context.Context, servicePrincipalID, issuer, subject, audience string) error {
+	n.name("EnsureFederationPolicy", servicePrincipalID, issuer, subject, audience)
 	return nil
 }
 
@@ -67,32 +75,58 @@ var testIssuing = Issuing{
 	ServiceAccountUID: "6a5f0d1e-0b2c-4c3d-9e8f-1a2b3c4d5e6f",
 }
 
+// delegate is one call the Holder passes on: how to make it, and what has to
+// arrive on the other side unchanged and in the order it was given.
+type delegate struct {
+	invoke func(Clients) error
+	given  []any
+}
+
 // delegates is every call the Holder passes on, with the name it must reach.
 //
 // It is built by reflection over the Clients interface so that a method added
 // later and mis-delegated fails here rather than in production. A hand-written
 // table is complete only on the day it is written.
-func delegates(t *testing.T) map[string]func(Clients) error {
+//
+// Every argument is a value no other position could hold, so that a delegate
+// handing two of them on the other way round is a mismatch rather than two
+// strings that happen to look alike.
+func delegates(t *testing.T) map[string]delegate {
 	t.Helper()
 	ctx := context.Background()
-	table := map[string]func(Clients) error{
-		"CreateServicePrincipal": func(c Clients) error {
-			_, _, err := c.CreateServicePrincipal(ctx, testIssuing)
-			return err
+	table := map[string]delegate{
+		"CreateServicePrincipal": {
+			invoke: func(c Clients) error {
+				_, _, err := c.CreateServicePrincipal(ctx, testIssuing)
+				return err
+			},
+			given: []any{testIssuing},
 		},
-		"FindServicePrincipal": func(c Clients) error {
-			_, _, _, err := c.FindServicePrincipal(ctx, testIssuing)
-			return err
+		"FindServicePrincipal": {
+			invoke: func(c Clients) error {
+				_, _, _, err := c.FindServicePrincipal(ctx, testIssuing)
+				return err
+			},
+			given: []any{testIssuing},
 		},
-		"ServicePrincipalExists": func(c Clients) error {
-			_, err := c.ServicePrincipalExists(ctx, "7788")
-			return err
+		"ServicePrincipalExists": {
+			invoke: func(c Clients) error {
+				_, err := c.ServicePrincipalExists(ctx, "7788")
+				return err
+			},
+			given: []any{"7788"},
 		},
-		"DeleteServicePrincipal": func(c Clients) error {
-			return c.DeleteServicePrincipal(ctx, "7788")
+		"DeleteServicePrincipal": {
+			invoke: func(c Clients) error {
+				return c.DeleteServicePrincipal(ctx, "7788")
+			},
+			given: []any{"7788"},
 		},
-		"EnsureFederationPolicy": func(c Clients) error {
-			return c.EnsureFederationPolicy(ctx, "7788", "iss", "sub", "aud")
+		"EnsureFederationPolicy": {
+			invoke: func(c Clients) error {
+				return c.EnsureFederationPolicy(ctx, "7788", testIssuer, testSubject, testAudience)
+			},
+			given: []any{"7788", testIssuer, testSubject, testAudience},
 		},
 	}
 
@@ -116,25 +150,28 @@ func delegates(t *testing.T) map[string]func(Clients) error {
 	return table
 }
 
-// TestEveryHolderCallReachesItsNamesake covers the delegation itself.
+// TestEveryHolderCallReachesItsNamesakeWithWhatItWasGiven covers the delegation
+// itself, which is a call and a list of arguments and nothing else.
 //
-// The Holder is a method per call, each doing the same two things: ask for the
-// clients, and pass the call on. That shape is where a copy-paste goes
-// unnoticed -- a delegate reaching the neighbouring call still compiles, still
-// returns the right types, and is wrong in a way no signature catches.
-func TestEveryHolderCallReachesItsNamesake(t *testing.T) {
+// A delegate reaching the neighbouring call and one handing the arguments on in
+// another order both compile and both return the right types, so nothing but
+// this says either is wrong. What each of them costs is in namingClients.
+func TestEveryHolderCallReachesItsNamesakeWithWhatItWasGiven(t *testing.T) {
 	t.Parallel()
-	for want, invoke := range delegates(t) {
+	for want, call := range delegates(t) {
 		t.Run(want, func(t *testing.T) {
 			inner := &namingClients{}
 			holder := NewHolder("databricks", "account")
 			holder.Set(Config{AccountID: "an-account"}, inner)
 
-			if err := invoke(holder); err != nil {
+			if err := call.invoke(holder); err != nil {
 				t.Fatal(err)
 			}
 			if inner.called != want {
 				t.Errorf("reached %s, want %s", inner.called, want)
+			}
+			if !reflect.DeepEqual(inner.given, call.given) {
+				t.Errorf("%s was given %#v, want %#v", want, inner.given, call.given)
 			}
 		})
 	}
@@ -157,10 +194,10 @@ func TestNothingConfiguredIsSaidRatherThanCrashed(t *testing.T) {
 		t.Error("handed out an account client while holding nothing")
 	}
 
-	for name, invoke := range delegates(t) {
+	for name, call := range delegates(t) {
 		t.Run(name, func(t *testing.T) {
 			var unconfigured *ErrNotConfigured
-			if err := invoke(holder); !errors.As(err, &unconfigured) {
+			if err := call.invoke(holder); !errors.As(err, &unconfigured) {
 				t.Fatalf("error is %v, want ErrNotConfigured", err)
 			}
 			if unconfigured.Error() == "" {
