@@ -324,8 +324,8 @@ type tokenRequest struct {
 // against it.
 var _ = Describe("Identities", Ordered, func() {
 	const (
-		team    = "cluster-team"
-		account = "etl"
+		team           = "cluster-team"
+		serviceAccount = "etl"
 	)
 
 	// Nothing here mints. A kind cluster publishes an OIDC issuer Databricks
@@ -352,7 +352,7 @@ var _ = Describe("Identities", Ordered, func() {
 	})
 
 	It("mints nothing in a namespace nobody enabled", func() {
-		applyTeam(team, account, unnamed)
+		applyTeam(team, serviceAccount, unnamed)
 
 		Consistently(func() string {
 			return identityNames(team)
@@ -385,7 +385,7 @@ var _ = Describe("Identities", Ordered, func() {
 
 		Eventually(func() string {
 			return identityNames(team)
-		}, time.Minute, time.Second).Should(ContainSubstring(account),
+		}, time.Minute, time.Second).Should(ContainSubstring(serviceAccount),
 			"widening this operator's reach woke nothing; every ServiceAccount in the "+
 				"namespace stays unserved until something unrelated happens to touch one")
 	})
@@ -398,14 +398,14 @@ var _ = Describe("Identities", Ordered, func() {
 		// asserts is that the record exists anyway.
 		Eventually(func() string {
 			return recordNames()
-		}, time.Minute, time.Second).Should(ContainSubstring(team+"."+account),
+		}, time.Minute, time.Second).Should(ContainSubstring(team+"."+serviceAccount),
 			"nothing recorded what was about to be issued; the record is what outlives "+
 				"the namespace that asked")
 	})
 
 	It("says which object to create rather than failing silently", func() {
 		Eventually(func() string {
-			cmd := exec.Command("kubectl", "get", "databricksserviceaccount", account, "-n", team,
+			cmd := exec.Command("kubectl", "get", "databricksserviceaccount", serviceAccount, "-n", team,
 				"-o", "jsonpath={.status.identities[0].conditions[?(@.type=='Ready')].message}")
 			out, err := utils.Run(cmd)
 			if err != nil {
@@ -419,7 +419,7 @@ var _ = Describe("Identities", Ordered, func() {
 	It("takes the identity with the ServiceAccount", func() {
 		// Ownership rather than a check, which is what makes this true without
 		// anything having to notice. Only a real control plane collects.
-		cmd := exec.Command("kubectl", "delete", "serviceaccount", account, "-n", team)
+		cmd := exec.Command("kubectl", "delete", "serviceaccount", serviceAccount, "-n", team)
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -437,7 +437,7 @@ var _ = Describe("Identities", Ordered, func() {
 		// if it stopped.
 		Eventually(func() []string {
 			return recordsStillWanted()
-		}, time.Minute, time.Second).ShouldNot(ContainElement(ContainSubstring(team+"."+account)),
+		}, time.Minute, time.Second).ShouldNot(ContainElement(ContainSubstring(team+"."+serviceAccount)),
 			"the record outlived the ServiceAccount it was issued to; nothing else collects it")
 	})
 
@@ -451,10 +451,10 @@ var _ = Describe("Identities", Ordered, func() {
 		// this may produce.
 		Consistently(func() []string {
 			return recordsBeingDeleted()
-		}, 20*time.Second, 2*time.Second).Should(ContainElement(ContainSubstring(team+"."+account)),
+		}, 20*time.Second, 2*time.Second).Should(ContainElement(ContainSubstring(team+"."+serviceAccount)),
 			"a record was let go without its service principal having been deleted")
 
-		Expect(heldBecause(team+"."+account)).NotTo(BeEmpty(),
+		Expect(heldBecause(team+"."+serviceAccount)).NotTo(BeEmpty(),
 			"the record is held and nothing on it says why, so the only way to learn what is "+
 				"left behind is to read the operator's logs")
 	})
@@ -462,14 +462,14 @@ var _ = Describe("Identities", Ordered, func() {
 
 var _ = Describe("Several identities", Ordered, func() {
 	const (
-		team    = "cluster-several"
-		account = "etl"
+		team           = "cluster-several"
+		serviceAccount = "etl"
 	)
 
 	BeforeAll(func() {
 		removeTeam(team)
 		applyAccount()
-		applyTeam(team, account, "reader", "writer")
+		applyTeam(team, serviceAccount, "reader", "writer")
 		cmd := exec.Command("kubectl", "label", "namespace", team,
 			"databricks.workload-identity.io/inject=enabled",
 			"databricks.workload-identity.io/mint=enabled")
@@ -486,12 +486,12 @@ var _ = Describe("Several identities", Ordered, func() {
 		Eventually(func() string {
 			return recordNames()
 		}, time.Minute, time.Second).Should(SatisfyAll(
-			ContainSubstring(team+"."+account+".reader"),
-			ContainSubstring(team+"."+account+".writer"),
+			ContainSubstring(team+"."+serviceAccount+".reader"),
+			ContainSubstring(team+"."+serviceAccount+".writer"),
 		), "one ServiceAccount asked for two identities and did not get two records")
 
 		Eventually(func() []string {
-			return requestsOn(team, account)
+			return profilesOn(team, serviceAccount)
 		}, time.Minute, time.Second).Should(ConsistOf("reader", "writer"),
 			"the DatabricksServiceAccount does not carry both identities under the names they were asked by, "+
 				"which are the names a workload will pass to the SDK")
@@ -504,17 +504,17 @@ var _ = Describe("Several identities", Ordered, func() {
 		// its own entries either destroys a neighbour's identity or stops
 		// maintaining one of its own while it still reports Ready.
 		Eventually(func() []string {
-			return operatorsOn(team, account)
+			return operatorsOn(team, serviceAccount)
 		}, time.Minute, time.Second).Should(ConsistOf(operatorRef, operatorRef),
 			"an entry does not name the operator that issued it")
 	})
 
 	It("takes only the identity whose key was deleted", func() {
-		withdraw(team, account, "reader")
+		stopAskingForIdentity(team, serviceAccount, "reader")
 
 		Eventually(func() []string {
 			return recordsStillWanted()
-		}, time.Minute, time.Second).ShouldNot(ContainElement(ContainSubstring(team+"."+account+".reader")),
+		}, time.Minute, time.Second).ShouldNot(ContainElement(ContainSubstring(team+"."+serviceAccount+".reader")),
 			"the identity whose key was deleted is still wanted")
 
 		// The half that says the first half meant anything. Both records name
@@ -522,7 +522,7 @@ var _ = Describe("Several identities", Ordered, func() {
 		// name the asker gave -- so a pass that reads one key's deletion as the
 		// whole request having changed destroys both here and looks correct
 		// above.
-		Expect(recordsStillWanted()).To(ContainElement(ContainSubstring(team+"."+account+".writer")),
+		Expect(recordsStillWanted()).To(ContainElement(ContainSubstring(team+"."+serviceAccount+".writer")),
 			"deleting one identity's key took the one still asked for")
 	})
 
@@ -532,7 +532,7 @@ var _ = Describe("Several identities", Ordered, func() {
 		// client cannot show: the merge writes null and the write is refused, leaving
 		// a DatabricksServiceAccount that reports Ready for identities that no longer
 		// exist.
-		withdraw(team, account, "writer")
+		stopAskingForIdentity(team, serviceAccount, "writer")
 
 		Eventually(func() string {
 			return identityNames(team)
@@ -540,7 +540,7 @@ var _ = Describe("Several identities", Ordered, func() {
 			"the DatabricksServiceAccount outlived the request that made it")
 		Eventually(func() []string {
 			return recordsStillWanted()
-		}, time.Minute, time.Second).ShouldNot(ContainElement(ContainSubstring(team+"."+account+".writer")),
+		}, time.Minute, time.Second).ShouldNot(ContainElement(ContainSubstring(team+"."+serviceAccount+".writer")),
 			"the record outlived the request that made it")
 	})
 })
@@ -559,8 +559,8 @@ var _ = Describe("Several identities", Ordered, func() {
 // written before that call too.
 var _ = Describe("A key this operator will not act on", Ordered, func() {
 	const (
-		team    = "cluster-refused"
-		account = "etl"
+		team           = "cluster-refused"
+		serviceAccount = "etl"
 
 		// The identity asked for correctly, which every spec below leaves
 		// standing. Without one there is nothing a refusal could destroy, and
@@ -568,12 +568,12 @@ var _ = Describe("A key this operator will not act on", Ordered, func() {
 		// nothing at all.
 		kept = "reader"
 	)
-	held := team + "." + account + "." + kept
+	held := team + "." + serviceAccount + "." + kept
 
 	BeforeAll(func() {
 		removeTeam(team)
 		applyAccount()
-		applyTeam(team, account, kept)
+		applyTeam(team, serviceAccount, kept)
 		cmd := exec.Command("kubectl", "label", "namespace", team,
 			"databricks.workload-identity.io/inject=enabled",
 			"databricks.workload-identity.io/mint=enabled")
@@ -597,10 +597,10 @@ var _ = Describe("A key this operator will not act on", Ordered, func() {
 		// change was made for. As one entry of a comma-separated value it was
 		// indistinguishable from an entry somebody had removed, and it destroyed
 		// the service principal it named.
-		Expect(ask(team, account, kept, namespace)).To(Succeed())
+		Expect(askForIdentity(team, serviceAccount, kept, namespace)).To(Succeed())
 		// Put back inside the spec that broke it, so that what the specs below
 		// find is a ServiceAccount asking correctly for one identity.
-		DeferCleanup(func() { Expect(ask(team, account, kept, operatorRef)).To(Succeed()) })
+		DeferCleanup(func() { Expect(askForIdentity(team, serviceAccount, kept, operatorRef)).To(Succeed()) })
 
 		// Polled rather than read once. The edit wakes a reconcile at once, so a
 		// single read straight after it passes before the operator has looked at
@@ -623,11 +623,11 @@ var _ = Describe("A key this operator will not act on", Ordered, func() {
 		refused := []string{"Reader", "read_er", "read.er"}
 		for _, name := range refused {
 			key := dbxv1alpha1.ServicePrincipalAnnotationFor(name)
-			Expect(ask(team, account, name, operatorRef)).To(Succeed(),
+			Expect(askForIdentity(team, serviceAccount, name, operatorRef)).To(Succeed(),
 				"the cluster would not carry %s, so this spec is not about what it says it is: "+
 					"what it is for is a name the API server accepts and this operator must not",
 				key)
-			Expect(annotationsOn(team, account)).To(HaveKey(key),
+			Expect(annotationsOn(team, serviceAccount)).To(HaveKey(key),
 				"%s is not on the ServiceAccount, so nothing has been asked of this operator yet",
 				key)
 		}
@@ -637,7 +637,7 @@ var _ = Describe("A key this operator will not act on", Ordered, func() {
 			g.Expect(wanted).To(ContainElement(ContainSubstring(held)),
 				"a name this operator refused took the identity that was asked for correctly")
 			for _, name := range refused {
-				g.Expect(wanted).NotTo(ContainElement(ContainSubstring(team+"."+account+"."+name)),
+				g.Expect(wanted).NotTo(ContainElement(ContainSubstring(team+"."+serviceAccount+"."+name)),
 					"an identity was issued under the name %q, which no Kubernetes object can "+
 						"be called and no record could ever be created for", name)
 			}
@@ -651,19 +651,19 @@ var _ = Describe("A key this operator will not act on", Ordered, func() {
 		// cluster refuses the key first -- and both halves of that are asked of
 		// a real API server here rather than counted a second time in a comment.
 		const longest = 45
-		Expect(ask(team, account, strings.Repeat("a", longest+1), operatorRef)).NotTo(Succeed(),
+		Expect(askForIdentity(team, serviceAccount, strings.Repeat("a", longest+1), operatorRef)).NotTo(Succeed(),
 			"the cluster carried an identity name of %d characters. The limit this operator "+
 				"enforces was measured against what an annotation key holds, and a key that "+
 				"holds more makes it an arbitrary limit rather than a protective one",
 			longest+1)
 
 		name := strings.Repeat("a", longest)
-		Expect(ask(team, account, name, operatorRef)).To(Succeed(),
+		Expect(askForIdentity(team, serviceAccount, name, operatorRef)).To(Succeed(),
 			"the cluster would not carry a %d-character identity name, so this operator's limit "+
 				"is one character too generous and every name at it is unusable", longest)
 		Eventually(func() string {
 			return recordNames()
-		}, time.Minute, time.Second).Should(ContainSubstring(team+"."+account+"."+name),
+		}, time.Minute, time.Second).Should(ContainSubstring(team+"."+serviceAccount+"."+name),
 			"the longest name a key can hold was accepted and nothing was recorded for it. The "+
 				"record's name is derived from this one, and a derived name that is not a legal "+
 				"object name fails inside a reconcile where nobody who asked will see it")
@@ -695,10 +695,10 @@ var _ = Describe("A key this operator will not act on", Ordered, func() {
 // told to serve it.
 var _ = Describe("What a pod is equipped with", Ordered, func() {
 	const (
-		team    = "cluster-pod"
-		account = "etl"
-		runner  = "runner"
-		reader  = "reader"
+		team           = "cluster-pod"
+		serviceAccount = "etl"
+		runner         = "runner"
+		reader         = "reader"
 
 		// sole is the unnamed identity's profile name, which is this operator's
 		// own reference because that identity has no name of its own.
@@ -707,7 +707,7 @@ var _ = Describe("What a pod is equipped with", Ordered, func() {
 
 	BeforeAll(func() {
 		removeTeam(team)
-		equipTeam(team, account, sole, reader)
+		equipTeam(team, serviceAccount, sole, reader)
 		awaitOperator()
 	})
 	AfterAll(func() {
@@ -729,7 +729,7 @@ var _ = Describe("What a pod is equipped with", Ordered, func() {
 		// found the service -- so asking once would make this spec pass or fail
 		// on the order the suite happened to shuffle into.
 		Eventually(func() []string {
-			runPod(team, runner, account)
+			runPod(team, runner, serviceAccount)
 			return volumeNames(team, runner)
 		}, 2*time.Minute, 5*time.Second).Should(ContainElement(dbxwebhook.TokenVolume),
 			"the pod was admitted unchanged, so nothing consulted the webhook: it is not "+
@@ -982,34 +982,37 @@ metadata:
 	Expect(err).NotTo(HaveOccurred(), "Failed to create the team namespace and ServiceAccount")
 }
 
-// ask writes one identity's key on a ServiceAccount that is already there, and
-// reports what the cluster said rather than insisting it succeeded: some of the
-// keys written here are ones the API server itself will not take, and that
-// refusal is what the spec writing them is about.
-func ask(team, account, identity, operator string) error {
-	cmd := exec.Command("kubectl", "-n", team, "annotate", "serviceaccount", account,
+// askForIdentity writes one identity's key on a ServiceAccount that is already
+// there, and reports what the cluster said rather than insisting it succeeded:
+// some of the keys written here are ones the API server itself will not take,
+// and that refusal is what the spec writing them is about.
+func askForIdentity(team, serviceAccount, identity, operator string) error {
+	cmd := exec.Command("kubectl", "-n", team, "annotate", "serviceaccount", serviceAccount,
 		"--overwrite", dbxv1alpha1.ServicePrincipalAnnotationFor(identity)+"="+operator)
 	_, err := utils.Run(cmd)
 	return err
 }
 
-// withdraw takes one identity's key away, which is the only edit that destroys
-// an identity.
+// stopAskingForIdentity takes one identity's key away, which is the only edit
+// that destroys an identity.
 //
 // A key that is gone says the identity is no longer wanted; a key that is there
 // and cannot be read says nothing at all. Written as two different edits because
 // they are two different requests -- which is the whole of what these suites were
 // rewritten for.
-func withdraw(team, account, identity string) {
-	cmd := exec.Command("kubectl", "-n", team, "annotate", "serviceaccount", account,
+func stopAskingForIdentity(team, serviceAccount, identity string) {
+	cmd := exec.Command("kubectl", "-n", team, "annotate", "serviceaccount", serviceAccount,
 		dbxv1alpha1.ServicePrincipalAnnotationFor(identity)+"-")
 	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to withdraw identity %q", identity)
+	Expect(err).NotTo(HaveOccurred(), "Failed to stop asking for identity %q", identity)
 }
 
-// requestsOn lists the identities the DatabricksServiceAccount carries, by the
-// profile name each is keyed under.
-func requestsOn(team, serviceAccount string) []string {
+// profilesOn lists the identities the DatabricksServiceAccount carries, by the
+// profile name each is keyed under. That name is the asker's own, and is what a
+// workload later passes to the SDK, so it is the only field that says an entry
+// answers the identity it was asked for rather than merely that some entry is
+// there.
+func profilesOn(team, serviceAccount string) []string {
 	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", serviceAccount, "-n", team,
 		"-o", "jsonpath={.status.identities[*].profile}")
 	out, err := utils.Run(cmd)
