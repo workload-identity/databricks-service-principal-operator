@@ -48,3 +48,9 @@ review.md
 
 # The state machine walk. Same reason as the others.
 paths.md
+
+# This machine's own session state, and under it whole checkouts of this
+# repository: .claude/worktrees/ holds one per agent. Untracked rather than
+# ignored, a single `git add -A` commits every worktree into the tree it was
+# made from.
+.claude/
