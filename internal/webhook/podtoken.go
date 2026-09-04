@@ -232,7 +232,7 @@ func inject(pod *corev1.Pod, identities []dbxv1alpha1.ProjectedIdentity) {
 	// namespace to hold it: a ConfigMap would be an object this operator writes
 	// into somebody else's namespace, outliving the pod it was for and needing
 	// its own collection.
-	pod.Annotations = withAnnotation(pod.Annotations, ConfigAnnotation, Configuration(identities))
+	pod.Annotations = withAnnotation(pod.Annotations, ConfigAnnotation, Profiles(identities))
 	sources = append(sources, corev1.VolumeProjection{
 		DownwardAPI: &corev1.DownwardAPIProjection{
 			Items: []corev1.DownwardAPIVolumeFile{{

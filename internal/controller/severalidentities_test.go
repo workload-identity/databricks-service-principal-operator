@@ -40,7 +40,7 @@ func askingFor(namespace, name string, identities ...string) *corev1.ServiceAcco
 	serviceAccount.Annotations = make(map[string]string, len(identities))
 	for _, identity := range identities {
 		serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor(identity)] =
-			testOperator.String()
+			testOperatorRef.String()
 	}
 	return serviceAccount
 }
@@ -73,12 +73,12 @@ func recordsOf(t *testing.T, c client.Client, namespace, name string) []dbxv1alp
 func TestOneServiceAccountGetsTwoIdentitiesFromOneOperator(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), askingFor(testNamespace, testName, "reader", "writer"))
 
-	h.settle(t)
+	c.settle(t)
 
-	records := recordsOf(t, h.Client, testNamespace, testName)
+	records := recordsOf(t, c.Client, testNamespace, testName)
 	if len(records) != 2 {
 		t.Fatalf("wrote %d records, want one per identity: %+v", len(records), records)
 	}
@@ -96,7 +96,7 @@ func TestOneServiceAccountGetsTwoIdentitiesFromOneOperator(t *testing.T) {
 			"twice", records[0].Status.ServicePrincipalID)
 	}
 
-	databricksServiceAccount := principalOf(t, h.Client)
+	databricksServiceAccount := principalOf(t, c.Client)
 	if databricksServiceAccount == nil {
 		t.Fatal("nothing was projected")
 	}
@@ -114,7 +114,7 @@ func TestOneServiceAccountGetsTwoIdentitiesFromOneOperator(t *testing.T) {
 		if entry.ClientID == "" {
 			t.Errorf("%q carries no client id, so nothing can exchange for it", want)
 		}
-		if entry.Operator != testOperator.String() {
+		if entry.Operator != testOperatorRef.String() {
 			t.Errorf("%q says it was issued by %q; every operator reads ownership off that "+
 				"field, so an entry naming nobody is one every one of them leaves behind",
 				want, entry.Operator)
@@ -131,11 +131,11 @@ func TestOneServiceAccountGetsTwoIdentitiesFromOneOperator(t *testing.T) {
 func TestDroppingOneIdentityKeepsTheOther(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), askingFor(testNamespace, testName, "reader", "writer"))
-	h.settle(t)
+	c.settle(t)
 
-	before := recordsOf(t, h.Client, testNamespace, testName)
+	before := recordsOf(t, c.Client, testNamespace, testName)
 	if len(before) != 2 {
 		t.Fatalf("this test is about dropping one of two; there are %d", len(before))
 	}
@@ -148,18 +148,18 @@ func TestDroppingOneIdentityKeepsTheOther(t *testing.T) {
 
 	// The annotations are the request and nothing else is: one key leaves them.
 	serviceAccount := &corev1.ServiceAccount{}
-	if err := h.Client.Get(context.Background(),
+	if err := c.Client.Get(context.Background(),
 		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 	delete(serviceAccount.Annotations, dbxv1alpha1.ServicePrincipalAnnotationFor("reader"))
-	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
+	if err := c.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
-	h.settle(t)
+	c.settle(t)
 
-	after := recordsOf(t, h.Client, testNamespace, testName)
+	after := recordsOf(t, c.Client, testNamespace, testName)
 	if len(after) != 1 {
 		t.Fatalf("%d records remain, want only the one still asked for: %+v", len(after), after)
 	}
@@ -177,7 +177,7 @@ func TestDroppingOneIdentityKeepsTheOther(t *testing.T) {
 			after[0].Status.ServicePrincipalID)
 	}
 
-	databricksServiceAccount := principalOf(t, h.Client)
+	databricksServiceAccount := principalOf(t, c.Client)
 	if databricksServiceAccount == nil {
 		t.Fatal("the DatabricksServiceAccount is gone; one identity remains")
 	}
@@ -198,29 +198,29 @@ func TestDroppingOneIdentityKeepsTheOther(t *testing.T) {
 func TestAddingASecondIdentityLeavesTheFirstAlone(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asking(testNamespace, testName))
+	c.settle(t)
 
-	first := recordsOf(t, h.Client, testNamespace, testName)
+	first := recordsOf(t, c.Client, testNamespace, testName)
 	if len(first) != 1 {
 		t.Fatalf("this test starts from one identity; there are %d", len(first))
 	}
 	was := first[0].Status.ServicePrincipalID
 
 	serviceAccount := &corev1.ServiceAccount{}
-	if err := h.Client.Get(context.Background(),
+	if err := c.Client.Get(context.Background(),
 		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 	serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("writer")] =
-		testOperator.String()
-	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
+		testOperatorRef.String()
+	if err := c.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
-	h.settle(t)
+	c.settle(t)
 
-	after := recordsOf(t, h.Client, testNamespace, testName)
+	after := recordsOf(t, c.Client, testNamespace, testName)
 	if len(after) != 2 {
 		t.Fatalf("%d records, want the original and the new one: %+v", len(after), after)
 	}
@@ -256,35 +256,35 @@ func TestAddingASecondIdentityLeavesTheFirstAlone(t *testing.T) {
 func TestWithdrawingNamedIdentitiesTakesTheDatabricksServiceAccountWithThem(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), askingFor(testNamespace, testName, "reader", "writer"))
-	h.settle(t)
+	c.settle(t)
 
-	if databricksServiceAccount := principalOf(t, h.Client); databricksServiceAccount == nil ||
+	if databricksServiceAccount := principalOf(t, c.Client); databricksServiceAccount == nil ||
 		len(databricksServiceAccount.Status.Identities) != 2 {
 		t.Fatalf("this test is about withdrawing two named identities; there are %v",
 			databricksServiceAccount)
 	}
 
 	serviceAccount := &corev1.ServiceAccount{}
-	if err := h.Client.Get(context.Background(),
+	if err := c.Client.Get(context.Background(),
 		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 	serviceAccount.Annotations = nil
-	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
+	if err := c.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
-	h.settle(t)
+	c.settle(t)
 
-	if left := recordsOf(t, h.Client, testNamespace, testName); len(left) != 0 {
+	if left := recordsOf(t, c.Client, testNamespace, testName); len(left) != 0 {
 		t.Errorf("%d records remain for a ServiceAccount that asks for nothing: %+v", len(left), left)
 	}
 	if len(stub.deleted) != 2 {
 		t.Errorf("deleted %v in Databricks, want both identities", stub.deleted)
 	}
-	if databricksServiceAccount := principalOf(t, h.Client); databricksServiceAccount != nil {
+	if databricksServiceAccount := principalOf(t, c.Client); databricksServiceAccount != nil {
 		t.Errorf("the DatabricksServiceAccount is still there, carrying %+v. Its records are gone and its "+
 			"service principals are destroyed, so every word of it is false -- and it reports "+
 			"Ready, which is the one thing a copy cannot be trusted to be wrong about",
@@ -321,18 +321,18 @@ func TestEquipmentIsReportedPerNamedIdentity(t *testing.T) {
 		},
 	})
 	pod.Annotations = map[string]string{
-		dbxwebhook.ConfigAnnotation: dbxwebhook.Configuration(
+		dbxwebhook.ConfigAnnotation: dbxwebhook.Profiles(
 			[]dbxv1alpha1.ProjectedIdentity{{
 				Profile: reader, ClientID: "app-uuid", Audience: testAudience,
 			}}),
 	}
 
-	h := newHarness(t, &stubClients{accountID: "the-account"},
+	c := newControllers(t, &stubClients{accountID: "the-account"},
 		mintingNamespace(testNamespace),
 		askingFor(testNamespace, testName, "reader", "writer"), cached(pod))
-	h.settle(t)
+	c.settle(t)
 
-	databricksServiceAccount := principalOf(t, h.Client)
+	databricksServiceAccount := principalOf(t, c.Client)
 	if databricksServiceAccount == nil {
 		t.Fatal("nothing was projected")
 	}
@@ -380,14 +380,14 @@ func TestEquipmentIsReportedPerNamedIdentity(t *testing.T) {
 func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), askingFor(testNamespace, testName, "reader", "writer"))
-	h.settle(t)
+	c.settle(t)
 
-	if before := recordsOf(t, h.Client, testNamespace, testName); len(before) != 2 {
+	if before := recordsOf(t, c.Client, testNamespace, testName); len(before) != 2 {
 		t.Fatalf("this test mistypes one of two identities; there are %d", len(before))
 	}
-	was, kept := principalOf(t, h.Client).Status.Identity("reader")
+	was, kept := principalOf(t, c.Client).Status.Identity("reader")
 	if !kept {
 		t.Fatal("the identity this test is about was never projected")
 	}
@@ -396,18 +396,18 @@ func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
 	// its DatabricksAccount, gone.
 	mistyped := dbxv1alpha1.ServicePrincipalAnnotationFor("reader")
 	serviceAccount := &corev1.ServiceAccount{}
-	if err := h.Client.Get(context.Background(),
+	if err := c.Client.Get(context.Background(),
 		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	serviceAccount.Annotations[mistyped] = strings.ReplaceAll(testOperator.String(), "/", "")
-	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
+	serviceAccount.Annotations[mistyped] = strings.ReplaceAll(testOperatorRef.String(), "/", "")
+	if err := c.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
-	h.settle(t)
+	c.settle(t)
 
-	if after := recordsOf(t, h.Client, testNamespace, testName); len(after) != 2 {
+	if after := recordsOf(t, c.Client, testNamespace, testName); len(after) != 2 {
 		t.Fatalf("%d records remain, want both: %+v. A mistyped value destroyed an identity, "+
 			"which takes the service principal and everything granted to it", len(after), after)
 	}
@@ -416,7 +416,7 @@ func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
 			stub.deleted)
 	}
 
-	databricksServiceAccount := principalOf(t, h.Client)
+	databricksServiceAccount := principalOf(t, c.Client)
 	if databricksServiceAccount == nil {
 		t.Fatal("the DatabricksServiceAccount is gone; both identities are still there")
 	}
@@ -449,32 +449,32 @@ func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
 func TestAServiceAccountWhoseOnlyKeyIsMistypedKeepsItsIdentity(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), askingFor(testNamespace, testName, ""))
-	h.settle(t)
+	c.settle(t)
 
-	if before := recordsOf(t, h.Client, testNamespace, testName); len(before) != 1 {
+	if before := recordsOf(t, c.Client, testNamespace, testName); len(before) != 1 {
 		t.Fatalf("this test asks for one identity and mistypes it; there are %d", len(before))
 	}
-	was, issued := principalOf(t, h.Client).Status.Identity(testOperator.String())
+	was, issued := principalOf(t, c.Client).Status.Identity(testOperatorRef.String())
 	if !issued {
 		t.Fatal("the identity this test is about was never projected")
 	}
 
 	serviceAccount := &corev1.ServiceAccount{}
-	if err := h.Client.Get(context.Background(),
+	if err := c.Client.Get(context.Background(),
 		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 	serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("")] =
-		strings.ReplaceAll(testOperator.String(), "/", "")
-	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
+		strings.ReplaceAll(testOperatorRef.String(), "/", "")
+	if err := c.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
-	h.settle(t)
+	c.settle(t)
 
-	if after := recordsOf(t, h.Client, testNamespace, testName); len(after) != 1 {
+	if after := recordsOf(t, c.Client, testNamespace, testName); len(after) != 1 {
 		t.Fatalf("%d records remain, want the one nobody withdrew: %+v. The key is still there "+
 			"and still names this identity, badly", len(after), after)
 	}
@@ -483,12 +483,12 @@ func TestAServiceAccountWhoseOnlyKeyIsMistypedKeepsItsIdentity(t *testing.T) {
 			"every grant made on it because somebody left out a %q", stub.deleted, "/")
 	}
 
-	databricksServiceAccount := principalOf(t, h.Client)
+	databricksServiceAccount := principalOf(t, c.Client)
 	if databricksServiceAccount == nil {
 		t.Fatal("the DatabricksServiceAccount is gone, so its owner cannot see the identity they still hold " +
 			"and the webhook equips no new pod for it")
 	}
-	still, carried := databricksServiceAccount.Status.Identity(testOperator.String())
+	still, carried := databricksServiceAccount.Status.Identity(testOperatorRef.String())
 	if !carried {
 		t.Fatal("the DatabricksServiceAccount dropped the only identity on it")
 	}
@@ -509,11 +509,11 @@ func TestAServiceAccountWhoseOnlyKeyIsMistypedKeepsItsIdentity(t *testing.T) {
 func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), askingFor(testNamespace, testName, "", "reader"))
-	h.settle(t)
+	c.settle(t)
 
-	before := recordsOf(t, h.Client, testNamespace, testName)
+	before := recordsOf(t, c.Client, testNamespace, testName)
 	if len(before) != 2 {
 		t.Fatalf("this test starts from an unnamed identity and a named one; there are %d",
 			len(before))
@@ -526,19 +526,19 @@ func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) 
 	}
 
 	serviceAccount := &corev1.ServiceAccount{}
-	if err := h.Client.Get(context.Background(),
+	if err := c.Client.Get(context.Background(),
 		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 	delete(serviceAccount.Annotations, dbxv1alpha1.ServicePrincipalAnnotation)
 	serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("reader")] = "ops-a"
-	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
+	if err := c.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
-	h.settle(t)
+	c.settle(t)
 
-	after := recordsOf(t, h.Client, testNamespace, testName)
+	after := recordsOf(t, c.Client, testNamespace, testName)
 	if len(after) != 1 || after[0].Spec.Identity != "reader" {
 		t.Fatalf("the records left are %+v, want the one whose key is still there. A key that is "+
 			"gone is a withdrawal and a key that will not parse is not, and this operator "+
@@ -554,11 +554,11 @@ func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) 
 			stub.deleted)
 	}
 
-	databricksServiceAccount := principalOf(t, h.Client)
+	databricksServiceAccount := principalOf(t, c.Client)
 	if databricksServiceAccount == nil {
 		t.Fatal("the DatabricksServiceAccount is gone; the mistyped identity is still there and still working")
 	}
-	if _, gone := databricksServiceAccount.Status.Identity(testOperator.String()); gone {
+	if _, gone := databricksServiceAccount.Status.Identity(testOperatorRef.String()); gone {
 		t.Error("the DatabricksServiceAccount still shows the withdrawn identity, so a pod would go on being " +
 			"equipped for one whose service principal is destroyed")
 	}

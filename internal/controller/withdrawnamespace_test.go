@@ -33,21 +33,21 @@ const otherNamespace = "team-b"
 // look the same.
 var otherOperator = types.NamespacedName{Namespace: "other-operators", Name: "elsewhere"}
 
-// accounts wires the account controller onto the harness's own cluster.
+// accounts wires the account controller onto the same fake cluster.
 //
 // All three controllers over one fake client, because the withdrawal is not in
 // any one of them: the account controller claims the namespace and the record's
 // controller takes the trust back, and a test that ran either alone would be
 // asserting about half of it.
-func (h *harness) accounts(t *testing.T) *DatabricksAccountReconciler {
+func (c *controllers) accounts(t *testing.T) *DatabricksAccountReconciler {
 	t.Helper()
 	return &DatabricksAccountReconciler{
-		Client:                          h.Client,
-		Scheme:                          h.DatabricksServiceAccounts.Scheme,
-		DatabricksAccountNamespacedName: testOperator,
+		Client:                          c.Client,
+		Scheme:                          c.DatabricksServiceAccounts.Scheme,
+		DatabricksAccountNamespacedName: testOperatorRef,
 		Holder:                          dbx.NewHolder(operatorNamespace, accountObject),
-		Runtime:                         dbx.Config{OIDCTokenFilepath: h.Issued.TokenPath, TokenAudience: testAudience},
-		build:                           func(dbx.Config) (dbx.Clients, error) { return h.Stub, nil },
+		OwnToken:                        dbx.Config{OIDCTokenFilepath: c.Issued.TokenPath, TokenAudience: testAudience},
+		build:                           func(dbx.Config) (dbx.Clients, error) { return c.Stub, nil },
 		verify:                          func(context.Context, dbx.Clients) error { return nil },
 	}
 }
@@ -79,7 +79,7 @@ func databricksServiceAccountsFor(scheme *runtime.Scheme, c client.Client,
 func nowServing(t *testing.T, c client.Client, namespaces ...string) {
 	t.Helper()
 	var databricksAccount dbxv1alpha1.DatabricksAccount
-	if err := c.Get(context.Background(), testOperator, &databricksAccount); err != nil {
+	if err := c.Get(context.Background(), testOperatorRef, &databricksAccount); err != nil {
 		t.Fatal(err)
 	}
 	databricksAccount.Spec.Namespaces = namespaces
@@ -150,7 +150,7 @@ func readyOf(t *testing.T, c client.Client,
 func withdrawnCondition(t *testing.T, c client.Client) *metav1.Condition {
 	t.Helper()
 	var got dbxv1alpha1.DatabricksAccount
-	if err := c.Get(context.Background(), testOperator, &got); err != nil {
+	if err := c.Get(context.Background(), testOperatorRef, &got); err != nil {
 		t.Fatal(err)
 	}
 	return meta.FindStatusCondition(got.Status.Conditions, conditionNamespacesWithdrawn)
@@ -187,7 +187,7 @@ func TestANamespaceTakenOutOfScopeIsClaimedAndKeepsItsPermission(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		accountServing(otherNamespace),
 		mintingNamespace(testNamespace),
 		mintingNamespace(otherNamespace),
@@ -195,13 +195,13 @@ func TestANamespaceTakenOutOfScopeIsClaimedAndKeepsItsPermission(t *testing.T) {
 		recordFor(asker),
 	)
 
-	reconcileAccount(t, h.accounts(t), accountObject)
+	reconcileAccount(t, c.accounts(t), accountObject)
 
-	if got := claimOn(t, h.Client, testNamespace); got != withdrawnBy(testOperator) {
+	if got := claimOn(t, c.Client, testNamespace); got != withdrawnBy(testOperatorRef) {
 		t.Errorf("%s is claimed by %q, want %q; identities can still be minted there while this "+
-			"operator works through the ones it has", testNamespace, got, withdrawnBy(testOperator))
+			"operator works through the ones it has", testNamespace, got, withdrawnBy(testOperatorRef))
 	}
-	minting, err := namespaceMints(context.Background(), h.Client, testNamespace)
+	minting, err := namespaceMints(context.Background(), c.Client, testNamespace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestANamespaceTakenOutOfScopeIsClaimedAndKeepsItsPermission(t *testing.T) {
 			testNamespace)
 	}
 
-	left := labelsOf(t, h.Client, testNamespace)
+	left := labelsOf(t, c.Client, testNamespace)
 	for _, label := range []string{dbxv1alpha1.MintLabel, dbxv1alpha1.InjectLabel} {
 		if left[label] != dbxv1alpha1.Enabled {
 			t.Errorf("%s lost %s; that is the cluster's permission to every operator serving it, "+
@@ -218,7 +218,7 @@ func TestANamespaceTakenOutOfScopeIsClaimedAndKeepsItsPermission(t *testing.T) {
 		}
 	}
 
-	if got := claimOn(t, h.Client, otherNamespace); got != "" {
+	if got := claimOn(t, c.Client, otherNamespace); got != "" {
 		t.Errorf("%s is claimed by %q, and it is still one this account names; one team leaving "+
 			"stopped another team's minting", otherNamespace, got)
 	}
@@ -235,15 +235,15 @@ func TestANamespaceTakenOutOfScopeIsClaimedAndKeepsItsPermission(t *testing.T) {
 func TestANamespaceThisOperatorNeverEnteredIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		accountServing(testNamespace),
 		mintingNamespace(testNamespace),
 		mintingNamespace(otherNamespace),
 	)
 
-	reconcileAccount(t, h.accounts(t), accountObject)
+	reconcileAccount(t, c.accounts(t), accountObject)
 
-	if got := claimOn(t, h.Client, otherNamespace); got != "" {
+	if got := claimOn(t, c.Client, otherNamespace); got != "" {
 		t.Errorf("%s is claimed by %q, and this operator has never issued anything there; "+
 			"whoever mints there does so for somebody else", otherNamespace, got)
 	}
@@ -260,18 +260,18 @@ func TestTakingANamespaceBackDestroysNothingAndEndsTheExchange(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub, mintingNamespace(testNamespace), asker)
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asker)
+	c.settle(t)
 
-	issued := h.issuedOf(t, asker)
+	issued := c.issuedOf(t, asker)
 	if issued == nil || issued.Status.ServicePrincipalID == "" {
 		t.Fatal("nothing was issued to start from")
 	}
 	before := issued.Status
 
-	nowServing(t, h.Client)
-	reconcileAccount(t, h.accounts(t), accountObject)
-	h.records(t)
+	nowServing(t, c.Client)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	c.records(t)
 
 	if len(stub.policies) != 0 {
 		t.Errorf("federation policies are %v; this cluster can still be exchanged for an "+
@@ -282,7 +282,7 @@ func TestTakingANamespaceBackDestroysNothingAndEndsTheExchange(t *testing.T) {
 			"with it every grant somebody made on it", stub.deleted)
 	}
 
-	after := h.issuedOf(t, asker)
+	after := c.issuedOf(t, asker)
 	if after == nil {
 		t.Fatal("the record is gone; the identity can never be restored without one")
 	}
@@ -294,7 +294,7 @@ func TestTakingANamespaceBackDestroysNothingAndEndsTheExchange(t *testing.T) {
 			before.ServicePrincipalID, before.ClientID)
 	}
 
-	ready := readyOf(t, h.Client, issued)
+	ready := readyOf(t, c.Client, issued)
 	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonNotServed {
 		t.Errorf("Ready is %v, want False/%s -- Ready promises the exchange, and the exchange is "+
 			"what stopped", ready, reasonNotServed)
@@ -319,16 +319,16 @@ func TestNothingIsWrittenBackWhileTheNamespaceIsUnclaimed(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asker, asking(testNamespace, "loader"))
-	h.settle(t)
+	c.settle(t)
 
-	nowServing(t, h.Client)
+	nowServing(t, c.Client)
 
 	// The account controller has not run, so nothing has claimed the namespace
 	// and it still mints.
-	h.records(t)
-	if claimOn(t, h.Client, testNamespace) != "" {
+	c.records(t)
+	if claimOn(t, c.Client, testNamespace) != "" {
 		t.Fatal("the namespace was claimed before this ran; the ordering this test is about " +
 			"was not the one it exercised")
 	}
@@ -337,22 +337,22 @@ func TestNothingIsWrittenBackWhileTheNamespaceIsUnclaimed(t *testing.T) {
 			"made here; whatever is made next is not in the set that was just withdrawn from",
 			stub.withdrawn)
 	}
-	waiting := readyOf(t, h.Client, h.issuedOf(t, asker))
+	waiting := readyOf(t, c.Client, c.issuedOf(t, asker))
 	if waiting == nil || waiting.Reason != reasonMintingNotSuspended {
 		t.Errorf("Ready is %v, want %s -- somebody waiting for this withdrawal has to be able "+
 			"to see that it has not started and why", waiting, reasonMintingNotSuspended)
 	}
 
-	reconcileAccount(t, h.accounts(t), accountObject)
-	h.records(t)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	c.records(t)
 	if len(stub.policies) != 0 {
 		t.Fatalf("federation policies are %v; the namespace is claimed and the trust is still "+
 			"there", stub.policies)
 	}
 
-	h.project(t, testNamespace, testName)
-	h.project(t, testNamespace, "loader")
-	h.records(t)
+	c.project(t, testNamespace, testName)
+	c.project(t, testNamespace, "loader")
+	c.records(t)
 
 	if len(stub.policies) != 0 {
 		t.Errorf("federation policies are %v; the trust was written back over the withdrawal, "+
@@ -385,21 +385,21 @@ func TestNoServicePrincipalIsMintedForANamespaceOnItsWayOut(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asker, asking(testNamespace, "loader"))
-	h.settle(t)
+	c.settle(t)
 
 	var before dbxv1alpha1.DatabricksAccount
-	if err := h.Client.Get(context.Background(), testOperator, &before); err != nil {
+	if err := c.Client.Get(context.Background(), testOperatorRef, &before); err != nil {
 		t.Fatal(err)
 	}
-	nowServing(t, h.Client)
+	nowServing(t, c.Client)
 
 	// The DatabricksServiceAccount controller in the middle of a pass it started
 	// before the edit: it reads the account as it was, and everything else as it
 	// is. That is the whole of the window, and no watch closes it -- the read
 	// happened before the write landed and the record is written after.
-	h.DatabricksServiceAccounts.Client = interceptor.NewClient(h.Client.(client.WithWatch), interceptor.Funcs{
+	c.DatabricksServiceAccounts.Client = interceptor.NewClient(c.Client.(client.WithWatch), interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
 			object client.Object, opts ...client.GetOption) error {
 			if databricksAccount, is := object.(*dbxv1alpha1.DatabricksAccount); is {
@@ -410,10 +410,10 @@ func TestNoServicePrincipalIsMintedForANamespaceOnItsWayOut(t *testing.T) {
 		},
 	})
 
-	h.project(t, testNamespace, "loader")
-	h.records(t)
+	c.project(t, testNamespace, "loader")
+	c.records(t)
 
-	minted := h.issuedOf(t, asking(testNamespace, "loader"))
+	minted := c.issuedOf(t, asking(testNamespace, "loader"))
 	if minted == nil {
 		t.Fatal("no record was made for the ServiceAccount that asked before the edit was " +
 			"visible; the window this test is about was not open")
@@ -437,7 +437,7 @@ func TestNoServicePrincipalIsMintedForANamespaceOnItsWayOut(t *testing.T) {
 			"being made; a removal that starts here acts on a set that is still growing",
 			stub.withdrawn)
 	}
-	ready := readyOf(t, h.Client, minted)
+	ready := readyOf(t, c.Client, minted)
 	if ready == nil || ready.Reason != reasonNotServed {
 		t.Fatalf("Ready is %v, want %s -- the record names nothing in Databricks and never "+
 			"will, and somebody looking at it has to be told that rather than left waiting",
@@ -460,19 +460,19 @@ func TestNamingANamespaceAgainRestoresTheSameIdentity(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub, mintingNamespace(testNamespace), asker)
-	h.settle(t)
-	before := h.issuedOf(t, asker).Status
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asker)
+	c.settle(t)
+	before := c.issuedOf(t, asker).Status
 
-	nowServing(t, h.Client)
-	reconcileAccount(t, h.accounts(t), accountObject)
-	h.records(t)
+	nowServing(t, c.Client)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	c.records(t)
 	if len(stub.policies) != 0 {
 		t.Fatal("the trust was not taken back, so there is nothing for this to restore")
 	}
 
-	nowServing(t, h.Client, testNamespace)
-	h.records(t)
+	nowServing(t, c.Client, testNamespace)
+	c.records(t)
 
 	if len(stub.policies) != 1 ||
 		!strings.HasPrefix(stub.policies[0], before.ServicePrincipalID+" ") {
@@ -486,12 +486,12 @@ func TestNamingANamespaceAgainRestoresTheSameIdentity(t *testing.T) {
 			stub.created)
 	}
 
-	after := h.issuedOf(t, asker)
+	after := c.issuedOf(t, asker)
 	if after.Status.ClientID != before.ClientID {
 		t.Errorf("the client id is now %s and was %s; every pod and every grant names the one it "+
 			"was given", after.Status.ClientID, before.ClientID)
 	}
-	ready := readyOf(t, h.Client, after)
+	ready := readyOf(t, c.Client, after)
 	if ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Errorf("Ready is %v, want the exchange working again", ready)
 	}
@@ -509,21 +509,21 @@ func TestAnAbsentAccountWithdrawsNothing(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub, mintingNamespace(testNamespace), asker)
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asker)
+	c.settle(t)
 
 	// Claimed by this operator first, so that the only thing left between these
 	// records and a withdrawal is the account object being gone.
-	claims(t, h.Client, testNamespace, testOperator, time.Now())
+	claims(t, c.Client, testNamespace, testOperatorRef, time.Now())
 
 	var declared dbxv1alpha1.DatabricksAccount
-	if err := h.Client.Get(context.Background(), testOperator, &declared); err != nil {
+	if err := c.Client.Get(context.Background(), testOperatorRef, &declared); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Client.Delete(context.Background(), &declared); err != nil {
+	if err := c.Client.Delete(context.Background(), &declared); err != nil {
 		t.Fatal(err)
 	}
-	h.records(t)
+	c.records(t)
 
 	if len(stub.withdrawn) != 0 {
 		t.Errorf("took the trust off %v; the account object is gone, which says nothing about "+
@@ -547,20 +547,20 @@ func TestAWithdrawalThatDidNotLandIsNotReportedAsFinished(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub, mintingNamespace(testNamespace), asker)
-	h.settle(t)
-	issued := h.issuedOf(t, asker)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asker)
+	c.settle(t)
+	issued := c.issuedOf(t, asker)
 
 	stub.removeErr = errors.New("the service is temporarily unavailable")
-	nowServing(t, h.Client)
-	reconcileAccount(t, h.accounts(t), accountObject)
-	h.records(t)
+	nowServing(t, c.Client)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	c.records(t)
 
 	if len(stub.policies) != 1 {
 		t.Fatalf("federation policies are %v; the call failed, so the trust it would have "+
 			"removed has to still be there for this test to mean anything", stub.policies)
 	}
-	ready := readyOf(t, h.Client, issued)
+	ready := readyOf(t, c.Client, issued)
 	if ready == nil || ready.Reason == reasonNotServed {
 		t.Fatalf("Ready is %v; the removal did not go through and the record says it did", ready)
 	}
@@ -569,8 +569,8 @@ func TestAWithdrawalThatDidNotLandIsNotReportedAsFinished(t *testing.T) {
 			"is what somebody alerts on", ready, reasonWithdrawFailed)
 	}
 
-	reconcileAccount(t, h.accounts(t), accountObject)
-	withdrawn := withdrawnCondition(t, h.Client)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	withdrawn := withdrawnCondition(t, c.Client)
 	if withdrawn == nil || withdrawn.Status != metav1.ConditionFalse {
 		t.Fatalf("%s is %v, want False -- the object whose edit started the withdrawal is the "+
 			"only place somebody would look to see it finish", conditionNamespacesWithdrawn,
@@ -581,7 +581,7 @@ func TestAWithdrawalThatDidNotLandIsNotReportedAsFinished(t *testing.T) {
 			"means reading every record one at a time", conditionNamespacesWithdrawn,
 			withdrawn.Message)
 	}
-	if claimOn(t, h.Client, testNamespace) != withdrawnBy(testOperator) {
+	if claimOn(t, c.Client, testNamespace) != withdrawnBy(testOperatorRef) {
 		t.Errorf("%s is no longer claimed by this operator while its trust is still in place; "+
 			"minting would resume into a set this withdrawal has not finished with",
 			testNamespace)
@@ -608,19 +608,19 @@ func TestANamespaceThisOperatorCannotClaimSaysSo(t *testing.T) {
 			return c.Apply(ctx, object, opts...)
 		},
 	}
-	h := newHarnessWith(t, stub, refusing,
+	c := newControllersWith(t, stub, refusing,
 		accountServing(otherNamespace),
 		mintingNamespace(testNamespace),
 		asker,
 		recordFor(asker),
 	)
 
-	reconcileAccount(t, h.accounts(t), accountObject)
+	reconcileAccount(t, c.accounts(t), accountObject)
 
-	if claimOn(t, h.Client, testNamespace) != "" {
+	if claimOn(t, c.Client, testNamespace) != "" {
 		t.Fatal("the write was not refused, so this test asserts nothing")
 	}
-	withdrawn := withdrawnCondition(t, h.Client)
+	withdrawn := withdrawnCondition(t, c.Client)
 	if withdrawn == nil || withdrawn.Status != metav1.ConditionFalse {
 		t.Fatalf("%s is %v, want False -- the namespace is unclaimed and still mints",
 			conditionNamespacesWithdrawn, withdrawn)
@@ -646,16 +646,16 @@ func TestASecondOperatorWaitsWhileTheFirstHoldsTheNamespace(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub, mintingNamespace(testNamespace), asker)
-	h.settle(t)
-	issued := h.issuedOf(t, asker)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asker)
+	c.settle(t)
+	issued := c.issuedOf(t, asker)
 
-	claims(t, h.Client, testNamespace, otherOperator, time.Now())
-	nowServing(t, h.Client)
-	reconcileAccount(t, h.accounts(t), accountObject)
-	h.records(t)
+	claims(t, c.Client, testNamespace, otherOperator, time.Now())
+	nowServing(t, c.Client)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	c.records(t)
 
-	if got := claimOn(t, h.Client, testNamespace); got != withdrawnBy(otherOperator) {
+	if got := claimOn(t, c.Client, testNamespace); got != withdrawnBy(otherOperator) {
 		t.Errorf("%s is claimed by %q, want %q; the second operator took a claim the first was "+
 			"still using, and both are now withdrawing from a set the other is changing",
 			testNamespace, got, withdrawnBy(otherOperator))
@@ -669,7 +669,7 @@ func TestASecondOperatorWaitsWhileTheFirstHoldsTheNamespace(t *testing.T) {
 		t.Errorf("federation policies are %v, want the one that was there", stub.policies)
 	}
 
-	ready := readyOf(t, h.Client, issued)
+	ready := readyOf(t, c.Client, issued)
 	if ready == nil || ready.Reason != reasonAnotherWithdrawal {
 		t.Fatalf("Ready is %v, want %s -- waiting on another operator is a thing somebody has to "+
 			"be able to see", ready, reasonAnotherWithdrawal)
@@ -679,7 +679,7 @@ func TestASecondOperatorWaitsWhileTheFirstHoldsTheNamespace(t *testing.T) {
 			"reading a Namespace by hand", ready.Message)
 	}
 
-	withdrawn := withdrawnCondition(t, h.Client)
+	withdrawn := withdrawnCondition(t, c.Client)
 	if withdrawn == nil || withdrawn.Status != metav1.ConditionFalse {
 		t.Errorf("%s is %v, want False -- nothing has been withdrawn and the account says it has",
 			conditionNamespacesWithdrawn, withdrawn)
@@ -697,23 +697,23 @@ func TestAnOperatorWhoseClaimWasTakenStopsRemovingPolicies(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub, mintingNamespace(testNamespace), asker, asking(testNamespace, "loader"))
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asker, asking(testNamespace, "loader"))
+	c.settle(t)
 
-	nowServing(t, h.Client)
-	reconcileAccount(t, h.accounts(t), accountObject)
-	if claimOn(t, h.Client, testNamespace) != withdrawnBy(testOperator) {
+	nowServing(t, c.Client)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	if claimOn(t, c.Client, testNamespace) != withdrawnBy(testOperatorRef) {
 		t.Fatal("this operator never held the namespace, so there was nothing for the other " +
 			"one to take")
 	}
 
-	claims(t, h.Client, testNamespace, otherOperator, time.Now(), client.ForceOwnership)
+	claims(t, c.Client, testNamespace, otherOperator, time.Now(), client.ForceOwnership)
 
 	stub.withdrawn = nil
-	reconcileAccount(t, h.accounts(t), accountObject)
-	h.records(t)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	c.records(t)
 
-	if got := claimOn(t, h.Client, testNamespace); got != withdrawnBy(otherOperator) {
+	if got := claimOn(t, c.Client, testNamespace); got != withdrawnBy(otherOperator) {
 		t.Errorf("%s is claimed by %q, want %q; the operator that lost the namespace wrote its "+
 			"own name back over the one that took it", testNamespace, got,
 			withdrawnBy(otherOperator))
@@ -722,7 +722,7 @@ func TestAnOperatorWhoseClaimWasTakenStopsRemovingPolicies(t *testing.T) {
 		t.Errorf("went on taking the trust off %v after losing the namespace; the set it is "+
 			"working through is now the other operator's to change", stub.withdrawn)
 	}
-	withdrawn := withdrawnCondition(t, h.Client)
+	withdrawn := withdrawnCondition(t, c.Client)
 	if withdrawn == nil || withdrawn.Status != metav1.ConditionFalse {
 		t.Errorf("%s is %v, want False -- this operator holds nothing and has removed nothing",
 			conditionNamespacesWithdrawn, withdrawn)
@@ -745,21 +745,21 @@ func TestAClaimNobodyHasRefreshedCanBeTakenAndAFreshOneCannot(t *testing.T) {
 		since time.Duration
 		want  types.NamespacedName
 	}{
-		{"stale", withdrawalClaimStale + time.Minute, testOperator},
+		{"stale", withdrawalClaimStale + time.Minute, testOperatorRef},
 		{"fresh", withdrawalClaimStale - time.Minute, otherOperator},
 	} {
 		t.Run(held.name, func(t *testing.T) {
 			t.Parallel()
 			stub := &stubClients{}
 			asker := asking(testNamespace, testName)
-			h := newHarness(t, stub, mintingNamespace(testNamespace), asker)
-			h.settle(t)
+			c := newControllers(t, stub, mintingNamespace(testNamespace), asker)
+			c.settle(t)
 
-			claims(t, h.Client, testNamespace, otherOperator, time.Now().Add(-held.since))
-			nowServing(t, h.Client)
-			reconcileAccount(t, h.accounts(t), accountObject)
+			claims(t, c.Client, testNamespace, otherOperator, time.Now().Add(-held.since))
+			nowServing(t, c.Client)
+			reconcileAccount(t, c.accounts(t), accountObject)
 
-			if got := claimOn(t, h.Client, testNamespace); got != withdrawnBy(held.want) {
+			if got := claimOn(t, c.Client, testNamespace); got != withdrawnBy(held.want) {
 				t.Errorf("%s is claimed by %q, want %q after %s without a word from its holder",
 					testNamespace, got, withdrawnBy(held.want), held.since)
 			}
@@ -782,22 +782,22 @@ func TestAHolderSaysAgainOnEveryPassThatItIsStillThere(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub, mintingNamespace(testNamespace), asker)
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asker)
+	c.settle(t)
 
 	// Old enough that a claim left alone would be a minute from being taken, and
 	// this operator's own, so what the pass does to it is a refresh and not a
 	// conflict.
 	stopped := time.Now().Add(time.Minute - withdrawalClaimStale).UTC().Truncate(time.Second)
-	claims(t, h.Client, testNamespace, testOperator, stopped)
-	nowServing(t, h.Client)
-	reconcileAccount(t, h.accounts(t), accountObject)
+	claims(t, c.Client, testNamespace, testOperatorRef, stopped)
+	nowServing(t, c.Client)
+	reconcileAccount(t, c.accounts(t), accountObject)
 
-	if got := claimOn(t, h.Client, testNamespace); got != withdrawnBy(testOperator) {
+	if got := claimOn(t, c.Client, testNamespace); got != withdrawnBy(testOperatorRef) {
 		t.Fatalf("%s is claimed by %q, want %q -- there is no claim of this operator's to refresh",
-			testNamespace, got, withdrawnBy(testOperator))
+			testNamespace, got, withdrawnBy(testOperatorRef))
 	}
-	if said := claimedSince(t, h.Client, testNamespace); !said.After(stopped) {
+	if said := claimedSince(t, c.Client, testNamespace); !said.After(stopped) {
 		t.Errorf("the claim still says %s, which is what it said before this pass. One that is "+
 			"not written again ages out while its holder is still withdrawing, and the next "+
 			"operator along takes the namespace from under it", said)
@@ -818,36 +818,36 @@ func TestReleasingLetsTheOtherOperatorMintAgain(t *testing.T) {
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
 	theirs := askingOf(testNamespace, "loader", otherOperator.String())
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		accountServing(testNamespace),
 		mintingNamespace(testNamespace),
 		asker,
 		theirs,
 		serving(otherOperator, testNamespace),
 	)
-	h.settle(t)
-	other := databricksServiceAccountsFor(h.DatabricksServiceAccounts.Scheme, h.Client, otherOperator)
+	c.settle(t)
+	other := databricksServiceAccountsFor(c.DatabricksServiceAccounts.Scheme, c.Client, otherOperator)
 
-	nowServing(t, h.Client)
-	reconcileAccount(t, h.accounts(t), accountObject)
+	nowServing(t, c.Client)
+	reconcileAccount(t, c.accounts(t), accountObject)
 
 	if _, err := other.Reconcile(context.Background(), requestFor(theirs)); err != nil {
 		t.Fatal(err)
 	}
-	if made := recordsIn(t, h.Client, otherOperator.Namespace); made != 0 {
+	if made := recordsIn(t, c.Client, otherOperator.Namespace); made != 0 {
 		t.Errorf("operator %s issued %d identities while %s was being withdrawn from; the set "+
 			"the withdrawal is working through is still growing", otherOperator, made,
 			testNamespace)
 	}
 
-	h.records(t)
-	reconcileAccount(t, h.accounts(t), accountObject)
+	c.records(t)
+	reconcileAccount(t, c.accounts(t), accountObject)
 
-	if got := claimOn(t, h.Client, testNamespace); got != "" {
+	if got := claimOn(t, c.Client, testNamespace); got != "" {
 		t.Fatalf("%s is still claimed by %q after the withdrawal finished; every other operator "+
 			"serving it waits for a person", testNamespace, got)
 	}
-	if labelsOf(t, h.Client, testNamespace)[dbxv1alpha1.MintLabel] != dbxv1alpha1.Enabled {
+	if labelsOf(t, c.Client, testNamespace)[dbxv1alpha1.MintLabel] != dbxv1alpha1.Enabled {
 		t.Fatalf("%s lost %s; that is the cluster's permission, and nothing this operator does "+
 			"gives it back", testNamespace, dbxv1alpha1.MintLabel)
 	}
@@ -855,7 +855,7 @@ func TestReleasingLetsTheOtherOperatorMintAgain(t *testing.T) {
 	if _, err := other.Reconcile(context.Background(), requestFor(theirs)); err != nil {
 		t.Fatal(err)
 	}
-	if made := recordsIn(t, h.Client, otherOperator.Namespace); made != 1 {
+	if made := recordsIn(t, c.Client, otherOperator.Namespace); made != 1 {
 		t.Errorf("operator %s issued %d identities after the withdrawal finished, want 1; its "+
 			"minting stopped because another operator withdrew from a namespace they share",
 			otherOperator, made)
@@ -875,22 +875,22 @@ func TestAnIdentityAlreadyLetGoOfDoesNotTakeTheNamespaceBack(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
-	h := newHarness(t, stub, mintingNamespace(testNamespace), asker)
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asker)
+	c.settle(t)
 
-	nowServing(t, h.Client)
-	reconcileAccount(t, h.accounts(t), accountObject)
-	h.records(t)
-	reconcileAccount(t, h.accounts(t), accountObject)
-	if claimOn(t, h.Client, testNamespace) != "" {
+	nowServing(t, c.Client)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	c.records(t)
+	reconcileAccount(t, c.accounts(t), accountObject)
+	if claimOn(t, c.Client, testNamespace) != "" {
 		t.Fatal("the namespace was not given back, so there is nothing here to take again")
 	}
 	asked := len(stub.withdrawn)
 
-	h.records(t)
-	reconcileAccount(t, h.accounts(t), accountObject)
+	c.records(t)
+	reconcileAccount(t, c.accounts(t), accountObject)
 
-	if got := claimOn(t, h.Client, testNamespace); got != "" {
+	if got := claimOn(t, c.Client, testNamespace); got != "" {
 		t.Errorf("%s is claimed by %q again with nothing left to withdraw; every other operator "+
 			"serving it stops minting once an interval, for ever", testNamespace, got)
 	}
@@ -898,12 +898,12 @@ func TestAnIdentityAlreadyLetGoOfDoesNotTakeTheNamespaceBack(t *testing.T) {
 		t.Errorf("asked Databricks to take the trust off %v again; the trust it names went on "+
 			"the pass before", stub.withdrawn[asked:])
 	}
-	ready := readyOf(t, h.Client, h.issuedOf(t, asker))
+	ready := readyOf(t, c.Client, c.issuedOf(t, asker))
 	if ready == nil || ready.Reason != reasonNotServed {
 		t.Errorf("Ready is %v, want %s -- the identity was let go of and nothing since has "+
 			"changed that", ready, reasonNotServed)
 	}
-	withdrawn := withdrawnCondition(t, h.Client)
+	withdrawn := withdrawnCondition(t, c.Client)
 	if withdrawn == nil || withdrawn.Status != metav1.ConditionTrue {
 		t.Errorf("%s is %v, want True -- the withdrawal finished, and an account that says so "+
 			"and then says otherwise is one nobody can alert on", conditionNamespacesWithdrawn,

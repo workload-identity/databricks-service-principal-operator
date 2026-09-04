@@ -268,9 +268,9 @@ func (r *DatabricksServiceAccountReconciler) entryFor(ctx context.Context,
 	ready := meta.FindStatusCondition(issued.Status.Conditions, conditionReady)
 	if ready == nil {
 		setCondition(&entry.Conditions, 0, conditionReady,
-			metav1.ConditionUnknown, reasonAwaitingRecord,
-			fmt.Sprintf("IssuedDatabricksServicePrincipal %s was made and has not been acted "+
-				"on yet", issued.Name))
+			metav1.ConditionUnknown, reasonAwaitingServicePrincipal,
+			fmt.Sprintf("IssuedDatabricksServicePrincipal %s is there; nothing has asked "+
+				"Databricks for a service principal yet, and the next pass will", issued.Name))
 	} else {
 		setCondition(&entry.Conditions, 0, conditionReady, ready.Status, ready.Reason, ready.Message)
 	}
@@ -703,7 +703,7 @@ func (r *DatabricksServiceAccountReconciler) equipment(ctx context.Context,
 // will not match. That is the right report: this operator did not equip it, and
 // saying so is not the same as saying it is broken.
 func describes(pod *corev1.Pod, entry dbxv1alpha1.ProjectedIdentity) bool {
-	written := dbxwebhook.Configuration([]dbxv1alpha1.ProjectedIdentity{entry})
+	written := dbxwebhook.Profiles([]dbxv1alpha1.ProjectedIdentity{entry})
 	if written == "" {
 		// An identity with no client id is one the webhook writes nothing for,
 		// and every string contains the empty one -- so without this the check

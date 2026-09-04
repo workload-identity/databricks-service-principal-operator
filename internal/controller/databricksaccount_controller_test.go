@@ -88,7 +88,7 @@ func newAccountReconciler(t *testing.T, tokenPath string, verify func() error,
 		Scheme:                          scheme,
 		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: accountObject},
 		Holder:                          holder,
-		Runtime:                         dbx.Config{OIDCTokenFilepath: tokenPath, TokenAudience: "databricks"},
+		OwnToken:                        dbx.Config{OIDCTokenFilepath: tokenPath, TokenAudience: "databricks"},
 		build:                           func(dbx.Config) (dbx.Clients, error) { return built, nil },
 		verify:                          func(context.Context, dbx.Clients) error { return verify() },
 	}, c, holder
@@ -614,7 +614,7 @@ func TestNothingIsBlankedByAReadThatFailed(t *testing.T) {
 	}
 
 	// The token goes away.
-	r.Runtime.OIDCTokenFilepath = filepath.Join(t.TempDir(), "not-there")
+	r.OwnToken.OIDCTokenFilepath = filepath.Join(t.TempDir(), "not-there")
 	reconcileAccount(t, r, accountObject)
 
 	var after dbxv1alpha1.DatabricksAccount

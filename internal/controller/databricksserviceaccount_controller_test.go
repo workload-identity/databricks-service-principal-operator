@@ -54,15 +54,15 @@ func principalOf(t *testing.T, c client.Client) *dbxv1alpha1.DatabricksServiceAc
 func TestAnAskingServiceAccountGetsAnIdentity(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 
 	// Twice: the first pass creates the object, the second converges it. That is
 	// not an implementation detail worth hiding -- an object that had to exist
 	// before anything was built in Databricks is what makes the id recordable.
-	h.settle(t)
+	c.settle(t)
 
-	principal := principalOf(t, h.Client)
+	principal := principalOf(t, c.Client)
 	if principal == nil {
 		t.Fatal("no identity was recorded for a ServiceAccount that asked for one")
 	}
@@ -99,7 +99,7 @@ func TestAnAskingServiceAccountGetsAnIdentity(t *testing.T) {
 			"order nothing specifies", principal.Finalizers)
 	}
 
-	issued := h.issuedOf(t, asking(testNamespace, testName))
+	issued := c.issuedOf(t, asking(testNamespace, testName))
 	if issued == nil {
 		t.Fatal("nothing recorded what was issued; the record is the only memory there is")
 	}
@@ -136,11 +136,11 @@ func TestAnAskingServiceAccountGetsAnIdentity(t *testing.T) {
 func TestANamespaceThatWasNotAllowedMintsNothing(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		namespaceNamed(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	if principalOf(t, h.Client) != nil {
+	if principalOf(t, c.Client) != nil {
 		t.Error("an identity was recorded in a namespace nobody allowed to ask")
 	}
 	if len(stub.created) != 0 {
@@ -153,11 +153,11 @@ func TestANamespaceThatWasNotAllowedMintsNothing(t *testing.T) {
 func TestAServiceAccountThatDidNotAskGetsNothing(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), serviceAccountNamed(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	if principalOf(t, h.Client) != nil {
+	if principalOf(t, c.Client) != nil {
 		t.Error("an identity was recorded for a ServiceAccount that never asked for one")
 	}
 	if len(stub.created) != 0 {
@@ -174,28 +174,28 @@ func TestAServiceAccountThatDidNotAskGetsNothing(t *testing.T) {
 func TestWithdrawingTheAnnotationTakesTheIdentityBack(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
-	if principalOf(t, h.Client) == nil {
+	c.settle(t)
+	if principalOf(t, c.Client) == nil {
 		t.Fatal("nothing was built to withdraw")
 	}
 
 	var serviceAccount = serviceAccountNamed(testNamespace, testName)
-	if err := h.Client.Get(context.Background(),
+	if err := c.Client.Get(context.Background(),
 		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 	serviceAccount.Annotations = nil
-	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
+	if err := c.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
 	// Twice: the first pass marks the object for deletion, and the finalizer
 	// makes the second one the pass that pays what is owed.
-	h.settle(t)
+	c.settle(t)
 
-	if principalOf(t, h.Client) != nil {
+	if principalOf(t, c.Client) != nil {
 		t.Error("the identity is still recorded after the request was withdrawn")
 	}
 	if len(stub.deleted) != 1 {
@@ -216,15 +216,15 @@ func TestTheIdIsRecordedBeforeAnythingElseIsAttempted(t *testing.T) {
 	// next call" from "written down eventually" -- and the case this is about is
 	// the process not surviving the next call.
 	stub := &stubClients{policyPanics: true}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 
 	// The record is written first, and nothing has been created yet. That order
 	// is the outer guarantee: a pass that stops here leaves a record naming no
 	// service principal, which the marker resolves, rather than a service
 	// principal nothing names.
-	h.project(t, testNamespace, testName)
-	issued := h.issuedOf(t, asking(testNamespace, testName))
+	c.project(t, testNamespace, testName)
+	issued := c.issuedOf(t, asking(testNamespace, testName))
 	if issued == nil {
 		t.Fatal("nothing was recorded before Databricks was asked for anything")
 	}
@@ -239,10 +239,10 @@ func TestTheIdIsRecordedBeforeAnythingElseIsAttempted(t *testing.T) {
 				t.Fatal("the stub was arranged to stop the pass and did not")
 			}
 		}()
-		h.records(t)
+		c.records(t)
 	}()
 
-	issued = h.issuedOf(t, asking(testNamespace, testName))
+	issued = c.issuedOf(t, asking(testNamespace, testName))
 	if issued.Status.ServicePrincipalID == "" {
 		t.Error("a service principal exists in Databricks and its id was never written down; " +
 			"nothing here will ever delete it by id")
@@ -257,11 +257,11 @@ func TestTheIdIsRecordedBeforeAnythingElseIsAttempted(t *testing.T) {
 func TestAFailedPolicyIsNotReportedAsWorking(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{policyErr: errors.New("the service is temporarily unavailable")}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	principal := principalOf(t, h.Client)
+	principal := principalOf(t, c.Client)
 	ready := meta.FindStatusCondition(identityIn(t, principal).Conditions, conditionReady)
 	if ready == nil || ready.Status == metav1.ConditionTrue {
 		t.Errorf("Ready is %v; the policy was not written, so no token reaches this principal", ready)
@@ -279,12 +279,12 @@ func TestAFailedPolicyIsNotReportedAsWorking(t *testing.T) {
 func TestDatabricksNotAnsweringIsNotTheDeclarationBeingWrong(t *testing.T) {
 	t.Parallel()
 	unreachable := errors.New("dial tcp: lookup accounts.cloud.databricks.com: no such host")
-	h := newHarness(t, &stubClients{policyErr: unreachable},
+	c := newControllers(t, &stubClients{policyErr: unreachable},
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
 	ready := meta.FindStatusCondition(
-		identityIn(t, principalOf(t, h.Client)).Conditions, conditionReady)
+		identityIn(t, principalOf(t, c.Client)).Conditions, conditionReady)
 	if ready == nil || ready.Reason != reasonDatabricksUnavailable {
 		t.Fatalf("Ready is %v, want %s -- this is the reason a tenant reads while Databricks "+
 			"is unreachable, and it is the only one that goes back to the workqueue",
@@ -323,12 +323,12 @@ func TestARefusedRequestIsNotReportedAsSomethingMissing(t *testing.T) {
 		{"not there", apierr.ErrResourceDoesNotExist, reasonNotFound},
 	} {
 		t.Run(answer.name, func(t *testing.T) {
-			h := newHarness(t, &stubClients{policyErr: answer.gave},
+			c := newControllers(t, &stubClients{policyErr: answer.gave},
 				mintingNamespace(testNamespace), asking(testNamespace, testName))
-			h.settle(t)
+			c.settle(t)
 
 			ready := meta.FindStatusCondition(
-				identityIn(t, principalOf(t, h.Client)).Conditions, conditionReady)
+				identityIn(t, principalOf(t, c.Client)).Conditions, conditionReady)
 			if ready == nil || ready.Reason != answer.want {
 				t.Errorf("Ready is %v, want %s; the reason is what people match and alert on, "+
 					"and these two are ended by different acts", ready, answer.want)
@@ -347,15 +347,15 @@ func TestARefusedRequestIsNotReportedAsSomethingMissing(t *testing.T) {
 // still has an identity that cannot converge.
 func TestAnIdThisOperatorWroteDownIsNotReportedAsABadSpec(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, &stubClients{policyErr: &dbx.ErrMalformedCoordinate{
+	c := newControllers(t, &stubClients{policyErr: &dbx.ErrMalformedCoordinate{
 		Field: "servicePrincipalId",
 		Value: "99999999999999999999",
 		Cause: errors.New("value out of range"),
 	}}, mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
 	ready := meta.FindStatusCondition(
-		identityIn(t, principalOf(t, h.Client)).Conditions, conditionReady)
+		identityIn(t, principalOf(t, c.Client)).Conditions, conditionReady)
 	if ready == nil || ready.Reason != reasonMalformedRecord {
 		t.Errorf("Ready is %v, want %s; nothing anybody declared is wrong here",
 			ready, reasonMalformedRecord)
@@ -376,24 +376,24 @@ func TestAnIdThisOperatorWroteDownIsNotReportedAsABadSpec(t *testing.T) {
 func TestOneDeletedInDatabricksIsNotReplaced(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	first := identityIn(t, principalOf(t, h.Client)).ServicePrincipalID
+	first := identityIn(t, principalOf(t, c.Client)).ServicePrincipalID
 	stub.gone = first
 
 	// More than once. The decision has to survive the pass that records it: if
 	// the record is what holds it, and that pass erases the live id, the next
 	// pass reads "never built" and builds -- which is overruling the other side
 	// on a timer, one minute at a time.
-	h.settle(t)
+	c.settle(t)
 
 	if len(stub.created) != 1 {
 		t.Errorf("created %v; the one that was deleted in Databricks was replaced", stub.created)
 	}
 
-	principal := principalOf(t, h.Client)
+	principal := principalOf(t, c.Client)
 	if identityIn(t, principal).RemovedServicePrincipalID != first {
 		t.Errorf("removedServicePrincipalId is %q, want %q -- it is the value that searches "+
 			"Databricks' audit log for who deleted it",
@@ -430,35 +430,35 @@ func TestOneDeletedInDatabricksIsNotReplaced(t *testing.T) {
 func TestAskingAgainStartsAgain(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	stub.gone = identityIn(t, principalOf(t, h.Client)).ServicePrincipalID
-	h.settle(t)
+	stub.gone = identityIn(t, principalOf(t, c.Client)).ServicePrincipalID
+	c.settle(t)
 
-	stopsAsking(t, h.Client)
-	h.settle(t)
-	if h.issuedOf(t, asking(testNamespace, testName)) != nil {
+	stopsAsking(t, c.Client)
+	c.settle(t)
+	if c.issuedOf(t, asking(testNamespace, testName)) != nil {
 		t.Fatal("the record outlived the request it was made for")
 	}
 
 	stub.gone = ""
 	stub.newServicePrincipalID, stub.newClientID = "9900", "app-uuid-2"
 	serviceAccount := serviceAccountNamed(testNamespace, testName)
-	if err := h.Client.Get(context.Background(),
+	if err := c.Client.Get(context.Background(),
 		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 	serviceAccount.Annotations = map[string]string{
-		dbxv1alpha1.ServicePrincipalAnnotation: testOperator.String(),
+		dbxv1alpha1.ServicePrincipalAnnotation: testOperatorRef.String(),
 	}
-	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
+	if err := c.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	h.settle(t)
+	c.settle(t)
 
-	principal := principalOf(t, h.Client)
+	principal := principalOf(t, c.Client)
 	if principal == nil {
 		t.Fatal("nothing was issued after the annotation was written again")
 	}
@@ -478,9 +478,9 @@ func TestAskingAgainStartsAgain(t *testing.T) {
 func TestOneThatIsThereIsNotBuiltAgain(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
 	if len(stub.created) != 1 {
 		t.Errorf("created %v; the service principal was already there on every pass after the first",
@@ -515,15 +515,15 @@ func stopsAsking(t *testing.T, c client.Client) {
 func TestAFailedDeleteHoldsTheRecord(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	stopsAsking(t, h.Client)
+	stopsAsking(t, c.Client)
 	stub.deleteErr = errors.New("the service is temporarily unavailable")
-	h.settle(t)
+	c.settle(t)
 
-	held := h.issuedOf(t, asking(testNamespace, testName))
+	held := c.issuedOf(t, asking(testNamespace, testName))
 	if held == nil {
 		t.Fatal("the record went while its service principal is still in Databricks")
 	}
@@ -536,17 +536,17 @@ func TestAFailedDeleteHoldsTheRecord(t *testing.T) {
 	// is asking any more, so there is nothing to show. What is owed is owed on the
 	// record, in the operator's own namespace, where waiting blocks nobody's
 	// namespace from being deleted.
-	if principalOf(t, h.Client) != nil {
+	if principalOf(t, c.Client) != nil {
 		t.Error("the DatabricksServiceAccount outlived the request; it shows what is asked for and nothing asks")
 	}
 
 	// And it is owed until it is paid.
 	stub.deleteErr = nil
-	h.settle(t)
+	c.settle(t)
 	if len(stub.deleted) != 1 {
 		t.Errorf("deleted %v, want the retry to have removed it", stub.deleted)
 	}
-	if h.issuedOf(t, asking(testNamespace, testName)) != nil {
+	if c.issuedOf(t, asking(testNamespace, testName)) != nil {
 		t.Error("the record is still there after the call landed")
 	}
 }
@@ -561,15 +561,15 @@ func TestAFailedDeleteHoldsTheRecord(t *testing.T) {
 func TestAnEmptyIssuerIsReportedRatherThanSent(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.Issued.TokenPath = writeTokenAs(t, "", "system:serviceaccount:operators:controller-manager", testAudience)
-	h.settle(t)
+	c.Issued.TokenPath = writeTokenAs(t, "", "system:serviceaccount:operators:controller-manager", testAudience)
+	c.settle(t)
 
 	if len(stub.policies) != 0 {
 		t.Errorf("wrote %v; an empty issuer is a policy nothing can satisfy", stub.policies)
 	}
-	principal := principalOf(t, h.Client)
+	principal := principalOf(t, c.Client)
 	ready := meta.FindStatusCondition(identityIn(t, principal).Conditions, conditionReady)
 	if ready == nil || ready.Reason != reasonUnprepared {
 		t.Errorf("Ready is %v, want %s -- what could not be read is the operator's own token, "+
@@ -624,7 +624,7 @@ func tokenVolumeFor(audience string) corev1.Volume {
 			Projected: &corev1.ProjectedVolumeSource{
 				Sources: []corev1.VolumeProjection{{
 					ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
-						Path:     dbxwebhook.TokenProjectionPathFor(testOperator.String()),
+						Path:     dbxwebhook.TokenProjectionPathFor(testOperatorRef.String()),
 						Audience: audience,
 					},
 				}},
@@ -643,12 +643,12 @@ func tokenVolumeFor(audience string) corev1.Volume {
 func equippedPod(serviceAccount string, identities ...dbxv1alpha1.ProjectedIdentity) *corev1.Pod {
 	if len(identities) == 0 {
 		identities = []dbxv1alpha1.ProjectedIdentity{{
-			Profile: testOperator.String(), ClientID: "app-uuid", Audience: testAudience,
+			Profile: testOperatorRef.String(), ClientID: "app-uuid", Audience: testAudience,
 		}}
 	}
 	pod := rawPodRunningAs(serviceAccount, tokenVolume())
 	pod.Annotations = map[string]string{
-		dbxwebhook.ConfigAnnotation: dbxwebhook.Configuration(identities),
+		dbxwebhook.ConfigAnnotation: dbxwebhook.Profiles(identities),
 	}
 	return cached(pod)
 }
@@ -674,12 +674,12 @@ func equipment(t *testing.T, c client.Client) *metav1.Condition {
 func TestAPodRunningWithoutTheTokenIsReported(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName),
 		podRunningAs(testName))
-	h.settle(t)
+	c.settle(t)
 
-	condition := equipment(t, h.Client)
+	condition := equipment(t, c.Client)
 	if condition == nil || condition.Status != metav1.ConditionFalse {
 		t.Fatalf("Equipped is %v, want it to say a pod is running without the token", condition)
 	}
@@ -710,12 +710,12 @@ func TestAPodRunningWithoutTheTokenIsReported(t *testing.T) {
 func TestAFullyEquippedPodIsNotReported(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName),
 		equippedPod(testName))
-	h.settle(t)
+	c.settle(t)
 
-	condition := equipment(t, h.Client)
+	condition := equipment(t, c.Client)
 	if condition == nil || condition.Status != metav1.ConditionTrue {
 		t.Errorf("Equipped is %v for a pod that has everything it needs", condition)
 	}
@@ -734,12 +734,12 @@ func TestAPodCarryingAnOlderConfigurationIsReported(t *testing.T) {
 	stub := &stubClients{}
 	// The token is there, and the configuration is from before the client id
 	// was known.
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName),
 		podRunningAs(testName, tokenVolume()))
-	h.settle(t)
+	c.settle(t)
 
-	condition := equipment(t, h.Client)
+	condition := equipment(t, c.Client)
 	if condition == nil || condition.Status != metav1.ConditionFalse {
 		t.Fatalf("Equipped is %v, want it to say a pod carries an older answer than the "+
 			"identity gives now", condition)
@@ -765,24 +765,24 @@ func TestAPodCarryingAnOlderConfigurationIsReported(t *testing.T) {
 func TestPodsHoldingAProfileForAServicePrincipalThatIsGoneAreNotCalledEquipped(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName),
 		equippedPod(testName))
-	h.settle(t)
+	c.settle(t)
 
-	if condition := equipment(t, h.Client); condition == nil ||
+	if condition := equipment(t, c.Client); condition == nil ||
 		condition.Status != metav1.ConditionTrue {
 		t.Fatalf("Equipped is %v before anything was deleted; the rest of this test says "+
 			"nothing unless it starts from a pod that was equipped", condition)
 	}
 
-	stub.gone = identityIn(t, principalOf(t, h.Client)).ServicePrincipalID
-	h.settle(t)
+	stub.gone = identityIn(t, principalOf(t, c.Client)).ServicePrincipalID
+	c.settle(t)
 
-	if got := identityIn(t, principalOf(t, h.Client)).ClientID; got != "" {
+	if got := identityIn(t, principalOf(t, c.Client)).ClientID; got != "" {
 		t.Fatalf("clientId is %q; this test is about what is reported once it is cleared", got)
 	}
-	condition := equipment(t, h.Client)
+	condition := equipment(t, c.Client)
 	if condition == nil || condition.Status != metav1.ConditionFalse {
 		t.Fatalf("Equipped is %v for a pod carrying a profile for a service principal that is "+
 			"not there; that pod cannot reach Databricks and the object says it can", condition)
@@ -803,12 +803,12 @@ func TestPodsHoldingAProfileForAServicePrincipalThatIsGoneAreNotCalledEquipped(t
 func TestPodsInANamespaceThatInjectsNothingAreToldSo(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingWithoutInjecting(testNamespace), asking(testNamespace, testName),
 		podRunningAs(testName))
-	h.settle(t)
+	c.settle(t)
 
-	condition := equipment(t, h.Client)
+	condition := equipment(t, c.Client)
 	if condition == nil || condition.Status != metav1.ConditionFalse {
 		t.Fatalf("Equipped is %v, want it to say the pod has no token", condition)
 	}
@@ -837,11 +837,11 @@ func TestPodsNobodyCanFixAreNotReported(t *testing.T) {
 	going.Finalizers = []string{"keeps.it/around"}
 
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName), finished, going)
-	h.settle(t)
+	c.settle(t)
 
-	if condition := equipment(t, h.Client); condition == nil || condition.Status != metav1.ConditionTrue {
+	if condition := equipment(t, c.Client); condition == nil || condition.Status != metav1.ConditionTrue {
 		t.Errorf("Equipped is %v; neither of those pods is one anybody can or should fix", condition)
 	}
 }
@@ -852,12 +852,12 @@ func TestPodsNobodyCanFixAreNotReported(t *testing.T) {
 func TestAnotherServiceAccountsPodsAreNotThisOnesProblem(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName),
 		podRunningAs("somebody-else"))
-	h.settle(t)
+	c.settle(t)
 
-	if condition := equipment(t, h.Client); condition == nil || condition.Status != metav1.ConditionTrue {
+	if condition := equipment(t, c.Client); condition == nil || condition.Status != metav1.ConditionTrue {
 		t.Errorf("Equipped is %v; that pod runs as another ServiceAccount", condition)
 	}
 }
@@ -876,17 +876,17 @@ func TestAnotherServiceAccountsPodsAreNotThisOnesProblem(t *testing.T) {
 // here would put the same reason in a log nobody is reading yet.
 func TestWithNoDatabricksAccountNothingBreaksAndEverythingSaysWhy(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, nil,
+	c := newControllers(t, nil,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 	// The real holder rather than the stub: with no DatabricksAccount it has no
 	// clients, and answering NotConfigured is the whole of what is being tested.
-	h.Issued.Databricks = dbx.NewHolder(operatorNamespace, accountObject)
+	c.Issued.Databricks = dbx.NewHolder(operatorNamespace, accountObject)
 
-	h.settle(t)
+	c.settle(t)
 
 	// The object is made either way: creating it is a Kubernetes act, and having
 	// it is what carries the explanation.
-	principal := principalOf(t, h.Client)
+	principal := principalOf(t, c.Client)
 	if principal == nil {
 		t.Fatal("no object was created; there is then nowhere to say why nothing works")
 	}
@@ -929,11 +929,11 @@ func TestEnablingANamespaceWakesTheServiceAccountsInIt(t *testing.T) {
 	elsewhere := asking("team-b", "loader")
 
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asked, silent,
 		namespaceNamed("team-b"), elsewhere)
 
-	requests := h.DatabricksServiceAccounts.identitiesInNamespace(
+	requests := c.DatabricksServiceAccounts.identitiesInNamespace(
 		context.Background(), mintingNamespace(testNamespace))
 
 	if len(requests) != 1 {
@@ -950,12 +950,12 @@ func TestEnablingANamespaceWakesTheServiceAccountsInIt(t *testing.T) {
 func TestEnablingANamespaceWakesNothingElse(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		namespaceNamed("team-b"),
 		serviceAccountNamed("team-b", "one"),
 		serviceAccountNamed("team-b", "two"))
 
-	if requests := h.DatabricksServiceAccounts.identitiesInNamespace(
+	if requests := c.DatabricksServiceAccounts.identitiesInNamespace(
 		context.Background(), namespaceNamed("team-b")); len(requests) != 0 {
 		t.Errorf("woke %+v; none of those ServiceAccounts asked for anything", requests)
 	}
@@ -975,14 +975,14 @@ func TestEnablingANamespaceWakesAServiceAccountItCanOnlyRefuse(t *testing.T) {
 	t.Parallel()
 	mistyped := serviceAccountNamed(testNamespace, "mistyped")
 	mistyped.Annotations = map[string]string{
-		dbxv1alpha1.ServicePrincipalAnnotationFor(""): strings.ReplaceAll(testOperator.String(), "/", ""),
+		dbxv1alpha1.ServicePrincipalAnnotationFor(""): strings.ReplaceAll(testOperatorRef.String(), "/", ""),
 	}
 
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), mistyped, serviceAccountNamed(testNamespace, "no-databricks"))
 
-	requests := h.DatabricksServiceAccounts.identitiesInNamespace(
+	requests := c.DatabricksServiceAccounts.identitiesInNamespace(
 		context.Background(), mintingNamespace(testNamespace))
 
 	if len(requests) != 1 {
@@ -1007,22 +1007,22 @@ func TestEnablingANamespaceWakesAServiceAccountItCanOnlyRefuse(t *testing.T) {
 func TestANamespaceWithMintingClosedKeepsWhatItHas(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	before := principalOf(t, h.Client)
+	before := principalOf(t, c.Client)
 	if before == nil || identityIn(t, before).ServicePrincipalID == "" {
 		t.Fatal("no identity to close minting on")
 	}
 
 	namespace := namespaceNamed(testNamespace)
-	if err := h.Client.Update(context.Background(), namespace); err != nil {
+	if err := c.Client.Update(context.Background(), namespace); err != nil {
 		t.Fatal(err)
 	}
-	h.settle(t)
+	c.settle(t)
 
-	after := principalOf(t, h.Client)
+	after := principalOf(t, c.Client)
 	if after == nil {
 		t.Fatal("the identity was deleted; closing minting on a namespace is not a workload " +
 			"asking to be revoked, and rebuilding produces a new applicationId")
@@ -1053,11 +1053,11 @@ func TestANamespaceWithMintingClosedKeepsWhatItHas(t *testing.T) {
 func TestANamespaceWithMintingClosedMintsNothingNew(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		namespaceNamed(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	if principalOf(t, h.Client) != nil {
+	if principalOf(t, c.Client) != nil {
 		t.Error("an identity was minted in a namespace where minting was never opened")
 	}
 	if len(stub.created) != 0 {
@@ -1078,13 +1078,13 @@ func TestANamespaceWithMintingClosedMintsNothingNew(t *testing.T) {
 func TestANamespaceThisOperatorDoesNotServeIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		accountServing("somebody-elses-namespace"),
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 
-	h.settle(t)
+	c.settle(t)
 
-	if principalOf(t, h.Client) != nil {
+	if principalOf(t, c.Client) != nil {
 		t.Error("an identity was made in a namespace this operator was not told to serve")
 	}
 	if len(stub.created) != 0 {
@@ -1095,13 +1095,13 @@ func TestANamespaceThisOperatorDoesNotServeIsLeftAlone(t *testing.T) {
 // TestANamespaceThisOperatorServesIsServed is the positive case.
 func TestANamespaceThisOperatorServesIsServed(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, &stubClients{},
+	c := newControllers(t, &stubClients{},
 		accountServing(testNamespace),
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 
-	h.settle(t)
+	c.settle(t)
 
-	if principalOf(t, h.Client) == nil {
+	if principalOf(t, c.Client) == nil {
 		t.Error("no identity was made in a namespace this operator serves")
 	}
 }
@@ -1116,12 +1116,12 @@ func TestANamespaceThisOperatorServesIsServed(t *testing.T) {
 func TestNamingNoNamespacesServesNothing(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		accountServing(), mintingNamespace(testNamespace), asking(testNamespace, testName))
 
-	h.settle(t)
+	c.settle(t)
 
-	if principalOf(t, h.Client) != nil {
+	if principalOf(t, c.Client) != nil {
 		t.Error("an identity was made where nobody had said this operator may act")
 	}
 	if len(stub.created) != 0 {
@@ -1148,11 +1148,11 @@ func TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted(t *testing.T) {
 
 	// Absent from this account, which is what a lookup in the wrong one answers.
 	stub := &stubClients{accountID: "somewhere-else", gone: "7788"}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, existing)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, existing)
 
-	h.settle(t)
+	c.settle(t)
 
-	got := h.issuedOf(t, serviceAccount)
+	got := c.issuedOf(t, serviceAccount)
 	if got == nil {
 		t.Fatal("the record is gone")
 	}
@@ -1174,7 +1174,7 @@ func TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted(t *testing.T) {
 
 	// And the owner of the namespace can read all of that without being able to
 	// read the operator's own.
-	databricksServiceAccount := principalOf(t, h.Client)
+	databricksServiceAccount := principalOf(t, c.Client)
 	if databricksServiceAccount == nil {
 		t.Fatal("nothing was databricksServiceAccount")
 	}
@@ -1191,11 +1191,11 @@ func TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted(t *testing.T) {
 func TestTheAccountIsRecordedWithTheId(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	got := principalOf(t, h.Client)
+	got := principalOf(t, c.Client)
 	if got == nil {
 		t.Fatal("no identity was recorded")
 	}
@@ -1215,18 +1215,18 @@ func TestTheAccountIsRecordedWithTheId(t *testing.T) {
 func TestDeletingTheDatabricksServiceAccountChangesNothing(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.settle(t)
+	c.settle(t)
 
-	before := principalOf(t, h.Client)
+	before := principalOf(t, c.Client)
 	if before == nil || identityIn(t, before).ServicePrincipalID == "" {
 		t.Fatal("nothing was built to delete")
 	}
-	if err := h.Client.Delete(context.Background(), before); err != nil {
+	if err := c.Client.Delete(context.Background(), before); err != nil {
 		t.Fatal(err)
 	}
-	h.settle(t)
+	c.settle(t)
 
 	if len(stub.deleted) != 0 {
 		t.Errorf("deleted %v in Databricks; the ServiceAccount is still asking for it",
@@ -1236,7 +1236,7 @@ func TestDeletingTheDatabricksServiceAccountChangesNothing(t *testing.T) {
 		t.Errorf("created %v; deleting a copy is not a reason to make a second identity",
 			stub.created)
 	}
-	after := principalOf(t, h.Client)
+	after := principalOf(t, c.Client)
 	if after == nil {
 		t.Fatal("the DatabricksServiceAccount did not come back")
 	}
@@ -1252,12 +1252,12 @@ func TestDeletingTheDatabricksServiceAccountChangesNothing(t *testing.T) {
 func TestTheObjectComesBackAdoptingWhatIsThere(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 
-	h.settle(t)
+	c.settle(t)
 
-	got := principalOf(t, h.Client)
+	got := principalOf(t, c.Client)
 	if got == nil {
 		t.Fatal("no identity was recorded")
 	}
@@ -1289,16 +1289,16 @@ func TestAPodCarryingATokenForAnotherAudienceIsReported(t *testing.T) {
 	// the audience is the only thing that can produce the report.
 	pod := rawPodRunningAs(testName, tokenVolumeFor(""))
 	pod.Annotations = map[string]string{
-		dbxwebhook.ConfigAnnotation: dbxwebhook.Configuration(
+		dbxwebhook.ConfigAnnotation: dbxwebhook.Profiles(
 			[]dbxv1alpha1.ProjectedIdentity{{
-				Profile: testOperator.String(), ClientID: "app-uuid", Audience: testAudience,
+				Profile: testOperatorRef.String(), ClientID: "app-uuid", Audience: testAudience,
 			}}),
 	}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName), cached(pod))
-	h.settle(t)
+	c.settle(t)
 
-	condition := equipment(t, h.Client)
+	condition := equipment(t, c.Client)
 	if condition == nil || condition.Status != metav1.ConditionFalse {
 		t.Fatalf("Equipped is %v; the token in that pod was minted for the audience kubelet "+
 			"defaults to, which no federation policy names", condition)
@@ -1325,18 +1325,18 @@ func TestAPodCarryingATokenForAnotherAudienceIsReported(t *testing.T) {
 func TestATokenThatCouldNotBeReadRecoversWhenItCan(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 
-	good := h.Issued.TokenPath
-	h.Issued.TokenPath = filepath.Join(t.TempDir(), "not-there-yet")
-	h.settle(t)
+	good := c.Issued.TokenPath
+	c.Issued.TokenPath = filepath.Join(t.TempDir(), "not-there-yet")
+	c.settle(t)
 
 	if len(stub.created) != 0 {
 		t.Errorf("created %v while the operator could not read its own token; the issuer that "+
 			"went into those policies came from nowhere", stub.created)
 	}
-	principal := principalOf(t, h.Client)
+	principal := principalOf(t, c.Client)
 	if principal == nil {
 		t.Fatal("nothing was projected, so nothing says why this is stuck")
 	}
@@ -1347,14 +1347,14 @@ func TestATokenThatCouldNotBeReadRecoversWhenItCan(t *testing.T) {
 	}
 
 	// And the file appears, as it does a moment after a pod starts.
-	h.Issued.TokenPath = good
-	h.settle(t)
+	c.Issued.TokenPath = good
+	c.settle(t)
 
 	if len(stub.created) != 1 {
 		t.Errorf("created %v after the token could be read; one bad moment is still permanent",
 			stub.created)
 	}
-	if got := principalOf(t, h.Client); identityIn(t, got).ClientID == "" {
+	if got := principalOf(t, c.Client); identityIn(t, got).ClientID == "" {
 		t.Errorf("status is %+v, want the identity to have converged", got.Status)
 	}
 }
@@ -1369,16 +1369,16 @@ func TestATokenThatCouldNotBeReadRecoversWhenItCan(t *testing.T) {
 func TestATokenCarryingNoAudienceIsRefusedRatherThanSent(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	h.Issued.TokenPath = writeTokenAs(t, testIssuer,
+	c.Issued.TokenPath = writeTokenAs(t, testIssuer,
 		"system:serviceaccount:operators:controller-manager", "")
-	h.settle(t)
+	c.settle(t)
 
 	if len(stub.policies) != 0 {
 		t.Errorf("wrote %v; a policy naming no audience is one no token can satisfy", stub.policies)
 	}
-	principal := principalOf(t, h.Client)
+	principal := principalOf(t, c.Client)
 	if principal == nil {
 		t.Fatal("nothing was projected")
 	}
@@ -1397,15 +1397,15 @@ func TestATokenCarryingNoAudienceIsRefusedRatherThanSent(t *testing.T) {
 func TestAnAnnotationNamingAnotherOperatorIsNotThisOnesRequest(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	h := newHarness(t, stub,
+	c := newControllers(t, stub,
 		mintingNamespace(testNamespace),
 		askingOf(testNamespace, testName, "somebody-else/databricks-account"))
-	h.settle(t)
+	c.settle(t)
 
 	if len(stub.created) != 0 {
 		t.Errorf("created %v for a request naming another operator", stub.created)
 	}
-	if principalOf(t, h.Client) != nil {
+	if principalOf(t, c.Client) != nil {
 		t.Error("projected an identity this operator was not asked for")
 	}
 }
@@ -1419,10 +1419,10 @@ func TestAServiceAccountAskingSeveralOperatorsIsAskingThisOne(t *testing.T) {
 	serviceAccount := asking(testNamespace, testName)
 	serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("elsewhere")] =
 		"somebody-else/databricks-account"
-	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount)
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount)
+	c.settle(t)
 
-	principal := principalOf(t, h.Client)
+	principal := principalOf(t, c.Client)
 	if principal == nil {
 		t.Fatal("an operator named in the annotations did not answer")
 	}
@@ -1430,7 +1430,7 @@ func TestAServiceAccountAskingSeveralOperatorsIsAskingThisOne(t *testing.T) {
 		t.Fatalf("the DatabricksServiceAccount carries %+v; this operator was asked for one identity and the "+
 			"other key is another operator's to answer", principal.Status.Identities)
 	}
-	if identityIn(t, principal).Profile != testOperator.String() {
+	if identityIn(t, principal).Profile != testOperatorRef.String() {
 		t.Errorf("the entry is keyed %q, want this operator's own key",
 			identityIn(t, principal).Profile)
 	}

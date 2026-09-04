@@ -25,8 +25,8 @@ import (
 	"github.com/workload-identity/databricks-service-principal-operator/internal/databricks"
 )
 
-// outcome is what one lookup against Databricks means: how to say it in a
-// condition, and when to come back.
+// outcome is what one step of a pass amounts to, whether it asked Databricks or
+// only the cluster: how to say it in a condition, and when to come back.
 //
 // Both fields put the object back in the queue; they differ in how. Result asks
 // for it after a fixed delay. Err hands it to the rate limiter instead, which

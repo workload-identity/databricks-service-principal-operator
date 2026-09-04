@@ -68,7 +68,7 @@ func init() {
 type settings struct {
 	DatabricksAccountNamespacedName types.NamespacedName
 	Holder                          *databricks.Holder
-	Runtime                         databricks.Config
+	OwnToken                        databricks.Config
 }
 
 // reconcilers builds all three controllers from what was decided. It starts
@@ -86,7 +86,7 @@ func reconcilers(s settings, c client.Client, live client.Reader, scheme *runtim
 			Scheme:                          scheme,
 			DatabricksAccountNamespacedName: s.DatabricksAccountNamespacedName,
 			Holder:                          s.Holder,
-			Runtime:                         s.Runtime,
+			OwnToken:                        s.OwnToken,
 		}, &controller.DatabricksServiceAccountReconciler{
 			Client:                          c,
 			Scheme:                          scheme,
@@ -98,7 +98,7 @@ func reconcilers(s settings, c client.Client, live client.Reader, scheme *runtim
 			Live:                            live,
 			DatabricksAccountNamespacedName: s.DatabricksAccountNamespacedName,
 			// The path, not what was read from it once. See TokenPath.
-			TokenPath: s.Runtime.OIDCTokenFilepath,
+			TokenPath: s.OwnToken.OIDCTokenFilepath,
 		}
 }
 
@@ -273,7 +273,7 @@ func main() {
 
 	decided.DatabricksAccountNamespacedName = account
 	decided.Holder = dbClients
-	decided.Runtime = runtimeCfg
+	decided.OwnToken = runtimeCfg
 
 	accountReconciler, databricksServiceAccountReconciler, issuedReconciler := reconcilers(
 		decided, mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme())

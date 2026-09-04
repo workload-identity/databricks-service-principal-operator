@@ -341,7 +341,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 	// -- the operator could not read its own token, so it has not asked
 	// Databricks anything -- and False would report this identity as wrong on
 	// the strength of never having looked at it.
-	issuer, audience, err := r.issued(ctx)
+	issuer, audience, err := r.issuerAndAudience(ctx)
 	if err != nil {
 		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
 	}
@@ -660,7 +660,8 @@ func (r *IssuedDatabricksServicePrincipalReconciler) elsewhere(clients databrick
 		issued.Status.AccountID, here, issued.Status.AccountID)
 }
 
-// issued is the issuer and audience this operator's own token carries, read now.
+// issuerAndAudience is the issuer and audience this operator's own token
+// carries, read now.
 //
 // Both are taken from what is actually presented rather than from anything
 // configured: every ServiceAccount in a cluster is issued tokens by the same
@@ -674,7 +675,8 @@ func (r *IssuedDatabricksServicePrincipalReconciler) elsewhere(clients databrick
 // audience but the one named is refused, with the audience presented echoed back
 // -- and writing it would leave an identity that looks built and can never be
 // exchanged for.
-func (r *IssuedDatabricksServicePrincipalReconciler) issued(context.Context) (issuer, audience string, err error) {
+func (r *IssuedDatabricksServicePrincipalReconciler) issuerAndAudience(context.Context) (
+	issuer, audience string, err error) {
 	claims, err := databricks.ReadTokenClaims(r.TokenPath)
 	if err != nil {
 		return "", "", err

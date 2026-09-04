@@ -23,8 +23,8 @@ import (
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 )
 
-// Configuration renders the identities as the Databricks SDK's own config file,
-// one profile per identity.
+// Profiles renders the identities as the Databricks SDK's own config file, one
+// profile per identity.
 //
 // The SDK's own format rather than anything of this project's, because the
 // workload already has a way to read it and this operator has no business
@@ -37,7 +37,7 @@ import (
 // lets the unnamed one be the reference itself rather than something derived
 // from it -- and a derivation would be a rule the workload had to learn in order
 // to name its own profile.
-func Configuration(identities []dbxv1alpha1.ProjectedIdentity) string {
+func Profiles(identities []dbxv1alpha1.ProjectedIdentity) string {
 	var rendered strings.Builder
 	for _, identity := range identities {
 		if identity.ClientID == "" {

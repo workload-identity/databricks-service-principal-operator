@@ -26,7 +26,7 @@ func TestEverySettingReachesAReconciler(t *testing.T) {
 	want := settings{
 		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: "operators", Name: "the-account"},
 		Holder:                          databricks.NewHolder("operators", "the-account"),
-		Runtime: databricks.Config{
+		OwnToken: databricks.Config{
 			OIDCTokenFilepath: "/var/run/secrets/databricks/token",
 			TokenAudience:     "databricks",
 		},
@@ -47,13 +47,13 @@ func TestEverySettingReachesAReconciler(t *testing.T) {
 		t.Error("the two controllers were not given the same Holder; the account controller " +
 			"is the only writer and the record controller reads what it wrote")
 	}
-	if account.Runtime != want.Runtime {
-		t.Errorf("Runtime is %+v, want %+v -- the operator would look for its token somewhere "+
-			"other than where the Deployment mounts it", account.Runtime, want.Runtime)
+	if account.OwnToken != want.OwnToken {
+		t.Errorf("OwnToken is %+v, want %+v -- the operator would look for its token somewhere "+
+			"other than where the Deployment mounts it", account.OwnToken, want.OwnToken)
 	}
-	if issued.TokenPath != want.Runtime.OIDCTokenFilepath {
+	if issued.TokenPath != want.OwnToken.OIDCTokenFilepath {
 		t.Errorf("TokenPath is %q, want %q -- the issuer every federation policy names and the "+
 			"audience every pod is given are read from that file",
-			issued.TokenPath, want.Runtime.OIDCTokenFilepath)
+			issued.TokenPath, want.OwnToken.OIDCTokenFilepath)
 	}
 }

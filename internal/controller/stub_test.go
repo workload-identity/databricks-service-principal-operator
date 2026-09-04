@@ -270,9 +270,9 @@ func serviceAccountNamed(namespace, name string) *corev1.ServiceAccount {
 	}
 }
 
-// testOperator is the operator these tests are, named the way a ServiceAccount
+// testOperatorRef names the operator these tests are, the way a ServiceAccount
 // names one: by the DatabricksAccount it acts on.
-var testOperator = types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
+var testOperatorRef = types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
 
 // asking is a ServiceAccount whose bare key names this operator, which is the
 // request for its unnamed identity.
@@ -293,18 +293,19 @@ func askingOf(namespace, name, value string) *corev1.ServiceAccount {
 // survives a tenant's namespace being torn down.
 //
 // The same namespace the DatabricksAccount is in, because that is what the
-// operator is given: both come from its own POD_NAMESPACE. A harness that told
+// operator is given: both come from its own POD_NAMESPACE. A fixture that told
 // them apart would let the account controller list records it would find in a
 // cluster and find none here.
 const testRecords = operatorNamespace
 
-// harness is both controllers over one fake cluster.
+// controllers is both controllers over one fake cluster, answered by one stub
+// client.
 //
 // They are run together because neither is the feature on its own: one decides
 // that an identity should exist and shows what exists, the other makes it exist
 // and destroys it. A test that ran only one would be asserting about half of a
 // sentence.
-type harness struct {
+type controllers struct {
 	DatabricksServiceAccounts *DatabricksServiceAccountReconciler
 	Issued                    *IssuedDatabricksServicePrincipalReconciler
 	Client                    client.Client
@@ -315,7 +316,7 @@ type harness struct {
 // namespaces it will act in.
 //
 // Supplied by a test that is about the reach itself. Every other test gets the
-// one newHarness seeds, which serves testNamespace: an operator that serves
+// one newControllers seeds, which serves testNamespace: an operator that serves
 // nothing does nothing, so without a default every test in this package would be
 // asserting about a closed door.
 func accountServing(namespaces ...string) *dbxv1alpha1.DatabricksAccount {
@@ -324,14 +325,14 @@ func accountServing(namespaces ...string) *dbxv1alpha1.DatabricksAccount {
 	return served
 }
 
-func newHarness(t *testing.T, stub *stubClients, objects ...client.Object) *harness {
+func newControllers(t *testing.T, stub *stubClients, objects ...client.Object) *controllers {
 	t.Helper()
-	return newHarnessWith(t, stub, interceptor.Funcs{}, objects...)
+	return newControllersWith(t, stub, interceptor.Funcs{}, objects...)
 }
 
-// newHarnessWith is the same over a cluster that answers some calls itself.
-func newHarnessWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
-	objects ...client.Object) *harness {
+// newControllersWith is the same over a cluster that answers some calls itself.
+func newControllersWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
+	objects ...client.Object) *controllers {
 	t.Helper()
 	if !slices.ContainsFunc(objects, func(object client.Object) bool {
 		_, is := object.(*dbxv1alpha1.DatabricksAccount)
@@ -343,16 +344,16 @@ func newHarnessWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
 	// A real file, because the reconciler holds the path and reads it. Holding
 	// the reading instead is what made one bad moment at startup permanent.
 	token := writeTokenAs(t, testIssuer, "system:serviceaccount:operators:controller-manager", testAudience)
-	return &harness{
+	return &controllers{
 		DatabricksServiceAccounts: &DatabricksServiceAccountReconciler{
 			Client:                          c,
 			Scheme:                          scheme,
-			DatabricksAccountNamespacedName: testOperator,
+			DatabricksAccountNamespacedName: testOperatorRef,
 		},
 		Issued: &IssuedDatabricksServicePrincipalReconciler{
 			Client:                          c,
 			Scheme:                          scheme,
-			DatabricksAccountNamespacedName: testOperator,
+			DatabricksAccountNamespacedName: testOperatorRef,
 			// The fake client is both, because it has no cache to be behind.
 			// What the live reader is for is asserted where it matters, not
 			// here.
@@ -371,18 +372,18 @@ func newHarnessWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
 // record is written before anything is created, the create is a second pass, and
 // the DatabricksServiceAccount controller copying the result is a third. Hiding
 // that behind one call would be hiding the ordering the whole design rests on.
-func (h *harness) settle(t *testing.T) {
+func (c *controllers) settle(t *testing.T) {
 	t.Helper()
 	for range 4 {
-		h.project(t, testNamespace, testName)
-		h.records(t)
+		c.project(t, testNamespace, testName)
+		c.records(t)
 	}
 }
 
 // project runs the DatabricksServiceAccount controller for one ServiceAccount.
-func (h *harness) project(t *testing.T, namespace, name string) {
+func (c *controllers) project(t *testing.T, namespace, name string) {
 	t.Helper()
-	if _, err := h.DatabricksServiceAccounts.Reconcile(context.Background(), reconcile.Request{
+	if _, err := c.DatabricksServiceAccounts.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Namespace: namespace, Name: name},
 	}); err != nil {
 		t.Fatalf("projecting %s/%s: %v", namespace, name, err)
@@ -390,14 +391,14 @@ func (h *harness) project(t *testing.T, namespace, name string) {
 }
 
 // records runs the record controller over every record there is.
-func (h *harness) records(t *testing.T) {
+func (c *controllers) records(t *testing.T) {
 	t.Helper()
 	var list dbxv1alpha1.IssuedDatabricksServicePrincipalList
-	if err := h.Client.List(context.Background(), &list); err != nil {
+	if err := c.Client.List(context.Background(), &list); err != nil {
 		t.Fatal(err)
 	}
 	for i := range list.Items {
-		if _, err := h.Issued.Reconcile(context.Background(), reconcile.Request{
+		if _, err := c.Issued.Reconcile(context.Background(), reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(&list.Items[i]),
 		}); err != nil {
 			t.Fatalf("reconciling record %s: %v", list.Items[i].Name, err)
@@ -406,11 +407,11 @@ func (h *harness) records(t *testing.T) {
 }
 
 // issuedOf returns the record for one ServiceAccount, or nil if there is none.
-func (h *harness) issuedOf(t *testing.T,
+func (c *controllers) issuedOf(t *testing.T,
 	serviceAccount *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
 	t.Helper()
 	var issued dbxv1alpha1.IssuedDatabricksServicePrincipal
-	err := h.Client.Get(context.Background(), types.NamespacedName{
+	err := c.Client.Get(context.Background(), types.NamespacedName{
 		Namespace: testRecords,
 		Name:      dbxv1alpha1.IssuedNameFor(serviceAccount.Namespace, serviceAccount.Name, "", serviceAccount.UID),
 	}, &issued)

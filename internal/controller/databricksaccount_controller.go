@@ -94,8 +94,10 @@ type DatabricksAccountReconciler struct {
 	// writer.
 	Holder *databricks.Holder
 
-	// Runtime is the half of the config the Deployment decides.
-	Runtime databricks.Config
+	// OwnToken is where the operator's own projected token is mounted and what
+	// audience it carries: the half of the config the Deployment decides. The
+	// other half -- host, account and client -- is on the DatabricksAccount.
+	OwnToken databricks.Config
 
 	// build makes clients from a config. A field so a test can supply clients
 	// that answer without a network; SetupWithManager leaves it as databricks.New.
@@ -163,7 +165,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Nothing is overwritten when the read fails. It used to blank the subject
 	// and keep the audience, so half of what the object said went stale and the
 	// other half went missing, for the same one failure.
-	claims, claimsErr := databricks.ReadTokenClaims(r.Runtime.OIDCTokenFilepath)
+	claims, claimsErr := databricks.ReadTokenClaims(r.OwnToken.OIDCTokenFilepath)
 	if claimsErr == nil {
 		databricksAccount.Status.Subject = claims.Subject
 		if len(claims.Audience) > 0 {
@@ -191,7 +193,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// for as long as Databricks happens to be unreachable.
 	withdrawn := r.withdraw(ctx, &databricksAccount, records)
 
-	cfg := r.Runtime.ForAccount(databricksAccount.Spec.Host,
+	cfg := r.OwnToken.ForAccount(databricksAccount.Spec.Host,
 		databricksAccount.Spec.AccountID, databricksAccount.Spec.ClientID)
 
 	// Withdrawn before the new declaration is tried, not after it succeeds.

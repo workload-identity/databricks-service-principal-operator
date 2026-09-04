@@ -37,19 +37,19 @@ func TestANamespaceTeardownDestroysTheIdentityInEitherOrder(t *testing.T) {
 	t.Parallel()
 	for _, order := range []struct {
 		name  string
-		first func(t *testing.T, h *harness, serviceAccount *corev1.ServiceAccount)
+		first func(t *testing.T, c *controllers, serviceAccount *corev1.ServiceAccount)
 	}{
-		{"the DatabricksServiceAccount is deleted first", func(t *testing.T, h *harness, _ *corev1.ServiceAccount) {
-			principal := principalOf(t, h.Client)
+		{"the DatabricksServiceAccount is deleted first", func(t *testing.T, c *controllers, _ *corev1.ServiceAccount) {
+			principal := principalOf(t, c.Client)
 			if principal == nil {
 				t.Fatal("nothing was projected")
 			}
-			if err := h.Client.Delete(context.Background(), principal); err != nil {
+			if err := c.Client.Delete(context.Background(), principal); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"the ServiceAccount is deleted first", func(t *testing.T, h *harness, serviceAccount *corev1.ServiceAccount) {
-			if err := h.Client.Delete(context.Background(), serviceAccount); err != nil {
+		{"the ServiceAccount is deleted first", func(t *testing.T, c *controllers, serviceAccount *corev1.ServiceAccount) {
+			if err := c.Client.Delete(context.Background(), serviceAccount); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -57,26 +57,26 @@ func TestANamespaceTeardownDestroysTheIdentityInEitherOrder(t *testing.T) {
 		t.Run(order.name, func(t *testing.T) {
 			serviceAccount := asking(testNamespace, testName)
 			stub := &stubClients{}
-			h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount)
-			h.settle(t)
+			c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount)
+			c.settle(t)
 
-			created := h.issuedOf(t, serviceAccount)
+			created := c.issuedOf(t, serviceAccount)
 			if created == nil || created.Status.ServicePrincipalID == "" {
 				t.Fatal("nothing was issued to tear down")
 			}
 
 			// Whichever went first, everything in the namespace is gone by the
 			// end of a teardown.
-			order.first(t, h, serviceAccount)
-			deleteEverythingIn(t, h.Client, testNamespace)
-			h.settle(t)
+			order.first(t, c, serviceAccount)
+			deleteEverythingIn(t, c.Client, testNamespace)
+			c.settle(t)
 
 			if len(stub.deleted) != 1 {
 				t.Errorf("deleted %v in Databricks, want the one identity whose ServiceAccount "+
 					"is gone; what is left is a service principal nothing records, and the next "+
 					"namespace of this name inherits it", stub.deleted)
 			}
-			if h.issuedOf(t, serviceAccount) != nil {
+			if c.issuedOf(t, serviceAccount) != nil {
 				t.Error("the record is still there after its service principal was deleted")
 			}
 		})
@@ -96,10 +96,10 @@ func TestARecreatedServiceAccountDoesNotInheritTheOldIdentity(t *testing.T) {
 	t.Parallel()
 	before := asking(testNamespace, testName)
 	stub := &stubClients{}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), before)
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), before)
+	c.settle(t)
 
-	inherited := h.issuedOf(t, before)
+	inherited := c.issuedOf(t, before)
 	if inherited == nil || inherited.Status.ServicePrincipalID == "" {
 		t.Fatal("nothing was issued to inherit")
 	}
@@ -107,27 +107,27 @@ func TestARecreatedServiceAccountDoesNotInheritTheOldIdentity(t *testing.T) {
 	// The same names, a different ServiceAccount. This is a namespace deleted
 	// and recreated, or simply a ServiceAccount deleted and recreated: from
 	// Databricks' side the two are indistinguishable.
-	if err := h.Client.Delete(context.Background(), before); err != nil {
+	if err := c.Client.Delete(context.Background(), before); err != nil {
 		t.Fatal(err)
 	}
 	after := asking(testNamespace, testName)
 	after.UID = types.UID("a-different-uid")
 	after.ResourceVersion = ""
-	if err := h.Client.Create(context.Background(), after); err != nil {
+	if err := c.Client.Create(context.Background(), after); err != nil {
 		t.Fatal(err)
 	}
 	stub.newServicePrincipalID, stub.newClientID = "9900", "app-uuid-2"
-	h.settle(t)
+	c.settle(t)
 
 	if len(stub.deleted) != 1 || stub.deleted[0] != inherited.Status.ServicePrincipalID {
 		t.Errorf("deleted %v, want the identity of the ServiceAccount that is gone; leaving it "+
 			"gives its permissions to whoever holds this namespace next", stub.deleted)
 	}
-	if h.issuedOf(t, before) != nil {
+	if c.issuedOf(t, before) != nil {
 		t.Error("the old record survived the ServiceAccount it was issued to")
 	}
 
-	issued := h.issuedOf(t, after)
+	issued := c.issuedOf(t, after)
 	if issued == nil {
 		t.Fatal("the new ServiceAccount was issued nothing")
 	}
@@ -152,16 +152,16 @@ func TestARecordWithNoIdStillDestroysWhatItMade(t *testing.T) {
 	// Nothing recorded, and something out there: what a crash between the two
 	// calls leaves behind.
 	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
 
-	stopsAsking(t, h.Client)
-	h.settle(t)
+	stopsAsking(t, c.Client)
+	c.settle(t)
 
 	if len(stub.deleted) != 1 || stub.deleted[0] != "7788" {
 		t.Errorf("deleted %v, want the service principal this record made and never named; "+
 			"nothing else in the cluster knows it exists", stub.deleted)
 	}
-	if h.issuedOf(t, serviceAccount) != nil {
+	if c.issuedOf(t, serviceAccount) != nil {
 		t.Error("the record is still there after what it made was deleted")
 	}
 }
@@ -179,20 +179,20 @@ func TestADeletionIsNotHeldOverAValueItDiscards(t *testing.T) {
 	serviceAccount := asking(testNamespace, testName)
 	issued := recordFor(serviceAccount)
 	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
 	// A token with an issuer and no aud claim. The issuer is what the search
 	// needs and it is there; the audience is what is missing and it is not.
-	h.Issued.TokenPath = writeTokenAs(t, testIssuer,
+	c.Issued.TokenPath = writeTokenAs(t, testIssuer,
 		"system:serviceaccount:operators:controller-manager", "")
 
-	stopsAsking(t, h.Client)
-	h.settle(t)
+	stopsAsking(t, c.Client)
+	c.settle(t)
 
 	if len(stub.deleted) != 1 || stub.deleted[0] != "7788" {
 		t.Errorf("deleted %v, want the service principal this record made; it is still there, "+
 			"and nothing outside this record knows it exists", stub.deleted)
 	}
-	if h.issuedOf(t, serviceAccount) != nil {
+	if c.issuedOf(t, serviceAccount) != nil {
 		t.Error("the record is still held, over a claim its remaining work never reads")
 	}
 }
@@ -211,20 +211,20 @@ func TestASettledIdentityIsNotAskedAboutAsOftenAsAFailingOne(t *testing.T) {
 	comeBackIn := func(t *testing.T, stub *stubClients) (time.Duration, *metav1.Condition) {
 		t.Helper()
 		serviceAccount := asking(testNamespace, testName)
-		h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount)
-		h.settle(t)
-		record := h.issuedOf(t, serviceAccount)
+		c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount)
+		c.settle(t)
+		record := c.issuedOf(t, serviceAccount)
 		if record == nil {
 			t.Fatal("nothing was issued to ask about")
 		}
-		result, err := h.Issued.Reconcile(context.Background(), reconcile.Request{
+		result, err := c.Issued.Reconcile(context.Background(), reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(record),
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return result.RequeueAfter, meta.FindStatusCondition(
-			h.issuedOf(t, serviceAccount).Status.Conditions, conditionReady)
+			c.issuedOf(t, serviceAccount).Status.Conditions, conditionReady)
 	}
 
 	settled, ready := comeBackIn(t, &stubClients{})
@@ -262,18 +262,18 @@ func TestTheDestroyingReadIsNotTakenFromTheCache(t *testing.T) {
 
 	// The cached client does not have the ServiceAccount; the live one does.
 	stub := &stubClients{}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), issued)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), issued)
 	live, _ := newFakeClient(t, mintingNamespace(testNamespace), serviceAccount)
-	h.Issued.Live = live
+	c.Issued.Live = live
 
-	h.records(t)
-	h.records(t)
+	c.records(t)
+	c.records(t)
 
 	if len(stub.deleted) != 0 {
 		t.Errorf("deleted %v on a cache that had not caught up; the ServiceAccount is there and "+
 			"still asking", stub.deleted)
 	}
-	held := h.issuedOf(t, serviceAccount)
+	held := c.issuedOf(t, serviceAccount)
 	if held == nil {
 		t.Fatal("the record was dropped on a stale read")
 	}
@@ -307,20 +307,20 @@ func TestARecordIsHeldRatherThanActedOnInTheWrongAccount(t *testing.T) {
 		accountID: "the-account-it-was-made-in",
 		deleteErr: errors.New("the service is temporarily unavailable"),
 	}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
-	stopsAsking(t, h.Client)
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
+	stopsAsking(t, c.Client)
+	c.settle(t)
 
-	if h.issuedOf(t, serviceAccount).DeletionTimestamp.IsZero() {
+	if c.issuedOf(t, serviceAccount).DeletionTimestamp.IsZero() {
 		t.Fatal("the record is not on its way out; this test is about one that is")
 	}
 
 	// And now the operator is pointed somewhere else.
 	stub.accountID = "somewhere-else"
 	stub.deleteErr = nil
-	h.settle(t)
+	c.settle(t)
 
-	held := h.issuedOf(t, serviceAccount)
+	held := c.issuedOf(t, serviceAccount)
 	if held == nil {
 		t.Fatal("the record went while its service principal is alive in another account")
 	}
@@ -336,13 +336,13 @@ func TestARecordIsHeldRatherThanActedOnInTheWrongAccount(t *testing.T) {
 	// It resumes when the operator comes back, without anybody having to
 	// remember that it was waiting.
 	stub.accountID = "the-account-it-was-made-in"
-	h.settle(t)
+	c.settle(t)
 
 	if len(stub.deleted) != 1 || stub.deleted[0] != "7788" {
 		t.Errorf("deleted %v after the operator came back to the account it was made in, "+
 			"want the identity it was holding", stub.deleted)
 	}
-	if h.issuedOf(t, serviceAccount) != nil {
+	if c.issuedOf(t, serviceAccount) != nil {
 		t.Error("the record is still there after what it held was deleted")
 	}
 }
@@ -397,10 +397,10 @@ func TestARecordWithNoFinalizerGetsOneBeforeAnythingIsCreated(t *testing.T) {
 	bare.Finalizers = nil
 
 	stub := &stubClients{}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, bare)
-	h.records(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, bare)
+	c.records(t)
 
-	issued := h.issuedOf(t, serviceAccount)
+	issued := c.issuedOf(t, serviceAccount)
 	if issued == nil {
 		t.Fatal("the record is gone")
 	}
@@ -414,7 +414,7 @@ func TestARecordWithNoFinalizerGetsOneBeforeAnythingIsCreated(t *testing.T) {
 	}
 
 	// And the next pass builds, so this costs a pass and not the identity.
-	h.records(t)
+	c.records(t)
 	if len(stub.created) != 1 {
 		t.Errorf("created %v on the pass after; adding the finalizer stopped it building at all",
 			stub.created)
@@ -443,24 +443,24 @@ func TestRemovingTheFinalizerByHandIsNotArguedWith(t *testing.T) {
 	held.Finalizers = append(held.Finalizers, "example.com/held-by-something-else")
 
 	stub := &stubClients{deleteErr: errors.New("the service is temporarily unavailable")}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, held)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, held)
 
-	stopsAsking(t, h.Client)
-	h.settle(t)
+	stopsAsking(t, c.Client)
+	c.settle(t)
 
-	stuck := h.issuedOf(t, serviceAccount)
+	stuck := c.issuedOf(t, serviceAccount)
 	if stuck == nil || stuck.DeletionTimestamp.IsZero() {
 		t.Fatal("the record is not being held on its way out; this test is about one that is")
 	}
 
 	// The person who can see what is left behind decides.
 	controllerutil.RemoveFinalizer(stuck, dbxv1alpha1.ServicePrincipalFinalizer)
-	if err := h.Client.Update(context.Background(), stuck); err != nil {
+	if err := c.Client.Update(context.Background(), stuck); err != nil {
 		t.Fatal(err)
 	}
-	h.settle(t)
+	c.settle(t)
 
-	got := h.issuedOf(t, serviceAccount)
+	got := c.issuedOf(t, serviceAccount)
 	if got == nil {
 		t.Fatal("the record went; something else is still holding it")
 	}
@@ -491,10 +491,10 @@ func TestAnIdRecordedWithNoAccountIsNotConcludedFrom(t *testing.T) {
 	// No account: a record written before this was kept, or edited by hand.
 
 	stub := &stubClients{gone: "7788"}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, carried)
-	h.settle(t)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, carried)
+	c.settle(t)
 
-	issued := h.issuedOf(t, serviceAccount)
+	issued := c.issuedOf(t, serviceAccount)
 	if issued == nil {
 		t.Fatal("the record is gone")
 	}
@@ -532,11 +532,11 @@ func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
 	t.Parallel()
 	for _, going := range []struct {
 		name string
-		run  func(t *testing.T, h *harness, serviceAccount *corev1.ServiceAccount)
+		run  func(t *testing.T, c *controllers, serviceAccount *corev1.ServiceAccount)
 	}{
-		{"converging", func(*testing.T, *harness, *corev1.ServiceAccount) {}},
-		{"on its way out", func(t *testing.T, h *harness, _ *corev1.ServiceAccount) {
-			stopsAsking(t, h.Client)
+		{"converging", func(*testing.T, *controllers, *corev1.ServiceAccount) {}},
+		{"on its way out", func(t *testing.T, c *controllers, _ *corev1.ServiceAccount) {
+			stopsAsking(t, c.Client)
 		}},
 	} {
 		t.Run(going.name, func(t *testing.T) {
@@ -548,12 +548,12 @@ func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
 			existing.Status.AccountID = testAccountID
 
 			stub := &stubClients{}
-			h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, existing)
-			h.Issued.TokenPath = filepath.Join(t.TempDir(), "not-there")
-			going.run(t, h, serviceAccount)
-			h.settle(t)
+			c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, existing)
+			c.Issued.TokenPath = filepath.Join(t.TempDir(), "not-there")
+			going.run(t, c, serviceAccount)
+			c.settle(t)
 
-			issued := h.issuedOf(t, serviceAccount)
+			issued := c.issuedOf(t, serviceAccount)
 			if issued == nil {
 				t.Fatal("the record is gone")
 			}

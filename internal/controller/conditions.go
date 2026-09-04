@@ -250,11 +250,16 @@ const (
 	reasonWithdrawn   = "Withdrawn"
 	reasonWithdrawing = "Withdrawing"
 
-	// reasonAwaitingRecord is a DatabricksServiceAccount whose record exists and
-	// has not been acted on yet. It is the ordinary first moment of an identity's
-	// life, and it is reported rather than left blank so that a workload starting
-	// into it sees something other than silence.
-	reasonAwaitingRecord = "AwaitingRecord"
+	// reasonAwaitingServicePrincipal is a DatabricksServiceAccount whose record
+	// exists and has not been acted on yet. It is the ordinary first moment of an
+	// identity's life, and it is reported rather than left blank so that a
+	// workload starting into it sees something other than silence.
+	//
+	// The record is written before the create, so a pass that made a service
+	// principal and then died leaves one behind carrying no Ready condition: for
+	// those seconds this is reported while the service principal exists. The next
+	// pass reads the record back and corrects it.
+	reasonAwaitingServicePrincipal = "AwaitingServicePrincipal"
 )
 
 func setCondition(conditions *[]metav1.Condition, generation int64, conditionType string, status metav1.ConditionStatus, reason, message string) {

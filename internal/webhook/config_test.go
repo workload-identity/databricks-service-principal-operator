@@ -24,7 +24,7 @@ import (
 )
 
 // TestNothingAtAllIsRenderedWhenNoIdentityHasAClientId is a contract of
-// Configuration itself, and the caller that depends on it is not the webhook.
+// Profiles itself, and the caller that depends on it is not the webhook.
 //
 // The webhook drops unconverged identities before it renders, so it never asks
 // this question. The controller's describes does: it renders one identity's
@@ -39,12 +39,12 @@ import (
 // header for a profile naming nobody.
 func TestNothingAtAllIsRenderedWhenNoIdentityHasAClientId(t *testing.T) {
 	t.Parallel()
-	rendered := Configuration([]dbxv1alpha1.ProjectedIdentity{
+	rendered := Profiles([]dbxv1alpha1.ProjectedIdentity{
 		{Profile: testOperator, Operator: testOperator, Audience: testAudience},
 		{Profile: "reader", Operator: testOperator, Audience: testAudience},
 	})
 	if rendered != "" {
-		t.Errorf("Configuration rendered %q for identities Databricks has not answered for. "+
+		t.Errorf("Profiles rendered %q for identities Databricks has not answered for. "+
 			"describes reads a non-empty answer as a block to look for in the pod, and reports "+
 			"every pod in the namespace as equipped with it", rendered)
 	}
@@ -74,12 +74,12 @@ func TestAnIdentityDatabricksHasNotAnsweredForContributesNoProfile(t *testing.T)
 		{Profile: "pending-last", Operator: testOperator, Audience: testAudience},
 	}
 
-	rendered := Configuration(mixed)
+	rendered := Profiles(mixed)
 	if strings.Contains(rendered, "pending-") {
 		t.Errorf("the configuration is %q and names an identity with no client id; the workload "+
 			"gets a profile whose only outcome is TOKEN_INVALID", rendered)
 	}
-	if want := Configuration(converged); rendered != want {
+	if want := Profiles(converged); rendered != want {
 		t.Errorf("the configuration is %q, want %q -- byte for byte what the converged "+
 			"identities render on their own", rendered, want)
 	}
@@ -110,7 +110,7 @@ func TestAnIdentityDatabricksHasNotAnsweredForContributesNoProfile(t *testing.T)
 // included, is TestWhatThePodIsGivenIsWhatTheSdkReads.
 func TestEitherSdkFindsANameItReads(t *testing.T) {
 	t.Parallel()
-	rendered := Configuration([]dbxv1alpha1.ProjectedIdentity{{
+	rendered := Profiles([]dbxv1alpha1.ProjectedIdentity{{
 		Profile:  testOperator,
 		Operator: testOperator,
 		ClientID: testClientID,
