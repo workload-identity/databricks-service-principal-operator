@@ -115,11 +115,11 @@ func (r *DatabricksServiceAccountReconciler) Reconcile(ctx context.Context, req 
 	//
 	// What this object holds is a copy of records that go on existing after a
 	// namespace is taken out of scope -- their service principals are not
-	// destroyed and their ids are intact -- and their trust is withdrawn, which
-	// makes every one of them stop being exchangeable. Stopping here would
-	// freeze this copy at the last thing that was true, so the team whose
-	// workloads have just stopped reaching Databricks would read Ready on the
-	// one object in their own namespace that is supposed to tell them.
+	// destroyed and their ids are intact -- and their federation policies are
+	// removed, which makes every one of them stop being exchangeable. Stopping
+	// here would freeze this copy at the last thing that was true, so the team
+	// whose workloads have just stopped reaching Databricks would read Ready on
+	// the one object in their own namespace that is supposed to tell them.
 	declared, served, err := accountServes(ctx, r.Client, r.DatabricksAccountNamespacedName, serviceAccount.Namespace)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -134,14 +134,14 @@ func (r *DatabricksServiceAccountReconciler) Reconcile(ctx context.Context, req 
 
 	if len(requested.Understood) == 0 && len(resent) == 0 {
 		// Nothing asked and nothing sent again, which is the only reading under
-		// which every entry this operator owns was withdrawn. The condition used
-		// to be "no requests", and a value that would not parse produced none --
-		// so a lost "/" arrived here as a withdrawal and destroyed a service
-		// principal along with every grant made on it.
+		// which every entry this operator owns is no longer asked for. The
+		// condition used to be "no requests", and a value that would not parse
+		// produced none -- so a lost "/" arrived here as nobody asking any more
+		// and destroyed a service principal along with every grant made on it.
 		//
-		// This operator's entries go and the others stay. Withdrawing is also
-		// what ends the identity, and that is the record's controller's to act
-		// on -- nothing here destroys anything.
+		// This operator's entries go and the others stay. Nobody asking any more
+		// is also what ends the identity, and that is the record's controller's to
+		// act on -- nothing here destroys anything.
 		return ctrl.Result{}, r.removeIdentities(ctx, &serviceAccount)
 	}
 
@@ -421,12 +421,13 @@ func (r *DatabricksServiceAccountReconciler) removeIdentities(ctx context.Contex
 		// has no fields -- which structured merge writes as null, and the API server
 		// refuses: `status: Invalid value: "null": in body must be of type object`.
 		// The apply then fails on every pass, forever, and the
-		// DatabricksServiceAccount it was supposed to withdraw stays exactly as it
-		// was.
+		// DatabricksServiceAccount it was supposed to take the entry off stays
+		// exactly as it was.
 		//
 		// The case where that happens is the case where the object goes anyway.
 		//
-		// Two operators withdrawing at once both see none left and both delete.
+		// Two operators releasing their entries at once both see none left and
+		// both delete.
 		// The second is told it is already gone, which is the answer it wanted.
 		return client.IgnoreNotFound(r.Delete(ctx, &databricksServiceAccount))
 	}
@@ -819,15 +820,16 @@ func (r *DatabricksServiceAccountReconciler) injecting(ctx context.Context, name
 // namespaceMints reports whether new identities may be made in this namespace.
 //
 // Separate from the annotation, and answered separately, because the two are
-// different people saying different things and withdrawing them means different
+// different people saying different things and taking them back means different
 // things. A namespace where minting was never opened gets no identities; one
 // where it is closed keeps the identities it has. See MintLabel.
 //
-// No while any operator is withdrawing here, whichever operator that is. What it
-// is doing is taking the trust off a set of identities, and a set that can still
-// grow while it works is one it finishes without having covered -- so minting
-// stops for everybody until the withdrawal is over and the key comes off. The
-// permission underneath is untouched and needs nobody to give it again.
+// No while any operator is removing federation policies here, whichever
+// operator that is. What it is doing is taking the trust off a set of
+// identities, and a set that can still grow while it works is one it finishes
+// without having covered -- so minting stops for everybody until the removal is
+// over and the key comes off. The permission underneath is untouched and needs
+// nobody to give it again.
 //
 // A namespace that is not there mints nothing.
 func namespaceMints(ctx context.Context, reader client.Reader, name string) (bool, error) {
@@ -838,7 +840,7 @@ func namespaceMints(ctx context.Context, reader client.Reader, name string) (boo
 	case err != nil:
 		return false, err
 	}
-	if _, withdrawing := namespace.Labels[dbxv1alpha1.WithdrawingLabel]; withdrawing {
+	if _, removingPolicies := namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel]; removingPolicies {
 		return false, nil
 	}
 	return namespace.Labels[dbxv1alpha1.MintLabel] == dbxv1alpha1.Enabled, nil
@@ -888,7 +890,7 @@ func (r *DatabricksServiceAccountReconciler) identitiesInNamespace(ctx context.C
 // unserved until something unrelated happens to touch one.
 //
 // The list before the edit is not read, and does not need to be. A namespace
-// taken off it holds identities whose trust the record's controller withdraws,
+// taken off it holds identities whose trust the record's controller takes off,
 // and every one of those records writes its status when it does -- which is an
 // event this controller already watches, on the ServiceAccount it belongs to.
 // So the namespaces that left the list are woken by the work being done in them

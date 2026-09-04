@@ -99,14 +99,14 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		}
 		Expect(databricksServiceAccountReconciler.SetupWithManager(manager)).To(Succeed())
 
-		// The real Holder, with no DatabricksAccount to build clients from, so
+		// The real AccountInUse, with no DatabricksAccount to build clients from, so
 		// nothing here reaches Databricks. What these specs are about is what
 		// wakes a controller, which does not depend on the far side answering.
 		issued := &IssuedDatabricksServicePrincipalReconciler{
 			Client:                          manager.GetClient(),
 			Scheme:                          manager.GetScheme(),
 			Live:                            manager.GetAPIReader(),
-			Databricks:                      dbx.NewHolder(wiredRecords, "databricks-account"),
+			Databricks:                      dbx.NewAccountInUse(wiredRecords, "databricks-account"),
 			DatabricksAccountNamespacedName: types.NamespacedName{Namespace: wiredRecords, Name: "databricks-account"},
 			TokenPath:                       tokenFile,
 		}
@@ -381,16 +381,17 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 			"another operator's entry was overwritten rather than left")
 	})
 
-	// Withdrawing is an apply that removes the last entry, and what that produces
-	// is only visible to a real API server: identities is the whole of this
-	// status, so the merge is left with an object that has no fields, writes
-	// null, and is refused -- `status: Invalid value: "null": in body must be of
-	// type object`. A fake client validates nothing and reports success.
+	// Letting go of the last identity is an apply that removes the last entry,
+	// and what that produces is only visible to a real API server: identities is
+	// the whole of this status, so the merge is left with an object that has no
+	// fields, writes null, and is refused -- `status: Invalid value: "null": in
+	// body must be of type object`. A fake client validates nothing and reports
+	// success.
 	//
 	// The apply then fails on every pass and the DatabricksServiceAccount stays
 	// exactly as it was: reporting Ready, for identities whose records are deleted
 	// and whose service principals are destroyed.
-	It("withdraws named identities without leaving the DatabricksServiceAccount behind", func() {
+	It("lets go of named identities without leaving the DatabricksServiceAccount behind", func() {
 		Expect(k8sClient.Create(ctx, &corev1.ServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "named", Namespace: wiredNamespace,
@@ -410,7 +411,7 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 			}
 			return len(databricksServiceAccount.Status.Identities)
 		}, 20*time.Second, 250*time.Millisecond).Should(Equal(2),
-			"nothing was projected, so there is nothing to withdraw")
+			"nothing was projected, so there is nothing to take back")
 
 		serviceAccount := &corev1.ServiceAccount{}
 		Expect(k8sClient.Get(ctx,
@@ -426,7 +427,7 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 				"Ready")
 	})
 
-	It("wakes when the annotation is withdrawn, and takes the identity back", func() {
+	It("wakes when the annotation is removed, and takes the identity back", func() {
 		serviceAccount := &corev1.ServiceAccount{}
 		Expect(k8sClient.Get(ctx,
 			types.NamespacedName{Namespace: wiredNamespace, Name: wiredAccount}, serviceAccount)).To(Succeed())
@@ -436,7 +437,7 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		Eventually(func() bool {
 			return recordedIdentity(wiredNamespace, wiredAccount) == nil
 		}, 20*time.Second, 250*time.Millisecond).Should(BeTrue(),
-			"withdrawing the annotation left the identity in place")
+			"removing the annotation left the identity in place")
 	})
 })
 

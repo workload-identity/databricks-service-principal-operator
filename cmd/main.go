@@ -67,7 +67,7 @@ func init() {
 // that stretch reachable.
 type settings struct {
 	DatabricksAccountNamespacedName types.NamespacedName
-	Holder                          *databricks.Holder
+	AccountInUse                    *databricks.AccountInUse
 	OwnToken                        databricks.Config
 }
 
@@ -85,7 +85,7 @@ func reconcilers(s settings, c client.Client, live client.Reader, scheme *runtim
 			Client:                          c,
 			Scheme:                          scheme,
 			DatabricksAccountNamespacedName: s.DatabricksAccountNamespacedName,
-			Holder:                          s.Holder,
+			AccountInUse:                    s.AccountInUse,
 			OwnToken:                        s.OwnToken,
 		}, &controller.DatabricksServiceAccountReconciler{
 			Client:                          c,
@@ -94,7 +94,7 @@ func reconcilers(s settings, c client.Client, live client.Reader, scheme *runtim
 		}, &controller.IssuedDatabricksServicePrincipalReconciler{
 			Client:                          c,
 			Scheme:                          scheme,
-			Databricks:                      s.Holder,
+			Databricks:                      s.AccountInUse,
 			Live:                            live,
 			DatabricksAccountNamespacedName: s.DatabricksAccountNamespacedName,
 			// The path, not what was read from it once. See TokenPath.
@@ -265,14 +265,14 @@ func main() {
 	}
 
 	// Nothing is built here, and startup does not depend on Databricks being
-	// reachable or even declared. The holder answers NotConfigured until the
+	// reachable or even declared. The AccountInUse answers NotConfigured until the
 	// account controller has clients that work, so an operator with no
 	// DatabricksAccount runs and says so on every object, rather than
 	// crashlooping with the reason only in its log.
-	dbClients := databricks.NewHolder(namespace, accountName)
+	dbClients := databricks.NewAccountInUse(namespace, accountName)
 
 	decided.DatabricksAccountNamespacedName = account
-	decided.Holder = dbClients
+	decided.AccountInUse = dbClients
 	decided.OwnToken = runtimeCfg
 
 	accountReconciler, databricksServiceAccountReconciler, issuedReconciler := reconcilers(

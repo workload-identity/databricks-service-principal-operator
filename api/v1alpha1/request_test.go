@@ -16,9 +16,10 @@ func operator(namespace, name string) types.NamespacedName {
 // TestAMistypedValueLeavesTheIdentityItNamesAlone is the bug this whole shape
 // exists to remove.
 //
-// A value that cannot be read is a key that is still there. Reading it as a
-// withdrawal deletes the service principal it names and every grant anybody made
-// on it -- verified against a real account, where losing one "/" was enough.
+// A value that cannot be read is a key that is still there. Reading it as a key
+// nobody wrote deletes the service principal it names and every grant anybody
+// made on it -- verified against a real account, where losing one "/" was
+// enough.
 func TestAMistypedValueLeavesTheIdentityItNamesAlone(t *testing.T) {
 	t.Parallel()
 	asked := RequestsFor(map[string]string{
@@ -39,33 +40,33 @@ func TestAMistypedValueLeavesTheIdentityItNamesAlone(t *testing.T) {
 	if !asked.Unreadable("reader") {
 		t.Errorf("%q reads as an identity nobody wrote a key for", "reader")
 	}
-	if asked.Withdrawn("reader") {
-		t.Errorf("a lost %q reads as a withdrawal, so the service principal and every grant made "+
-			"on it are deleted over a typo", "/")
+	if asked.NoLongerAsked("reader") {
+		t.Errorf("a lost %q reads as nobody asking any more, so the service principal and every "+
+			"grant made on it are deleted over a typo", "/")
 	}
 }
 
-// TestAKeyThatIsGoneIsAWithdrawal covers the other half of the same split.
+// TestAKeyThatIsGoneIsNoLongerAsked covers the other half of the same split.
 //
-// Refusing safely is only worth having if withdrawal still works: an identity
+// Refusing safely is only worth having if letting go still works: an identity
 // whose key a person deleted has to be destroyed, or a workload keeps access its
 // owner revoked.
-func TestAKeyThatIsGoneIsAWithdrawal(t *testing.T) {
+func TestAKeyThatIsGoneIsNoLongerAsked(t *testing.T) {
 	t.Parallel()
 	asked := RequestsFor(map[string]string{
 		ServicePrincipalAnnotationFor("writer"): opsA,
 	}, operator("ops-a", "databricks-account"))
 
-	if !asked.Withdrawn("reader") {
-		t.Errorf("%q is asked for by nothing and is not withdrawn; a workload keeps an identity "+
-			"its owner deleted the key for", "reader")
+	if !asked.NoLongerAsked("reader") {
+		t.Errorf("%q is asked for by nothing and still reads as asked for; a workload keeps an "+
+			"identity its owner deleted the key for", "reader")
 	}
-	if !asked.Withdrawn("") {
-		t.Errorf("the unnamed identity is asked for by nothing and is not withdrawn; deleting " +
-			"the bare key would revoke nothing")
+	if !asked.NoLongerAsked("") {
+		t.Errorf("the unnamed identity is asked for by nothing and still reads as asked for; " +
+			"deleting the bare key would revoke nothing")
 	}
-	if asked.Withdrawn("writer") {
-		t.Errorf("%q is asked for by a key that reads cleanly and is withdrawn anyway", "writer")
+	if asked.NoLongerAsked("writer") {
+		t.Errorf("%q is asked for by a key that reads cleanly and reads as let go of anyway", "writer")
 	}
 }
 
@@ -93,8 +94,8 @@ func TestOneUnreadableKeyDoesNotTakeTheOthersWithIt(t *testing.T) {
 	if len(asked.Refused) != 1 {
 		t.Errorf("refused %v, want only the key that could not be read", asked.Refused)
 	}
-	if asked.Withdrawn("") || asked.Withdrawn("writer") {
-		t.Errorf("an identity whose own key reads cleanly is withdrawn by a mistake in another " +
+	if asked.NoLongerAsked("") || asked.NoLongerAsked("writer") {
+		t.Errorf("an identity whose own key reads cleanly is let go of over a mistake in another " +
 			"key, which destroys it")
 	}
 }
@@ -268,7 +269,7 @@ func TestAValueThatCutsCleanlyAndNamesNobodyIsRefused(t *testing.T) {
 		}
 		if len(asked.Refused) != 1 {
 			t.Fatalf("%q produced %v; unrefused it names a stranger, and an identity every "+
-				"operator reads as somebody else's is one every operator reads as withdrawn",
+				"operator reads as somebody else's is one every operator reads as let go of",
 				value, asked.Refused)
 		}
 		if !strings.Contains(asked.Refused[0].Error(), "/") {
@@ -348,7 +349,7 @@ func TestAnotherOperatorsKeysAreNotThisOnesButItsRefusalsAre(t *testing.T) {
 	}
 	if len(asked.Refused) != 1 {
 		t.Errorf("refused %v; a key whose value names no operator is held by whoever is reading, "+
-			"or the one it was meant for reads it as withdrawn", asked.Refused)
+			"or the one it was meant for reads it as let go of", asked.Refused)
 	}
 
 	if other := RequestsFor(annotations, operator("ops-c", "databricks-account")); len(other.Understood) != 0 {
@@ -356,19 +357,19 @@ func TestAnotherOperatorsKeysAreNotThisOnesButItsRefusalsAre(t *testing.T) {
 	}
 }
 
-// TestAnIdentityMovedToAnotherOperatorIsWithdrawnFromThisOne covers a readable
+// TestAnIdentityMovedToAnotherOperatorIsNoLongerAskedOfIt covers a readable
 // key that now says somebody else.
 //
 // That is a person moving an identity, not a mistake to hold back on: the
 // operator that used to answer for it must destroy what it made, or the
 // ServiceAccount ends up holding two service principals under one name.
-func TestAnIdentityMovedToAnotherOperatorIsWithdrawnFromThisOne(t *testing.T) {
+func TestAnIdentityMovedToAnotherOperatorIsNoLongerAskedOfIt(t *testing.T) {
 	t.Parallel()
 	asked := RequestsFor(map[string]string{
 		ServicePrincipalAnnotationFor("reader"): "ops-b/databricks-account",
 	}, operator("ops-a", "databricks-account"))
 
-	if !asked.Withdrawn("reader") {
+	if !asked.NoLongerAsked("reader") {
 		t.Errorf("%q now names another operator and this one keeps maintaining it, so the "+
 			"ServiceAccount holds two service principals under one profile name", "reader")
 	}
@@ -422,8 +423,8 @@ func TestAnnotationsThatAreNotRequestsAreNotRead(t *testing.T) {
 			"identity, or a warning about an annotation that is none of this operator's business",
 			asked.Understood, asked.Refused)
 	}
-	if !asked.Withdrawn("") {
-		t.Errorf("a ServiceAccount that never asked is not withdrawing anything either, but " +
-			"nothing here holds an identity for it to keep")
+	if !asked.NoLongerAsked("") {
+		t.Errorf("a ServiceAccount that never asked reads as still asking, but nothing here " +
+			"holds an identity for it to keep")
 	}
 }

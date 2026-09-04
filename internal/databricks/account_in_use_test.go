@@ -13,12 +13,12 @@ import (
 // namingClients answers every call by recording which one it was and what it
 // was given.
 //
-// Both are recorded because both can be wrong with nothing to say so. The Holder
-// is a method per call, each asking for the clients and passing the call on, and
-// EnsureFederationPolicy holds a service principal id and returns a plain error
-// -- which is exactly what DeleteServicePrincipal takes and returns, so a
-// delegate that reached the neighbour compiles, destroys the identity it was
-// asked to make exchangeable, and reports the pass as done.
+// Both are recorded because both can be wrong with nothing to say so. The
+// AccountInUse is a method per call, each asking for the clients and passing
+// the call on, and EnsureFederationPolicy holds a service principal id and
+// returns a plain error -- which is exactly what DeleteServicePrincipal takes
+// and returns, so a delegate that reached the neighbour compiles, destroys the
+// identity it was asked to make exchangeable, and reports the pass as done.
 //
 // EnsureFederationPolicy also takes four strings in a row, so two of them handed
 // on transposed compiles as well, reaches the right call, and writes a policy
@@ -84,14 +84,15 @@ var testIssuing = Issuing{
 	ServiceAccountUID: "6a5f0d1e-0b2c-4c3d-9e8f-1a2b3c4d5e6f",
 }
 
-// delegate is one call the Holder passes on: how to make it, and what has to
-// arrive on the other side unchanged and in the order it was given.
+// delegate is one call the AccountInUse passes on: how to make it, and what has
+// to arrive on the other side unchanged and in the order it was given.
 type delegate struct {
 	invoke func(Clients) error
 	given  []any
 }
 
-// delegates is every call the Holder passes on, with the name it must reach.
+// delegates is every call the AccountInUse passes on, with the name it must
+// reach.
 //
 // It is built by reflection over the Clients interface so that a method added
 // later and mis-delegated fails here rather than in production. A hand-written
@@ -145,12 +146,12 @@ func delegates(t *testing.T) map[string]delegate {
 		},
 	}
 
-	// AccountClient and AccountID return no error, so neither can be driven by a
-	// table keyed on one. Snapshot is not a call that is passed on at all: it
-	// answers about the Holder itself, and with nothing installed it returns a
-	// stand-in rather than an error, which is the whole of what makes a caller
-	// able to hold one thing. All three are covered separately below; everything
-	// else has to be here.
+	// AccountClient and AccountID return no error, so neither can be driven by
+	// a table keyed on one. Snapshot is not a call that is passed on at all: it
+	// answers about the AccountInUse itself, and with nothing installed it
+	// returns a stand-in rather than an error, which is the whole of what makes
+	// a caller able to hold one thing. All three are covered separately below;
+	// everything else has to be here.
 	iface := reflect.TypeFor[Clients]()
 	for method := range iface.Methods() {
 		name := method.Name
@@ -165,21 +166,21 @@ func delegates(t *testing.T) map[string]delegate {
 	return table
 }
 
-// TestEveryHolderCallReachesItsNamesakeWithWhatItWasGiven covers the delegation
-// itself, which is a call and a list of arguments and nothing else.
+// TestEveryAccountInUseCallReachesItsNamesakeWithWhatItWasGiven covers the
+// delegation itself, which is a call and a list of arguments and nothing else.
 //
 // A delegate reaching the neighbouring call and one handing the arguments on in
 // another order both compile and both return the right types, so nothing but
 // this says either is wrong. What each of them costs is in namingClients.
-func TestEveryHolderCallReachesItsNamesakeWithWhatItWasGiven(t *testing.T) {
+func TestEveryAccountInUseCallReachesItsNamesakeWithWhatItWasGiven(t *testing.T) {
 	t.Parallel()
 	for want, call := range delegates(t) {
 		t.Run(want, func(t *testing.T) {
 			inner := &namingClients{}
-			holder := NewHolder("databricks", "account")
-			holder.Set(Config{AccountID: "an-account"}, inner)
+			accountInUse := NewAccountInUse("databricks", "account")
+			accountInUse.Set(Config{AccountID: "an-account"}, inner)
 
-			if err := call.invoke(holder); err != nil {
+			if err := call.invoke(accountInUse); err != nil {
 				t.Fatal(err)
 			}
 			if inner.called != want {
@@ -201,18 +202,18 @@ func TestEveryHolderCallReachesItsNamesakeWithWhatItWasGiven(t *testing.T) {
 // not an error that reads as though Databricks refused something.
 func TestNothingConfiguredIsSaidRatherThanCrashed(t *testing.T) {
 	t.Parallel()
-	holder := NewHolder("databricks", "account")
-	if holder.Configured() {
+	accountInUse := NewAccountInUse("databricks", "account")
+	if accountInUse.Configured() {
 		t.Error("reports configured while holding nothing")
 	}
-	if holder.AccountClient() != nil {
+	if accountInUse.AccountClient() != nil {
 		t.Error("handed out an account client while holding nothing")
 	}
 
 	for name, call := range delegates(t) {
 		t.Run(name, func(t *testing.T) {
 			var unconfigured *ErrNotConfigured
-			if err := call.invoke(holder); !errors.As(err, &unconfigured) {
+			if err := call.invoke(accountInUse); !errors.As(err, &unconfigured) {
 				t.Fatalf("error is %v, want ErrNotConfigured", err)
 			}
 			if unconfigured.Error() == "" {
@@ -231,18 +232,18 @@ func TestNothingConfiguredIsSaidRatherThanCrashed(t *testing.T) {
 // reach over one bad call.
 func TestClearingSendsEverythingBackToNotConfigured(t *testing.T) {
 	t.Parallel()
-	holder := NewHolder("databricks", "account")
-	holder.Set(Config{AccountID: "an-account"}, &namingClients{})
-	if !holder.Configured() {
+	accountInUse := NewAccountInUse("databricks", "account")
+	accountInUse.Set(Config{AccountID: "an-account"}, &namingClients{})
+	if !accountInUse.Configured() {
 		t.Fatal("reports nothing configured after Set")
 	}
 
-	holder.Clear("the account was deleted")
-	if holder.Configured() {
+	accountInUse.Clear("the account was deleted")
+	if accountInUse.Configured() {
 		t.Error("still reports configured after Clear")
 	}
 	var unconfigured *ErrNotConfigured
-	if err := holder.DeleteServicePrincipal(context.Background(), "7788"); !errors.As(err, &unconfigured) {
+	if err := accountInUse.DeleteServicePrincipal(context.Background(), "7788"); !errors.As(err, &unconfigured) {
 		t.Errorf("error is %v, want ErrNotConfigured", err)
 	}
 
@@ -254,7 +255,7 @@ func TestClearingSendsEverythingBackToNotConfigured(t *testing.T) {
 		t.Errorf("the error is %q; whoever withdrew the clients knew why and this does not say",
 			unconfigured.Error())
 	}
-	if _, ok := holder.BuiltFrom(); ok {
+	if _, ok := accountInUse.BuiltFrom(); ok {
 		t.Error("still reports a declaration it was built from after Clear")
 	}
 }
@@ -269,15 +270,15 @@ func TestClearingSendsEverythingBackToNotConfigured(t *testing.T) {
 // nothing is happening.
 func TestWhatIsInstalledRemembersWhatItWasBuiltFrom(t *testing.T) {
 	t.Parallel()
-	holder := NewHolder("databricks", "account")
-	if _, ok := holder.BuiltFrom(); ok {
+	accountInUse := NewAccountInUse("databricks", "account")
+	if _, ok := accountInUse.BuiltFrom(); ok {
 		t.Error("reports a declaration while holding nothing")
 	}
 
 	first := Config{AccountHost: "https://accounts.example", AccountID: "one", ClientID: "app"}
-	holder.Set(first, &namingClients{})
+	accountInUse.Set(first, &namingClients{})
 
-	installed, ok := holder.BuiltFrom()
+	installed, ok := accountInUse.BuiltFrom()
 	if !ok {
 		t.Fatal("reports nothing installed after Set")
 	}
@@ -303,30 +304,31 @@ func TestWhatIsInstalledRemembersWhatItWasBuiltFrom(t *testing.T) {
 // TestAccountIDIsEmptyRatherThanWrongWhenNothingIsConfigured covers the one
 // delegate that cannot report a failure.
 //
-// Every other call answers ErrNotConfigured, and the caller reports it. This one
-// returns a string, and the string is compared against what an identity recorded
-// to decide whether a 404 means the identity was deleted. An unconfigured Holder
-// answering with anything but empty would make that comparison say "different
-// account" or "same account" on no evidence at all; empty is the value that
-// means neither, and the comparison declines to conclude.
+// Every other call answers ErrNotConfigured, and the caller reports it. This
+// one returns a string, and the string is compared against what an identity
+// recorded to decide whether a 404 means the identity was deleted. An
+// unconfigured AccountInUse answering with anything but empty would make that
+// comparison say "different account" or "same account" on no evidence at all;
+// empty is the value that means neither, and the comparison declines to
+// conclude.
 func TestAccountIDIsEmptyRatherThanWrongWhenNothingIsConfigured(t *testing.T) {
 	t.Parallel()
-	holder := NewHolder("operators", "databricks-account")
+	accountInUse := NewAccountInUse("operators", "databricks-account")
 
-	if got := holder.AccountID(); got != "" {
+	if got := accountInUse.AccountID(); got != "" {
 		t.Errorf("AccountID is %q with no clients installed, want empty", got)
 	}
 }
 
 // TestAccountIDReachesTheClients is the other half: when there are clients, it
-// is theirs and not something the Holder made up.
+// is theirs and not something the AccountInUse made up.
 func TestAccountIDReachesTheClients(t *testing.T) {
 	t.Parallel()
 	naming := &namingClients{}
-	holder := NewHolder("operators", "databricks-account")
-	holder.Set(Config{AccountID: "an-account"}, naming)
+	accountInUse := NewAccountInUse("operators", "databricks-account")
+	accountInUse.Set(Config{AccountID: "an-account"}, naming)
 
-	holder.AccountID()
+	accountInUse.AccountID()
 	if naming.called != "AccountID" {
 		t.Errorf("the clients were asked %q, want AccountID", naming.called)
 	}
@@ -334,24 +336,25 @@ func TestAccountIDReachesTheClients(t *testing.T) {
 
 // TestASnapshotDoesNotChangeUnderItsCaller covers the reason Snapshot exists.
 //
-// The Holder is replaced by the account controller while every other controller
-// is running. A pass that asks the Holder twice can be answered about two
-// different accounts, and the two answers it then acts on are not merely wrong:
-// a lookup in the wrong account returns the same 404 as an identity somebody
-// deleted, which latches a record that never rebuilds, and a create in one
-// account stamped with the other's id is an identity nothing can find again.
+// The AccountInUse is replaced by the account controller while every other
+// controller is running. A pass that asks the AccountInUse twice can be
+// answered about two different accounts, and the two answers it then acts on
+// are not merely wrong: a lookup in the wrong account returns the same 404 as
+// an identity somebody deleted, which latches a record that never rebuilds, and
+// a create in one account stamped with the other's id is an identity nothing
+// can find again.
 func TestASnapshotDoesNotChangeUnderItsCaller(t *testing.T) {
 	t.Parallel()
 	before := &namingClients{}
-	holder := NewHolder("databricks", "account")
-	holder.Set(Config{AccountID: "an-account"}, before)
+	accountInUse := NewAccountInUse("databricks", "account")
+	accountInUse.Set(Config{AccountID: "an-account"}, before)
 
-	taken := holder.Snapshot()
+	taken := accountInUse.Snapshot()
 
 	// What a pass does next: the account controller installs another account's
 	// clients, or withdraws them entirely.
 	after := &namingClients{}
-	holder.Set(Config{AccountID: "an-account"}, after)
+	accountInUse.Set(Config{AccountID: "an-account"}, after)
 
 	if err := taken.DeleteServicePrincipal(context.Background(), "7788"); err != nil {
 		t.Fatal(err)
@@ -361,13 +364,13 @@ func TestASnapshotDoesNotChangeUnderItsCaller(t *testing.T) {
 			"account and acted in another (before=%q after=%q)", before.called, after.called)
 	}
 
-	holder.Clear("the account was deleted")
+	accountInUse.Clear("the account was deleted")
 	before.called = ""
 	if err := taken.DeleteServicePrincipal(context.Background(), "7788"); err != nil {
-		t.Fatalf("a snapshot stopped working when the Holder was cleared: %v", err)
+		t.Fatalf("a snapshot stopped working when the AccountInUse was cleared: %v", err)
 	}
 	if before.called != "DeleteServicePrincipal" {
-		t.Error("clearing the Holder reached into a snapshot already taken")
+		t.Error("clearing the AccountInUse reached into a snapshot already taken")
 	}
 }
 
@@ -379,7 +382,7 @@ func TestASnapshotDoesNotChangeUnderItsCaller(t *testing.T) {
 // keeps that question in one place.
 func TestASnapshotOfNothingReportsWhatToCreate(t *testing.T) {
 	t.Parallel()
-	taken := NewHolder("databricks", "account").Snapshot()
+	taken := NewAccountInUse("databricks", "account").Snapshot()
 	if taken == nil {
 		t.Fatal("a snapshot of nothing is nil; every call site has to check")
 	}

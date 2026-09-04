@@ -28,13 +28,13 @@ import (
 // Request is one identity a ServiceAccount asked for: which operator to ask, and
 // what to call the identity.
 //
-// One annotation key asks for one identity, and that is what makes withdrawing
-// an identity and mistyping one different inputs. Written as entries of one
-// comma-separated value they were the same input -- an entry that is not there
-// any more -- so the operator had to guess which had happened, and guessing
-// "withdrawn" destroys a service principal and every grant anybody made on it.
-// Verified by running it: one missing "/" was enough. As map entries, the two
-// are a key that is gone and a key that is there.
+// One annotation key asks for one identity, and that is what makes no longer
+// asking for an identity and mistyping one different inputs. Written as entries
+// of one comma-separated value they were the same input -- an entry that is not
+// there any more -- so the operator had to guess which had happened, and
+// guessing "no longer asked for" destroys a service principal and every grant
+// anybody made on it. Verified by running it: one missing "/" was enough. As
+// map entries, the two are a key that is gone and a key that is there.
 //
 // An operator is named by the DatabricksAccount it acts on -- its namespace and
 // its name -- because that is unique in a way a chosen name is not. Two operators
@@ -88,7 +88,7 @@ func (r Request) String() string {
 // +kubebuilder:object:generate=false
 type Refusal struct {
 	// Key is the annotation key as it was written. It is what says which identity
-	// is being held rather than withdrawn, so it is kept as a value and not only
+	// is being held rather than let go of, so it is kept as a value and not only
 	// spelled into the message.
 	Key string
 
@@ -145,20 +145,21 @@ type Requested struct {
 	// Not narrowed to this operator, and it must not be: a value that does not
 	// parse names no operator, so no operator can tell whether the key was
 	// addressed to it. Narrowed by guessing, the operator the key was meant for
-	// would not see it among its own -- and a key it does not see is a key that is
-	// gone, which is a withdrawal, which ends the service principal and every
-	// grant made on it. So every operator serving the cluster holds the identity
-	// that key names, and the one it was meant for is among them.
+	// would not see it among its own -- and a key it does not see is a key that
+	// is gone, which is an identity nobody is asking for, which ends the
+	// service principal and every grant made on it. So every operator serving
+	// the cluster holds the identity that key names, and the one it was meant
+	// for is among them.
 	Refused []Refusal
 }
 
 // Unreadable reports whether one identity's key is there and could not be read.
 //
 // Nothing is created and nothing is destroyed for such an identity. The key is
-// there, so its absence cannot be read as a withdrawal; its value cannot be
-// read, so it asks for nothing. Whatever the identity already is, it stays --
-// which is what makes refusing a key safe, and refusing safely is the whole of
-// this change.
+// there, so its absence cannot be read as the identity no longer being asked
+// for; its value cannot be read, so it asks for nothing. Whatever the identity
+// already is, it stays -- which is what makes refusing a key safe, and refusing
+// safely is the whole of this change.
 func (q Requested) Unreadable(identity string) bool {
 	key := ServicePrincipalAnnotationFor(identity)
 	for _, refusal := range q.Refused {
@@ -169,18 +170,19 @@ func (q Requested) Unreadable(identity string) bool {
 	return false
 }
 
-// Withdrawn reports whether an identity this operator holds is no longer asked
-// of it. It is the only thing that destroys a service principal.
+// NoLongerAsked is true in three cases: the key that asked for this identity is
+// gone, the key names another operator, or there never was one. It is the only
+// thing that destroys a service principal.
 //
 // It is one method rather than a negation each caller writes, because the two
 // ways an identity leaves Understood are not the same: gone from the annotations
-// is a withdrawal, and present but unreadable is a typo. Getting that negation
-// wrong deletes an identity, so it is written once.
+// is nobody asking any more, and present but unreadable is a typo. Getting that
+// negation wrong deletes an identity, so it is written once.
 //
-// An identity whose key now names another operator is withdrawn from this one.
-// The key is readable and it says somebody else, which is a person moving an
-// identity and not a mistake to hold back on.
-func (q Requested) Withdrawn(identity string) bool {
+// An identity whose key now names another operator is no longer asked of this
+// one, with the key still there. It is readable and it says somebody else,
+// which is a person moving an identity and not a mistake to hold back on.
+func (q Requested) NoLongerAsked(identity string) bool {
 	for _, request := range q.Understood {
 		if request.Name == identity {
 			return false
@@ -198,8 +200,8 @@ func (q Requested) Withdrawn(identity string) bool {
 //
 // It hands back what it refused along with what it understood, and there is no
 // way to ask for only the first. The refusals say which identities must be left
-// alone this pass, so an operator that dropped them would read a typo as a
-// withdrawal and destroy a service principal over it.
+// alone this pass, so an operator that dropped them would read a typo as an
+// identity nobody asks for and destroy a service principal over it.
 func RequestsFor(annotations map[string]string, operator types.NamespacedName) Requested {
 	var requested Requested
 	for key, value := range annotations {

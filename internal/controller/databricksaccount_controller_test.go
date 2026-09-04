@@ -78,20 +78,20 @@ func databricksAccountNamed(name string) *dbxv1alpha1.DatabricksAccount {
 // newAccountReconciler wires a reconciler whose client building and account call
 // are both under the test's control, so nothing here reaches Databricks.
 func newAccountReconciler(t *testing.T, tokenPath string, verify func() error,
-	objects ...client.Object) (*DatabricksAccountReconciler, client.Client, *dbx.Holder) {
+	objects ...client.Object) (*DatabricksAccountReconciler, client.Client, *dbx.AccountInUse) {
 	t.Helper()
 	c, scheme := newFakeClient(t, objects...)
-	holder := dbx.NewHolder(operatorNamespace, accountObject)
+	accountInUse := dbx.NewAccountInUse(operatorNamespace, accountObject)
 	built := &stubClients{}
 	return &DatabricksAccountReconciler{
 		Client:                          c,
 		Scheme:                          scheme,
 		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: accountObject},
-		Holder:                          holder,
+		AccountInUse:                    accountInUse,
 		OwnToken:                        dbx.Config{OIDCTokenFilepath: tokenPath, TokenAudience: "databricks"},
 		build:                           func(dbx.Config) (dbx.Clients, error) { return built, nil },
 		verify:                          func(context.Context, dbx.Clients) error { return verify() },
-	}, c, holder
+	}, c, accountInUse
 }
 
 func reconcileAccount(t *testing.T, r *DatabricksAccountReconciler, name string) {
@@ -138,7 +138,7 @@ func accountStatus(t *testing.T, c client.Client, name string) dbxv1alpha1.Datab
 // with extra steps.
 func TestAccountReportsTheSubjectItPresents(t *testing.T) {
 	t.Parallel()
-	r, c, holder := newAccountReconciler(t,
+	r, c, accountInUse := newAccountReconciler(t,
 		writeToken(t, testSubject, "databricks"),
 		func() error { return nil },
 		databricksAccountNamed(accountObject))
@@ -154,7 +154,7 @@ func TestAccountReportsTheSubjectItPresents(t *testing.T) {
 	if ready := accountCondition(t, c, accountObject); ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Fatalf("Ready is %v, want True", ready)
 	}
-	if !holder.Configured() {
+	if !accountInUse.Configured() {
 		t.Error("the account verified but no clients were installed")
 	}
 }
@@ -171,7 +171,7 @@ func TestAccountReportsTheSubjectEvenWhenRefused(t *testing.T) {
 		StatusCode: 401,
 		Message:    "the subject does not match any federation policy",
 	}
-	r, c, holder := newAccountReconciler(t,
+	r, c, accountInUse := newAccountReconciler(t,
 		writeToken(t, testSubject, "databricks"),
 		func() error { return refused },
 		databricksAccountNamed(accountObject))
@@ -191,7 +191,7 @@ func TestAccountReportsTheSubjectEvenWhenRefused(t *testing.T) {
 	if ready.Reason != reasonDenied {
 		t.Errorf("reason is %q, want %q", ready.Reason, reasonDenied)
 	}
-	if holder.Configured() {
+	if accountInUse.Configured() {
 		t.Error("clients were installed from an account that was refused")
 	}
 }
@@ -206,7 +206,7 @@ func TestAccountReportsTheSubjectEvenWhenRefused(t *testing.T) {
 func TestAccountFailureKeepsWorkingClients(t *testing.T) {
 	t.Parallel()
 	fail := false
-	r, c, holder := newAccountReconciler(t,
+	r, c, accountInUse := newAccountReconciler(t,
 		writeToken(t, testSubject, "databricks"),
 		func() error {
 			if fail {
@@ -217,14 +217,14 @@ func TestAccountFailureKeepsWorkingClients(t *testing.T) {
 		databricksAccountNamed(accountObject))
 
 	reconcileAccount(t, r, accountObject)
-	if !holder.Configured() {
+	if !accountInUse.Configured() {
 		t.Fatal("the first reconcile installed no clients")
 	}
 
 	fail = true
 	reconcileAccount(t, r, accountObject)
 
-	if !holder.Configured() {
+	if !accountInUse.Configured() {
 		t.Error("one failed account call withdrew the clients every other object depends on")
 	}
 	if ready := accountCondition(t, c, accountObject); ready == nil || ready.Status == metav1.ConditionTrue {
@@ -232,17 +232,17 @@ func TestAccountFailureKeepsWorkingClients(t *testing.T) {
 	}
 }
 
-// TestAccountDeletionClearsTheClients covers the one case that does withdraw
-// them. Nobody has declared an account any more, and continuing to act in one
-// that was deleted is worse than reporting that there is none.
+// TestAccountDeletionClearsTheClients covers the one case that does clear them.
+// Nobody has declared an account any more, and continuing to act in one that
+// was deleted is worse than reporting that there is none.
 func TestAccountDeletionClearsTheClients(t *testing.T) {
 	t.Parallel()
-	r, c, holder := newAccountReconciler(t,
+	r, c, accountInUse := newAccountReconciler(t,
 		writeToken(t, testSubject, "databricks"),
 		func() error { return nil },
 		databricksAccountNamed(accountObject))
 	reconcileAccount(t, r, accountObject)
-	if !holder.Configured() {
+	if !accountInUse.Configured() {
 		t.Fatal("the first reconcile installed no clients")
 	}
 
@@ -257,7 +257,7 @@ func TestAccountDeletionClearsTheClients(t *testing.T) {
 	}
 	reconcileAccount(t, r, accountObject)
 
-	if holder.Configured() {
+	if accountInUse.Configured() {
 		t.Error("the account was deleted and the operator kept acting in it")
 	}
 }
@@ -272,7 +272,7 @@ func TestAccountDeletionClearsTheClients(t *testing.T) {
 func TestAccountNotSelectedSaysSo(t *testing.T) {
 	t.Parallel()
 	const other = "staging-account"
-	r, c, holder := newAccountReconciler(t,
+	r, c, accountInUse := newAccountReconciler(t,
 		writeToken(t, testSubject, "databricks"),
 		func() error { return nil },
 		databricksAccountNamed(other))
@@ -290,24 +290,24 @@ func TestAccountNotSelectedSaysSo(t *testing.T) {
 	if !strings.Contains(ready.Message, accountObject) {
 		t.Errorf("message is %q, want it to name the account this operator uses", ready.Message)
 	}
-	if holder.Configured() {
+	if accountInUse.Configured() {
 		t.Error("an account this operator was not pointed at was adopted anyway")
 	}
 }
 
-// TestUnconfiguredHolderIsNotAFailedLookup covers what the identity controller
-// sees before any account is usable.
+// TestUnconfiguredAccountInUseIsNotAFailedLookup covers what the identity
+// controller sees before any account is usable.
 //
 // Nothing has been asked of Databricks, so reporting a declaration as wrong
 // would be blaming it for never having been checked. It must classify as
 // NotConfigured, which is reported as a wait.
-func TestUnconfiguredHolderIsNotAFailedLookup(t *testing.T) {
+func TestUnconfiguredAccountInUseIsNotAFailedLookup(t *testing.T) {
 	t.Parallel()
-	holder := dbx.NewHolder(operatorNamespace, accountObject)
+	accountInUse := dbx.NewAccountInUse(operatorNamespace, accountObject)
 
-	_, err := holder.ServicePrincipalExists(context.Background(), "7788")
+	_, err := accountInUse.ServicePrincipalExists(context.Background(), "7788")
 	if err == nil {
-		t.Fatal("an unconfigured holder answered a lookup")
+		t.Fatal("an unconfigured AccountInUse answered a lookup")
 	}
 	if got := dbx.KindOf(err); got != dbx.NotConfigured {
 		t.Errorf("KindOf is %q, want %q", got, dbx.NotConfigured)
@@ -462,10 +462,10 @@ func TestAllIdentitiesHereIsSaidRatherThanLeftBlank(t *testing.T) {
 	}
 }
 
-// TestRepointingAtAnAccountThatFailsWithdrawsTheOldOne covers the operator
+// TestRepointingAtAnAccountThatFailsClearsTheOldOne covers the operator
 // acting in an account its own declaration no longer names.
 //
-// Verification failing used to return before anything was withdrawn, so the
+// Verification failing used to return before anything was cleared, so the
 // clients built from the previous declaration stayed installed. The operator
 // went on creating service principals in that account while the object on
 // screen named another and reported that it could not be verified -- so a
@@ -478,16 +478,16 @@ func TestAllIdentitiesHereIsSaidRatherThanLeftBlank(t *testing.T) {
 // And a restart changed the answer. What is installed lives in memory, so the
 // same cluster with the same spec behaved differently depending on whether the
 // operator had happened to restart -- which nothing on either object records.
-func TestRepointingAtAnAccountThatFailsWithdrawsTheOldOne(t *testing.T) {
+func TestRepointingAtAnAccountThatFailsClearsTheOldOne(t *testing.T) {
 	t.Parallel()
 	failing := errors.New("this account cannot be verified")
 	var verifies error
-	r, c, holder := newAccountReconciler(t, writeToken(t, testIssuer, testAudience),
+	r, c, accountInUse := newAccountReconciler(t, writeToken(t, testIssuer, testAudience),
 		func() error { return verifies },
 		databricksAccountNamed(accountObject))
 
 	reconcileAccount(t, r, accountObject)
-	if !holder.Configured() {
+	if !accountInUse.Configured() {
 		t.Fatal("nothing was installed for an account that verified")
 	}
 
@@ -504,17 +504,17 @@ func TestRepointingAtAnAccountThatFailsWithdrawsTheOldOne(t *testing.T) {
 	verifies = failing
 	reconcileAccount(t, r, accountObject)
 
-	if holder.Configured() {
+	if accountInUse.Configured() {
 		t.Error("the clients built from the old declaration are still installed; every " +
 			"identity minted from here goes into an account this object no longer names")
 	}
-	if id := holder.AccountID(); id != "" {
+	if id := accountInUse.AccountID(); id != "" {
 		t.Errorf("still acting in account %s", id)
 	}
 
 	// And what everything else now reports names the object rather than telling
 	// somebody to create one they are looking at.
-	err := holder.DeleteServicePrincipal(context.Background(), "7788")
+	err := accountInUse.DeleteServicePrincipal(context.Background(), "7788")
 	if err == nil {
 		t.Fatal("a call went through with nothing installed")
 	}
@@ -525,28 +525,28 @@ func TestRepointingAtAnAccountThatFailsWithdrawsTheOldOne(t *testing.T) {
 	}
 }
 
-// TestOneBadCallDoesNotWithdrawAWorkingAccount is the other half, and the reason
-// withdrawing is conditional at all.
+// TestOneBadCallDoesNotClearAWorkingAccount is the other half, and the reason
+// clearing is conditional at all.
 //
 // Databricks being briefly unreachable is not a declaration that changed. Taking
 // the clients away over it would put every workload's identity out of reach
 // until it answered again, on an operator that had nothing wrong with it.
-func TestOneBadCallDoesNotWithdrawAWorkingAccount(t *testing.T) {
+func TestOneBadCallDoesNotClearAWorkingAccount(t *testing.T) {
 	t.Parallel()
 	var verifies error
-	r, _, holder := newAccountReconciler(t, writeToken(t, testIssuer, testAudience),
+	r, _, accountInUse := newAccountReconciler(t, writeToken(t, testIssuer, testAudience),
 		func() error { return verifies },
 		databricksAccountNamed(accountObject))
 
 	reconcileAccount(t, r, accountObject)
-	if !holder.Configured() {
+	if !accountInUse.Configured() {
 		t.Fatal("nothing was installed for an account that verified")
 	}
 
 	verifies = errors.New("the service is temporarily unavailable")
 	reconcileAccount(t, r, accountObject)
 
-	if !holder.Configured() {
+	if !accountInUse.Configured() {
 		t.Error("one failed check took the account away; every identity in the cluster is out " +
 			"of reach until Databricks answers, and nothing about the declaration changed")
 	}

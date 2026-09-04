@@ -353,7 +353,7 @@ func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID
 // false while the call reported success. Ensure's worst case at the same
 // boundary is a second policy saying what the first says, which this removes.
 //
-// A policy already gone is not a failure. A withdrawal that lost its namespace
+// A policy already gone is not a failure. A removal that lost its namespace
 // partway through and is retried finds some of its policies already deleted, and
 // that is the answer it wanted, not an error to report over work that is done.
 func (c *clients) RemoveFederationPolicies(ctx context.Context, servicePrincipalID, issuer, subject string) error {

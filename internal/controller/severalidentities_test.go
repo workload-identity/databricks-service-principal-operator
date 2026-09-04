@@ -33,8 +33,8 @@ import (
 )
 
 // askingFor is a ServiceAccount naming this operator once per identity: one
-// annotation key each, which is what makes withdrawing one and mistyping one
-// different edits.
+// annotation key each, which is what makes no longer asking for one and
+// mistyping one different edits.
 func askingFor(namespace, name string, identities ...string) *corev1.ServiceAccount {
 	serviceAccount := serviceAccountNamed(namespace, name)
 	serviceAccount.Annotations = make(map[string]string, len(identities))
@@ -239,21 +239,21 @@ func TestAddingASecondIdentityLeavesTheFirstAlone(t *testing.T) {
 	}
 }
 
-// TestWithdrawingNamedIdentitiesTakesTheDatabricksServiceAccountWithThem covers
-// the whole of a ServiceAccount's request going away when the identities were
-// named.
+// TestNoLongerAskingForNamedIdentitiesTakesTheDatabricksServiceAccountWithThem
+// covers the whole of a ServiceAccount's request going away when the identities
+// were named.
 //
-// Withdrawing removes the entries this operator owns, and a named identity's key
+// Letting go removes the entries this operator owns, and a named identity's key
 // is the name its asker chose, which says nothing about who issued it. An
 // operator working ownership out of the key finds none of its named entries, so
-// nothing is withdrawn and the object is not deleted either, because entries
+// nothing is released and the object is not deleted either, because entries
 // remain.
 //
 // What that leaves is a DatabricksServiceAccount reporting Ready for identities
 // whose records are deleted and whose service principals are destroyed. It is
 // the one state this object is supposed to be incapable of: it decides nothing,
 // so the only thing it can be is wrong.
-func TestWithdrawingNamedIdentitiesTakesTheDatabricksServiceAccountWithThem(t *testing.T) {
+func TestNoLongerAskingForNamedIdentitiesTakesTheDatabricksServiceAccountWithThem(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
 	c := newControllers(t, stub,
@@ -262,7 +262,7 @@ func TestWithdrawingNamedIdentitiesTakesTheDatabricksServiceAccountWithThem(t *t
 
 	if databricksServiceAccount := principalOf(t, c.Client); databricksServiceAccount == nil ||
 		len(databricksServiceAccount.Status.Identities) != 2 {
-		t.Fatalf("this test is about withdrawing two named identities; there are %v",
+		t.Fatalf("this test is about no longer asking for two named identities; there are %v",
 			databricksServiceAccount)
 	}
 
@@ -373,8 +373,8 @@ func TestEquipmentIsReportedPerNamedIdentity(t *testing.T) {
 // the annotation deleted the service principal and every grant anybody had made
 // on it.
 //
-// A key that is there and cannot be read asks for nothing and withdraws nothing.
-// Read as a withdrawal it is the most expensive possible answer to a typo, and
+// A key that is there and cannot be read asks for nothing and takes back
+// nothing. Read as nobody asking it is the most expensive answer to a typo, and
 // the person who made it gets no chance to fix it -- by the time they look, the
 // identity is gone and a new one has a new client id.
 func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
@@ -439,13 +439,13 @@ func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
 //
 // The other two tests of this rule each leave something understood --
 // TestAValueThatCannotBeReadDestroysNothing has a second identity whose key is
-// still good, and TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld a
-// key that was deleted rather than mistyped -- so in both the withdraw branch is
-// held open by a request this operator can still read, and neither notices if
-// that branch stops consulting what is being held. A ServiceAccount asking for
-// one identity and mistyping it has nothing else: what stands between a missing
-// "/" and a destroyed service principal is that one check, and this is what goes
-// red when it goes.
+// still good, and TestAKeyThatIsGoneIsNoLongerAskedWhileAKeyThatWillNotParseIsHeld
+// a key that was deleted rather than mistyped -- so in both the destroying
+// branch is held open by a request this operator can still read, and neither
+// notices if that branch stops consulting what is being held. A ServiceAccount
+// asking for one identity and mistyping it has nothing else: what stands
+// between a missing "/" and a destroyed service principal is that one check,
+// and this is what goes red when it goes.
 func TestAServiceAccountWhoseOnlyKeyIsMistypedKeepsItsIdentity(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
@@ -475,7 +475,7 @@ func TestAServiceAccountWhoseOnlyKeyIsMistypedKeepsItsIdentity(t *testing.T) {
 	c.settle(t)
 
 	if after := recordsOf(t, c.Client, testNamespace, testName); len(after) != 1 {
-		t.Fatalf("%d records remain, want the one nobody withdrew: %+v. The key is still there "+
+		t.Fatalf("%d records remain, want the one still asked for: %+v. The key is still there "+
 			"and still names this identity, badly", len(after), after)
 	}
 	if len(stub.deleted) != 0 {
@@ -498,15 +498,16 @@ func TestAServiceAccountWhoseOnlyKeyIsMistypedKeepsItsIdentity(t *testing.T) {
 	}
 }
 
-// TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld is the sentence
-// the whole change exists to make true, in one edit.
+// TestAKeyThatIsGoneIsNoLongerAskedWhileAKeyThatWillNotParseIsHeld is the
+// sentence the whole change exists to make true, in one edit.
 //
 // Written as entries of one comma-separated value the two were the same input --
 // an entry that is not in the string any more -- so the operator had to guess,
-// and guessing withdrawal destroys an identity over a typo. As separate keys
-// they are a key that is gone and a key that is there, and this asserts they are
-// answered differently on a ServiceAccount where both happened at once.
-func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) {
+// and guessing that nobody asks any more destroys an identity over a typo. As
+// separate keys they are a key that is gone and a key that is there, and this
+// asserts they are answered differently on a ServiceAccount where both happened
+// at once.
+func TestAKeyThatIsGoneIsNoLongerAskedWhileAKeyThatWillNotParseIsHeld(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
 	c := newControllers(t, stub,
@@ -518,10 +519,10 @@ func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) 
 		t.Fatalf("this test starts from an unnamed identity and a named one; there are %d",
 			len(before))
 	}
-	var withdrawn string
+	var noLongerAsked string
 	for _, record := range before {
 		if record.Spec.Identity == "" {
-			withdrawn = record.Status.ServicePrincipalID
+			noLongerAsked = record.Status.ServicePrincipalID
 		}
 	}
 
@@ -541,16 +542,16 @@ func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) 
 	after := recordsOf(t, c.Client, testNamespace, testName)
 	if len(after) != 1 || after[0].Spec.Identity != "reader" {
 		t.Fatalf("the records left are %+v, want the one whose key is still there. A key that is "+
-			"gone is a withdrawal and a key that will not parse is not, and this operator "+
-			"answered both the same way", after)
+			"gone is nobody asking any more and a key that will not parse is not, and this "+
+			"operator answered both the same way", after)
 	}
-	if !slices.Contains(stub.deleted, withdrawn) {
+	if !slices.Contains(stub.deleted, noLongerAsked) {
 		t.Errorf("deleted %v, want the identity whose key was removed (%q) -- a service principal "+
 			"nothing asks for and nothing records is what this operator exists to prevent",
-			stub.deleted, withdrawn)
+			stub.deleted, noLongerAsked)
 	}
 	if len(stub.deleted) != 1 {
-		t.Errorf("deleted %v; the mistyped key's identity went with the withdrawn one",
+		t.Errorf("deleted %v; the mistyped key's identity went with the one nobody asks for",
 			stub.deleted)
 	}
 
@@ -559,10 +560,10 @@ func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) 
 		t.Fatal("the DatabricksServiceAccount is gone; the mistyped identity is still there and still working")
 	}
 	if _, gone := databricksServiceAccount.Status.Identity(testOperatorRef.String()); gone {
-		t.Error("the DatabricksServiceAccount still shows the withdrawn identity, so a pod would go on being " +
-			"equipped for one whose service principal is destroyed")
+		t.Error("the DatabricksServiceAccount still shows the identity nobody asks for, so a pod " +
+			"would go on being equipped for one whose service principal is destroyed")
 	}
 	if _, held := databricksServiceAccount.Status.Identity("reader"); !held {
-		t.Error("the DatabricksServiceAccount dropped the mistyped identity, which nobody withdrew")
+		t.Error("the DatabricksServiceAccount dropped the mistyped identity, which is still asked for")
 	}
 }

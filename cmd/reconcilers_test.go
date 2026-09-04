@@ -25,7 +25,7 @@ func TestEverySettingReachesAReconciler(t *testing.T) {
 	t.Parallel()
 	want := settings{
 		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: "operators", Name: "the-account"},
-		Holder:                          databricks.NewHolder("operators", "the-account"),
+		AccountInUse:                    databricks.NewAccountInUse("operators", "the-account"),
 		OwnToken: databricks.Config{
 			OIDCTokenFilepath: "/var/run/secrets/databricks/token",
 			TokenAudience:     "databricks",
@@ -43,8 +43,8 @@ func TestEverySettingReachesAReconciler(t *testing.T) {
 			issued.DatabricksAccountNamespacedName, account.DatabricksAccountNamespacedName,
 			databricksServiceAccountReconciler.DatabricksAccountNamespacedName, wanted)
 	}
-	if issued.Databricks != want.Holder || account.Holder != want.Holder {
-		t.Error("the two controllers were not given the same Holder; the account controller " +
+	if issued.Databricks != want.AccountInUse || account.AccountInUse != want.AccountInUse {
+		t.Error("the two controllers were not given the same AccountInUse; the account controller " +
 			"is the only writer and the record controller reads what it wrote")
 	}
 	if account.OwnToken != want.OwnToken {

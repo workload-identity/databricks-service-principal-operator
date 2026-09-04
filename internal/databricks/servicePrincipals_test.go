@@ -262,17 +262,17 @@ func TestAPolicyThatIsNotThisOneIsNotAMatch(t *testing.T) {
 	}
 }
 
-// TestWithdrawingTakesEveryPolicyThisClusterWroteAndLeavesTheRest covers what a
-// withdrawal is allowed to reach.
+// TestRemovingPoliciesTakesEveryPolicyThisClusterWroteAndLeavesTheRest covers
+// what a removal is allowed to reach.
 //
 // Matched on issuer and subject and not on the audience, which is the one way
 // this differs from the create beside it: a policy naming an audience this
 // operator no longer hands out is still one a token minted for that audience
 // satisfies, so leaving it would leave the exchange open under an older name.
 // Another cluster's issuer and another workload's subject are not this
-// withdrawal's to touch -- somebody put them there deliberately, and the service
+// removal's to touch -- somebody put them there deliberately, and the service
 // principal is still theirs to reach.
-func TestWithdrawingTakesEveryPolicyThisClusterWroteAndLeavesTheRest(t *testing.T) {
+func TestRemovingPoliciesTakesEveryPolicyThisClusterWroteAndLeavesTheRest(t *testing.T) {
 	t.Parallel()
 	server := &stubAccount{t: t, answer: map[string]string{
 		"GET " + federationPoliciesAPI("7788"): `{"policies":[
@@ -302,14 +302,14 @@ func TestWithdrawingTakesEveryPolicyThisClusterWroteAndLeavesTheRest(t *testing.
 	}
 }
 
-// TestAPolicyThatIsAlreadyGoneIsWithdrawn covers the answer a retried withdrawal
-// is asked for.
+// TestAPolicyThatIsAlreadyGoneIsRemoved covers the answer a retried removal is
+// asked for.
 //
 // A removal that failed partway, or one made twice because the namespace changed
 // hands, finds policies it already deleted. If that were a failure the record
-// would report the withdrawal as unfinished for ever, and the account it left
+// would report the removal as unfinished for ever, and the account it left
 // would never say it had let go.
-func TestAPolicyThatIsAlreadyGoneIsWithdrawn(t *testing.T) {
+func TestAPolicyThatIsAlreadyGoneIsRemoved(t *testing.T) {
 	t.Parallel()
 	server := &stubAccount{
 		t: t,
@@ -328,10 +328,10 @@ func TestAPolicyThatIsAlreadyGoneIsWithdrawn(t *testing.T) {
 	}
 }
 
-// TestWithdrawingRefusesAnIdThatIsNotANumber covers the same coordinate the
-// create refuses, on the call that would otherwise report a withdrawal it never
-// attempted.
-func TestWithdrawingRefusesAnIdThatIsNotANumber(t *testing.T) {
+// TestRemovingPoliciesRefusesAnIdThatIsNotANumber covers the same coordinate
+// the create refuses, on the call that would otherwise report a removal it
+// never attempted.
+func TestRemovingPoliciesRefusesAnIdThatIsNotANumber(t *testing.T) {
 	t.Parallel()
 	server := &stubAccount{t: t}
 	c := server.clients()
@@ -340,7 +340,7 @@ func TestWithdrawingRefusesAnIdThatIsNotANumber(t *testing.T) {
 	err := c.RemoveFederationPolicies(context.Background(), "not-a-number", testIssuer, testSubject)
 	if !errors.As(err, &malformed) {
 		t.Errorf("error is %v, want a malformed coordinate; nil would be this reporting a "+
-			"withdrawal it never made", err)
+			"removal it never made", err)
 	}
 	if len(server.calls) != 0 {
 		t.Errorf("made %+v for an id that could not be read", server.calls)
@@ -434,7 +434,7 @@ func TestTheMarkerTellsOneServiceAccountFromAnother(t *testing.T) {
 	two := Issuing{Issuer: issuer, Namespace: "team", Name: "a-x", ServiceAccountUID: "uid-two"}
 	if MarkerFor(one) == MarkerFor(two) {
 		t.Error("two ServiceAccounts sharing a display name share a marker; one namespace can " +
-			"be handed the other's identity, and destroy it by withdrawing its own annotation")
+			"be handed the other's identity, and destroy it by removing its own annotation")
 	}
 }
 
@@ -639,7 +639,7 @@ var lookedFor = Issuing{
 // every namesake in the account -- another cluster's, another operator's,
 // another ServiceAccount's whose name collided. Taking one of those records it
 // as this workload's identity, which hands the workload everything granted to
-// somebody else and destroys it when the annotation is withdrawn.
+// somebody else and destroys it when the annotation is removed.
 func TestTheMarkerDecidesWhichOfTheNamesakesIsTaken(t *testing.T) {
 	t.Parallel()
 	elsewhere := Issuing{Issuer: "https://oidc.example/another", Namespace: "team-a", Name: "etl",

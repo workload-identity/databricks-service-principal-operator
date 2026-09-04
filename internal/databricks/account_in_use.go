@@ -38,14 +38,16 @@ func (e *ErrNotConfigured) Error() string {
 		e.Namespace, e.Name)
 }
 
-// notConfigured reports whether err is the holder having nothing yet.
+// notConfigured reports whether err is AccountInUse holding nothing yet.
 func notConfigured(err error) bool {
 	var e *ErrNotConfigured
 	return errors.As(err, &e)
 }
 
-// Holder is the Clients the controllers hold, standing in for the ones built
-// from a DatabricksAccount that may not exist yet, or may have changed.
+// AccountInUse is the one slot saying which Databricks account this operator is
+// acting in right now: the Clients the controllers hold, standing in for the
+// ones built from a DatabricksAccount that may not exist yet, or may have
+// changed.
 //
 // The controllers take a Clients and do not know configuration can move
 // underneath them. That is deliberate: which account the operator acts in is one
@@ -56,7 +58,7 @@ func notConfigured(err error) bool {
 // Before anything is set, every method fails with ErrNotConfigured, which
 // classifies as NotConfigured and so is reported as a wait rather than as a
 // wrong declaration. Nothing crashes and nothing is retried into backoff.
-type Holder struct {
+type AccountInUse struct {
 	// name and namespace are fixed at construction: they identify the
 	// DatabricksAccount this operator was told to use, and appear in the error
 	// so that whoever reads a condition is told what to create.
@@ -72,9 +74,10 @@ type Holder struct {
 	reason string
 }
 
-// NewHolder returns a Holder for the named DatabricksAccount, holding nothing.
-func NewHolder(namespace, name string) *Holder {
-	return &Holder{name: name, namespace: namespace}
+// NewAccountInUse returns an AccountInUse for the named DatabricksAccount, with
+// nothing installed.
+func NewAccountInUse(namespace, name string) *AccountInUse {
+	return &AccountInUse{name: name, namespace: namespace}
 }
 
 // Set installs the clients built from one declaration, replacing any earlier
@@ -84,20 +87,20 @@ func NewHolder(namespace, name string) *Holder {
 // is still what the spec says. Nothing else compares them, and nothing else can:
 // the clients themselves cannot say whether the object they were built from has
 // since been edited.
-func (h *Holder) Set(builtFrom Config, clients Clients) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.clients = clients
-	h.builtFrom = builtFrom
-	h.reason = ""
+func (a *AccountInUse) Set(builtFrom Config, clients Clients) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.clients = clients
+	a.builtFrom = builtFrom
+	a.reason = ""
 }
 
 // BuiltFrom is the declaration the installed clients were built from, and
 // whether anything is installed at all.
-func (h *Holder) BuiltFrom() (Config, bool) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.builtFrom, h.clients != nil
+func (a *AccountInUse) BuiltFrom() (Config, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.builtFrom, a.clients != nil
 }
 
 // Clear drops the clients, so everything reports NotConfigured again, saying
@@ -117,26 +120,27 @@ func (h *Holder) BuiltFrom() (Config, bool) {
 // It is deliberately not called when a reconcile of the *same* declaration
 // fails. The clients already installed may still work, and withdrawing them
 // would take every workload's identity out of reach over one bad call.
-func (h *Holder) Clear(reason string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.clients = nil
-	h.builtFrom = Config{}
-	h.reason = reason
+func (a *AccountInUse) Clear(reason string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.clients = nil
+	a.builtFrom = Config{}
+	a.reason = reason
 }
 
 // Configured reports whether any clients have been installed. It exists for the
 // account controller's own status, not for the others, which learn the same
 // thing from the error they get back.
-func (h *Holder) Configured() bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.clients != nil
+func (a *AccountInUse) Configured() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.clients != nil
 }
 
 // Snapshot is one caller's view of the clients, taken once and not taken again.
 //
-// It exists because the Holder can be replaced between two of its own methods.
+// It exists because what is installed can be replaced between two of this
+// type's own methods.
 // A pass that asks "which account am I in", is answered A, and then makes a call
 // that goes to B has checked one thing and done another -- and the answers to
 // that are not merely wrong: a lookup in the wrong account returns the same 404
@@ -151,47 +155,47 @@ func (h *Holder) Configured() bool {
 // It is total: with nothing installed it returns a stand-in whose every call
 // reports ErrNotConfigured, so a caller has one thing to hold and no case to
 // handle.
-func (h *Holder) Snapshot() Clients {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if h.clients == nil {
-		return unconfigured{name: h.name, namespace: h.namespace, reason: h.reason}
+func (a *AccountInUse) Snapshot() Clients {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.clients == nil {
+		return unconfigured{name: a.name, namespace: a.namespace, reason: a.reason}
 	}
-	return h.clients
+	return a.clients
 }
 
-var _ Clients = (*Holder)(nil)
+var _ Clients = (*AccountInUse)(nil)
 
-// The methods below are the Holder standing in for whatever is installed right
+// The methods below are this type standing in for whatever is installed right
 // now, for callers that make a single call. Anything making more than one in a
-// row takes a Snapshot instead: these each read the Holder again, and what they
+// row takes a Snapshot instead: these each read the slot again, and what they
 // read can change between them.
 
-func (h *Holder) AccountClient() *databricks.AccountClient { return h.Snapshot().AccountClient() }
-func (h *Holder) AccountID() string                        { return h.Snapshot().AccountID() }
+func (a *AccountInUse) AccountClient() *databricks.AccountClient { return a.Snapshot().AccountClient() }
+func (a *AccountInUse) AccountID() string                        { return a.Snapshot().AccountID() }
 
-func (h *Holder) FindServicePrincipal(ctx context.Context, issuing Issuing) (string, string, bool, error) {
-	return h.Snapshot().FindServicePrincipal(ctx, issuing)
+func (a *AccountInUse) FindServicePrincipal(ctx context.Context, issuing Issuing) (string, string, bool, error) {
+	return a.Snapshot().FindServicePrincipal(ctx, issuing)
 }
 
-func (h *Holder) CreateServicePrincipal(ctx context.Context, issuing Issuing) (string, string, error) {
-	return h.Snapshot().CreateServicePrincipal(ctx, issuing)
+func (a *AccountInUse) CreateServicePrincipal(ctx context.Context, issuing Issuing) (string, string, error) {
+	return a.Snapshot().CreateServicePrincipal(ctx, issuing)
 }
 
-func (h *Holder) ServicePrincipalExists(ctx context.Context, servicePrincipalID string) (bool, error) {
-	return h.Snapshot().ServicePrincipalExists(ctx, servicePrincipalID)
+func (a *AccountInUse) ServicePrincipalExists(ctx context.Context, servicePrincipalID string) (bool, error) {
+	return a.Snapshot().ServicePrincipalExists(ctx, servicePrincipalID)
 }
 
-func (h *Holder) DeleteServicePrincipal(ctx context.Context, servicePrincipalID string) error {
-	return h.Snapshot().DeleteServicePrincipal(ctx, servicePrincipalID)
+func (a *AccountInUse) DeleteServicePrincipal(ctx context.Context, servicePrincipalID string) error {
+	return a.Snapshot().DeleteServicePrincipal(ctx, servicePrincipalID)
 }
 
-func (h *Holder) EnsureFederationPolicy(ctx context.Context, servicePrincipalID, issuer, subject, audience string) error {
-	return h.Snapshot().EnsureFederationPolicy(ctx, servicePrincipalID, issuer, subject, audience)
+func (a *AccountInUse) EnsureFederationPolicy(ctx context.Context, servicePrincipalID, issuer, subject, audience string) error {
+	return a.Snapshot().EnsureFederationPolicy(ctx, servicePrincipalID, issuer, subject, audience)
 }
 
-func (h *Holder) RemoveFederationPolicies(ctx context.Context, servicePrincipalID, issuer, subject string) error {
-	return h.Snapshot().RemoveFederationPolicies(ctx, servicePrincipalID, issuer, subject)
+func (a *AccountInUse) RemoveFederationPolicies(ctx context.Context, servicePrincipalID, issuer, subject string) error {
+	return a.Snapshot().RemoveFederationPolicies(ctx, servicePrincipalID, issuer, subject)
 }
 
 // unconfigured is what a Snapshot holds when nothing has been installed.

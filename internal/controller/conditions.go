@@ -87,24 +87,24 @@ const (
 	// was edited.
 	conditionAccountsAgree = "AccountsAgree"
 
-	// conditionNamespacesWithdrawn, on a DatabricksAccount, says whether every
-	// namespace this operator issued in and this account no longer names has
-	// actually been let go of: this cluster's trust removed from every identity
-	// it issued there, and the namespace released again afterwards.
+	// conditionFederationPoliciesRemoved, on a DatabricksAccount, says whether
+	// every namespace this operator issued in and this account no longer names
+	// has actually been let go of: this cluster's trust removed from every
+	// identity it issued there, and the namespace released again afterwards.
 	//
 	// It is on this object for the reason conditionAccountsAgree is. The edit
-	// that starts a withdrawal is made here, the work of it happens on records
+	// that starts the removal is made here, the work of it happens on records
 	// in another kind and on Namespaces in another scope, and none of them is
 	// somewhere the person who made the edit would think to look. Without this,
-	// a withdrawal that stalled on one namespace out of five would be found by
+	// a removal that stalled on one namespace out of five would be found by
 	// reading every record's status one at a time.
 	//
 	// False is not a failure of the account: nothing it names is wrong, and
-	// nothing anywhere has been destroyed. It is a withdrawal that has not
+	// nothing anywhere has been destroyed. It is a removal that has not
 	// finished, which is a thing to wait for or to act on, and it is written
 	// here so that waiting is a choice somebody makes rather than one they make
 	// by not knowing.
-	conditionNamespacesWithdrawn = "NamespacesWithdrawn"
+	conditionFederationPoliciesRemoved = "FederationPoliciesRemoved"
 )
 
 // Condition reasons. They are part of the status API -- people match on them and
@@ -214,41 +214,41 @@ const (
 	// the same client id and every grant on it.
 	reasonNotServed = "NotServed"
 
-	// reasonMintingNotSuspended is a withdrawal that has not started, because
+	// reasonMintingNotSuspended is a removal that has not started, because
 	// nothing has stopped the namespace it is for from minting. Unknown rather
 	// than False: nothing has been asked of Databricks, so there is nothing to
 	// conclude, and False would report an exchange as ended on the strength of an
 	// intention.
 	//
 	// It is its own reason and not silence, because waiting is what somebody
-	// waiting for a withdrawal has to be able to see. What ends it is this
+	// waiting for the policies to go has to be able to see. What ends it is this
 	// operator claiming the namespace, which it does on its account's own pass --
 	// so a record sitting here is either a moment old or a Namespace this
 	// operator could not write, and the account it left says which.
 	reasonMintingNotSuspended = "MintingNotSuspended"
 
-	// reasonAnotherWithdrawal is a namespace two operators serve, where the other
-	// one is withdrawing from it and holds the key that says so. One withdrawal
-	// at a time is the point of there being one key: each takes the trust off its
-	// own identities, and the set either is working through must not grow under
-	// it while the other reopens minting.
+	// reasonAnotherRemoval is a namespace two operators serve, where the other
+	// one is removing its federation policies there and holds the key that says
+	// so. One removal at a time is the point of there being one key: each takes
+	// the trust off its own identities, and the set either is working through
+	// must not grow under it while the other reopens minting.
 	//
 	// Unknown, and nothing was asked of Databricks. Waiting costs nothing here --
 	// the other operator lets go when it has finished, and if it dies instead its
 	// claim goes stale and this one takes it.
-	reasonAnotherWithdrawal = "AnotherWithdrawal"
+	reasonAnotherRemoval = "AnotherRemoval"
 
-	// reasonWithdrawFailed is that removal not having gone through. The trust is
-	// still in place and this cluster can still exchange for the identity, which
-	// is the opposite of what the edit asked for, so it is reported rather than
-	// left to look like the withdrawal above.
-	reasonWithdrawFailed = "WithdrawFailed"
+	// reasonRemovePoliciesFailed is that removal not having gone through. The
+	// trust is still in place and this cluster can still exchange for the
+	// identity, which is the opposite of what the edit asked for, so it is
+	// reported rather than left to look like the removal above.
+	reasonRemovePoliciesFailed = "RemovePoliciesFailed"
 
-	// reasonWithdrawn is every namespace this account stopped serving having
-	// been let go of; reasonWithdrawing is at least one that has not, with the
-	// message naming which and what is outstanding.
-	reasonWithdrawn   = "Withdrawn"
-	reasonWithdrawing = "Withdrawing"
+	// reasonPoliciesRemoved is every namespace this account stopped serving
+	// having been let go of; reasonRemovingPolicies is at least one that has
+	// not, with the message naming which and what is outstanding.
+	reasonPoliciesRemoved  = "PoliciesRemoved"
+	reasonRemovingPolicies = "RemovingPolicies"
 
 	// reasonAwaitingServicePrincipal is a DatabricksServiceAccount whose record
 	// exists and has not been acted on yet. It is the ordinary first moment of an

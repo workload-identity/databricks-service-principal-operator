@@ -165,20 +165,20 @@ func TestAServiceAccountThatDidNotAskGetsNothing(t *testing.T) {
 	}
 }
 
-// TestWithdrawingTheAnnotationTakesTheIdentityBack covers the only way to say
+// TestRemovingTheAnnotationTakesTheIdentityBack covers the only way to say
 // "this workload no longer needs an identity" while keeping the ServiceAccount.
 //
 // Deleting the ServiceAccount says it too, and that path is garbage collection's
 // rather than this operator's -- the object is owned by it. This one is the case
 // where the ServiceAccount stays and the request goes.
-func TestWithdrawingTheAnnotationTakesTheIdentityBack(t *testing.T) {
+func TestRemovingTheAnnotationTakesTheIdentityBack(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	c := newControllers(t, stub,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 	c.settle(t)
 	if principalOf(t, c.Client) == nil {
-		t.Fatal("nothing was built to withdraw")
+		t.Fatal("nothing was built to take back")
 	}
 
 	var serviceAccount = serviceAccountNamed(testNamespace, testName)
@@ -196,7 +196,7 @@ func TestWithdrawingTheAnnotationTakesTheIdentityBack(t *testing.T) {
 	c.settle(t)
 
 	if principalOf(t, c.Client) != nil {
-		t.Error("the identity is still recorded after the request was withdrawn")
+		t.Error("the identity is still recorded after the request was taken back")
 	}
 	if len(stub.deleted) != 1 {
 		t.Errorf("deleted %v, want the service principal removed in Databricks", stub.deleted)
@@ -419,7 +419,7 @@ func TestOneDeletedInDatabricksIsNotReplaced(t *testing.T) {
 
 // TestAskingAgainStartsAgain is the recovery, and the only one.
 //
-// Withdrawing the annotation destroys the identity; writing it again asks for a
+// Removing the annotation destroys the identity; writing it again asks for a
 // new one. It is a rotation rather than a repair: Databricks assigns the
 // applicationId and will not accept one, so everything granted to the old
 // identity has to be granted again by whoever governs that.
@@ -497,8 +497,9 @@ func TestOneThatIsThereIsNotBuiltAgain(t *testing.T) {
 // having seen what is left.
 
 // stopsAsking takes the annotation off, which is the only thing that revokes.
-// The opposite of asking, and named for it: what a ServiceAccount withdraws is
-// its request, which is a different act from the account withdrawing a namespace.
+// The opposite of asking, and named for it: what a ServiceAccount takes back is
+// its request, which is a different act from the account removing the
+// federation policies in a namespace.
 func stopsAsking(t *testing.T, c client.Client) {
 	t.Helper()
 	serviceAccount := serviceAccountNamed(testNamespace, testName)
@@ -878,9 +879,10 @@ func TestWithNoDatabricksAccountNothingBreaksAndEverythingSaysWhy(t *testing.T) 
 	t.Parallel()
 	c := newControllers(t, nil,
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
-	// The real holder rather than the stub: with no DatabricksAccount it has no
-	// clients, and answering NotConfigured is the whole of what is being tested.
-	c.Issued.Databricks = dbx.NewHolder(operatorNamespace, accountObject)
+	// The real AccountInUse rather than the stub: with no DatabricksAccount it
+	// has no clients, and answering NotConfigured is the whole of what is being
+	// tested.
+	c.Issued.Databricks = dbx.NewAccountInUse(operatorNamespace, accountObject)
 
 	c.settle(t)
 
@@ -993,12 +995,12 @@ func TestEnablingANamespaceWakesAServiceAccountItCanOnlyRefuse(t *testing.T) {
 	}
 }
 
-// TestANamespaceWithMintingClosedKeepsWhatItHas covers the difference between the two
-// things that can be withdrawn.
+// TestANamespaceWithMintingClosedKeepsWhatItHas covers the difference between
+// the two things that can be taken away.
 //
 // The annotation is a workload saying it no longer needs an identity, and
-// withdrawing it revokes. The namespace label is the cluster saying which teams
-// are in, and withdrawing it is not a statement about any workload -- so what
+// taking it off revokes. The namespace label is the cluster saying which teams
+// are in, and taking it off is not a statement about any workload -- so what
 // exists is left alone, still working, and no longer managed.
 //
 // Read the other way: without this, one `kubectl label namespace ... -` deletes

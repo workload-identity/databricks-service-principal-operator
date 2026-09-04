@@ -59,7 +59,7 @@ func accountServingWith(name string, namespaces ...string) *dbxv1alpha1.Databric
 }
 
 // TestChangingWhichNamespacesAreServedWakesEveryRecord covers the edit that
-// starts and ends a withdrawal reaching the records that carry it out.
+// starts and ends a removal reaching the records that carry it out.
 //
 // Taking a namespace off spec.namespaces changes no record, no ServiceAccount
 // and no Namespace, so this watch is the only thing that hears it. Without it
@@ -76,7 +76,7 @@ func TestChangingWhichNamespacesAreServedWakesEveryRecord(t *testing.T) {
 
 	if !p.Update(event.UpdateEvent{ObjectOld: both, ObjectNew: one}) {
 		t.Error("a namespace taken out of scope woke no record; the trust it was supposed to " +
-			"withdraw stays in place until every record's own ten-minute interval comes round")
+			"take off stays in place until every record's own ten-minute interval comes round")
 	}
 	if !p.Update(event.UpdateEvent{ObjectOld: one, ObjectNew: both}) {
 		t.Error("a namespace named again woke no record; the identities there are exchangeable " +

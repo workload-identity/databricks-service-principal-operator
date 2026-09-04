@@ -61,7 +61,7 @@ const (
 	// with nothing saying why.
 	accountRetryAfterSettled = 10 * time.Minute
 
-	// withdrawalClaimStale is how long a namespace may go without its holder
+	// policyRemovalClaimStale is how long a namespace may go without its holder
 	// saying it is still there before another operator may take it. Five
 	// accountRetryAfterAwaited intervals: the holder rewrites the timestamp on
 	// every pass, so one missed pass is a slow one and five is an operator that
@@ -73,7 +73,7 @@ const (
 	// namespace off it can still reach Databricks -- and both talk to the same
 	// account, so an outage that stops one stops the other, and the handover
 	// costs nothing because neither can act.
-	withdrawalClaimStale = 5 * time.Minute
+	policyRemovalClaimStale = 5 * time.Minute
 )
 
 // DatabricksAccountReconciler turns one DatabricksAccount into the clients the
@@ -90,9 +90,9 @@ type DatabricksAccountReconciler struct {
 	// decision made when it is deployed, not by whoever can create an object.
 	DatabricksAccountNamespacedName types.NamespacedName
 
-	// Holder is what the other controllers hold. This controller is the only
+	// AccountInUse is what the other controllers hold. This controller is the only
 	// writer.
-	Holder *databricks.Holder
+	AccountInUse *databricks.AccountInUse
 
 	// OwnToken is where the operator's own projected token is mounted and what
 	// audience it carries: the half of the config the Deployment decides. The
@@ -117,11 +117,11 @@ type DatabricksAccountReconciler struct {
 
 // The only object this operator writes that it does not own -- the
 // DatabricksServiceAccounts beside it are its own kind, which it makes and
-// deletes. What it writes is one label key of its own, saying it is withdrawing
-// from a namespace this account has stopped naming, and it takes that key off
-// again when it has finished. MintLabel and InjectLabel are the cluster's,
-// given to every operator serving the namespace at once, and nothing here reads
-// or moves them.
+// deletes. What it writes is one label key of its own, saying it is removing
+// federation policies in a namespace this account has stopped naming, and it
+// takes that key off again when it has finished. MintLabel and InjectLabel are
+// the cluster's, given to every operator serving the namespace at once, and
+// nothing here reads or moves them.
 //
 // patch and not update, which is what confines the write to that one key: an
 // update sends a whole Namespace, including a quota controller's annotations and
@@ -155,7 +155,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		// Deleted. There is no account to act in, and saying so is better than
 		// acting in one nobody has declared.
-		r.Holder.Clear(fmt.Sprintf("DatabricksAccount %s was deleted", r.DatabricksAccountNamespacedName))
+		r.AccountInUse.Clear(fmt.Sprintf("DatabricksAccount %s was deleted", r.DatabricksAccountNamespacedName))
 		return ctrl.Result{}, nil
 	}
 
@@ -191,7 +191,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// knowability: suspending minting needs nothing from Databricks, and a
 	// namespace this account has stopped naming must not go on minting into it
 	// for as long as Databricks happens to be unreachable.
-	withdrawn := r.withdraw(ctx, &databricksAccount, records)
+	removed := r.removeFederationPoliciesIn(ctx, &databricksAccount, records)
 
 	cfg := r.OwnToken.ForAccount(databricksAccount.Spec.Host,
 		databricksAccount.Spec.AccountID, databricksAccount.Spec.ClientID)
@@ -209,8 +209,8 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Only when the declaration itself changed. The same declaration failing is
 	// one bad call, and withdrawing over that would take every workload's
 	// identity out of reach until Databricks answered again.
-	if installed, ok := r.Holder.BuiltFrom(); ok && installed != cfg {
-		r.Holder.Clear(fmt.Sprintf(
+	if installed, ok := r.AccountInUse.BuiltFrom(); ok && installed != cfg {
+		r.AccountInUse.Clear(fmt.Sprintf(
 			"DatabricksAccount %s was changed to name Databricks account %s, and that has not "+
 				"been verified yet; read its status", r.DatabricksAccountNamespacedName, databricksAccount.Spec.AccountID))
 	}
@@ -232,7 +232,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return r.reportReady(ctx, &databricksAccount, result.Status, result.Reason, message)
 	}
 
-	r.Holder.Set(cfg, clients)
+	r.AccountInUse.Set(cfg, clients)
 
 	// The subject as the status holds it, not as this pass read it. Verification
 	// goes on passing for about an hour after the token file becomes unreadable
@@ -242,9 +242,9 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// reason it is not blanked above: the value is not wrong, it was not read.
 	result, err := r.reportReady(ctx, &databricksAccount, metav1.ConditionTrue, reasonAccountReady,
 		fmt.Sprintf("acting in account %s as %s", databricksAccount.Spec.AccountID, databricksAccount.Status.Subject))
-	if !withdrawn {
+	if !removed {
 		// The settled interval is long because a working account has nobody
-		// waiting on it. A withdrawal that has not finished has somebody waiting
+		// waiting on it. A removal that has not finished has somebody waiting
 		// on it, and what would finish it -- a namespace this operator could not
 		// claim, a record whose trust is still in place -- raises no event here
 		// either.
@@ -332,7 +332,7 @@ func (r *DatabricksAccountReconciler) reportAgreement(databricksAccount *dbxv1al
 // Not served refuses to make anything -- no DatabricksAccount, or one naming no
 // namespaces, mints nothing, since acting on an absent answer would be this
 // operator spending an account admin credential somewhere nobody said it could.
-// Not served is also what withdraws the trust from an identity that exists, and
+// Not served is also what takes the trust off an identity that exists, and
 // there an absent answer must not be acted on at all: an object that has been
 // deleted, or that this pass has not read yet, is this operator knowing nothing,
 // and knowing nothing is never a reason to take something back.
@@ -341,7 +341,8 @@ func (r *DatabricksAccountReconciler) reportAgreement(databricksAccount *dbxv1al
 // DatabricksServiceAccount controller and the record's decide what to do from
 // this answer, and two spellings of it are two chances for one of them to read
 // a namespace as served that the other does not -- which is an identity minted
-// on one side and withdrawn on the other, at the same time, for ever.
+// on one side and stripped of its trust on the other, at the same time, for
+// ever.
 func accountServes(ctx context.Context, reader client.Reader,
 	name types.NamespacedName, namespace string) (declared, served bool, err error) {
 	var databricksAccount dbxv1alpha1.DatabricksAccount
@@ -354,9 +355,9 @@ func accountServes(ctx context.Context, reader client.Reader,
 	return true, databricksAccount.Spec.Serves(namespace), nil
 }
 
-// withdraw suspends minting in every namespace this operator issued something in
-// and this account no longer names, and reports whether the withdrawal has
-// finished.
+// removeFederationPoliciesIn suspends minting in every namespace this operator
+// issued something in and this account no longer names, and reports whether the
+// removal has finished.
 //
 // The set is derived from the records rather than remembered from a previous
 // spec. Nothing here holds the list as it was before the edit, and it does not
@@ -364,7 +365,7 @@ func accountServes(ctx context.Context, reader client.Reader,
 // not name is one it is no longer entitled to spend on, whether the edit was a
 // moment ago or before this process started. A remembered list would also have
 // to survive a restart, and the one thing that must not depend on this
-// operator's memory is a withdrawal.
+// operator's memory is which identities are still trusted.
 //
 // Nothing is destroyed. The service principals stay, with every grant made on
 // them, and so do the records and their ids -- what goes is, on the records
@@ -375,8 +376,8 @@ func accountServes(ctx context.Context, reader client.Reader,
 // The suspension goes too, as soon as there is nothing left to take back. It is
 // this operator saying "not while I am working", not a verdict on the namespace,
 // and holding it any longer would leave every other operator serving that
-// namespace unable to mint for a withdrawal that had finished.
-func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
+// namespace unable to mint for a removal that had finished.
+func (r *DatabricksAccountReconciler) removeFederationPoliciesIn(ctx context.Context,
 	databricksAccount *dbxv1alpha1.DatabricksAccount,
 	records []dbxv1alpha1.IssuedDatabricksServicePrincipal) bool {
 	// Every namespace out of scope, and how many identities in it this cluster
@@ -393,14 +394,14 @@ func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
 		if _, seen := holding[namespace]; !seen {
 			holding[namespace] = 0
 		}
-		if !withdrawnFromDatabricks(&records[i]) {
+		if !policiesRemovedFromDatabricks(&records[i]) {
 			holding[namespace]++
 		}
 	}
 
 	if len(holding) == 0 {
-		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionNamespacesWithdrawn,
-			metav1.ConditionTrue, reasonWithdrawn,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionFederationPoliciesRemoved,
+			metav1.ConditionTrue, reasonPoliciesRemoved,
 			"every namespace this operator issued an identity in is one this account names")
 		return true
 	}
@@ -419,19 +420,19 @@ func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
 	for _, namespace := range namespaces {
 		if holding[namespace] > 0 {
 			trusted = append(trusted, fmt.Sprintf("%s (%d)", namespace, holding[namespace]))
-			if err := r.acquireWithdrawal(ctx, namespace); err != nil {
+			if err := r.acquirePolicyRemoval(ctx, namespace); err != nil {
 				unclaimed = append(unclaimed, fmt.Sprintf("%s (%v)", namespace, err))
 			}
 			continue
 		}
-		if err := r.releaseWithdrawal(ctx, namespace); err != nil {
+		if err := r.releasePolicyRemoval(ctx, namespace); err != nil {
 			stillHeld = append(stillHeld, fmt.Sprintf("%s (%v)", namespace, err))
 		}
 	}
 
 	if len(unclaimed) == 0 && len(stillHeld) == 0 && len(trusted) == 0 {
-		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionNamespacesWithdrawn,
-			metav1.ConditionTrue, reasonWithdrawn,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionFederationPoliciesRemoved,
+			metav1.ConditionTrue, reasonPoliciesRemoved,
 			fmt.Sprintf("this account no longer serves %s: no token from this cluster can be "+
 				"exchanged for the identities it issued there, and minting is no longer "+
 				"suspended, so any other operator serving those namespaces goes on as before. "+
@@ -450,7 +451,7 @@ func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
 		said = append(said, fmt.Sprintf(
 			"this operator does not hold %s on %s, so it has removed nothing there: it will "+
 				"not take the trust off identities in a namespace that can still mint them",
-			dbxv1alpha1.WithdrawingLabel, strings.Join(unclaimed, ", ")))
+			dbxv1alpha1.RemovingPoliciesLabel, strings.Join(unclaimed, ", ")))
 	}
 	if len(stillHeld) > 0 {
 		// The trust is gone and only the suspension is left, which is why this is
@@ -458,9 +459,9 @@ func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
 		// what it costs is every other operator serving these namespaces, whose
 		// minting does not resume until the key comes off.
 		said = append(said, fmt.Sprintf(
-			"there is nothing left to withdraw from %s and this operator could not take %s off "+
+			"there is nothing left to remove in %s and this operator could not take %s off "+
 				"them again, so no operator is minting there",
-			strings.Join(stillHeld, ", "), dbxv1alpha1.WithdrawingLabel))
+			strings.Join(stillHeld, ", "), dbxv1alpha1.RemovingPoliciesLabel))
 	}
 	if len(trusted) > 0 {
 		said = append(said, fmt.Sprintf(
@@ -468,26 +469,26 @@ func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
 				"why under Ready, in namespace %s",
 			strings.Join(trusted, ", "), r.DatabricksAccountNamespacedName.Namespace))
 	}
-	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionNamespacesWithdrawn,
-		metav1.ConditionFalse, reasonWithdrawing,
+	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionFederationPoliciesRemoved,
+		metav1.ConditionFalse, reasonRemovingPolicies,
 		fmt.Sprintf("%s. Nothing has been destroyed by this and nothing is destroyed by its not "+
 			"finishing: every service principal and every grant on it is where it was.",
 			strings.Join(said, ". ")))
 	return false
 }
 
-// withdrawnFromDatabricks reports whether this cluster can still be exchanged
-// for the identity this record names.
+// policiesRemovedFromDatabricks reports whether this cluster can still be
+// exchanged for the identity this record names.
 //
 // Read from the condition the record already writes rather than from a field
 // beside it. A second place saying the same thing is a second place for the two
 // to disagree, and the disagreement that matters is this account reporting a
-// withdrawal finished while the record it counted says the trust is still there.
+// removal finished while the record it counted says the trust is still there.
 //
-// RemovedInDatabricks counts as withdrawn because the service principal itself
+// RemovedInDatabricks counts as removed because the service principal itself
 // is gone, and its federation policies went with it -- measured against a live
 // account. There is nothing left to take back.
-func withdrawnFromDatabricks(issued *dbxv1alpha1.IssuedDatabricksServicePrincipal) bool {
+func policiesRemovedFromDatabricks(issued *dbxv1alpha1.IssuedDatabricksServicePrincipal) bool {
 	ready := meta.FindStatusCondition(issued.Status.Conditions, conditionReady)
 	if ready == nil {
 		return false
@@ -495,7 +496,7 @@ func withdrawnFromDatabricks(issued *dbxv1alpha1.IssuedDatabricksServicePrincipa
 	return ready.Reason == reasonNotServed || ready.Reason == reasonRemovedInDatabricks
 }
 
-// acquireWithdrawal claims a namespace for this operator's withdrawal, and says
+// acquirePolicyRemoval claims a namespace for this operator's removal, and says
 // again on every pass that the claim is still wanted.
 //
 // The claim is one label key, and server-side apply is the whole of the mutual
@@ -512,20 +513,20 @@ func withdrawnFromDatabricks(issued *dbxv1alpha1.IssuedDatabricksServicePrincipa
 // move when the applied content is identical -- measured against a live cluster
 // -- so an unchanging annotation would say when the claim was made and never
 // that its holder is still running.
-func (r *DatabricksAccountReconciler) acquireWithdrawal(ctx context.Context, name string) error {
+func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, name string) error {
 	// Read before the apply because this operator holds no create on Namespaces:
 	// an apply naming one that is not there is a create, and a namespace that is
 	// gone is one nothing can be minted into and so one with nothing to claim.
 	// Its records stay, and their trust is taken back on their own controller's
 	// pass.
-	switch _, exists, err := withdrawalHeldBy(ctx, r.Client, name); {
+	switch _, exists, err := policyRemovalHeldBy(ctx, r.Client, name); {
 	case err != nil:
 		return err
 	case !exists:
 		return nil
 	}
 
-	err := r.Apply(ctx, withdrawingBy(name, r.DatabricksAccountNamespacedName, time.Now()), r.owner())
+	err := r.Apply(ctx, removingPoliciesBy(name, r.DatabricksAccountNamespacedName, time.Now()), r.owner())
 	if !apierrors.IsConflict(err) {
 		return err
 	}
@@ -538,8 +539,8 @@ func (r *DatabricksAccountReconciler) acquireWithdrawal(ctx context.Context, nam
 	if err := r.Get(ctx, types.NamespacedName{Name: name}, &namespace); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	holder := namespace.Labels[dbxv1alpha1.WithdrawingLabel]
-	said := namespace.Annotations[dbxv1alpha1.WithdrawingSinceAnnotation]
+	holder := namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel]
+	said := namespace.Annotations[dbxv1alpha1.RemovingPoliciesSinceAnnotation]
 
 	since, unreadable := time.Parse(time.RFC3339, said)
 	if unreadable != nil {
@@ -549,7 +550,7 @@ func (r *DatabricksAccountReconciler) acquireWithdrawal(ctx context.Context, nam
 		// puts it in front of somebody.
 		return fmt.Errorf("held by %s, which has not said when: %q", holder, said)
 	}
-	if age := time.Since(since); age < withdrawalClaimStale {
+	if age := time.Since(since); age < policyRemovalClaimStale {
 		return fmt.Errorf("held by %s, last seen %s ago", holder, age.Truncate(time.Second))
 	}
 
@@ -557,17 +558,17 @@ func (r *DatabricksAccountReconciler) acquireWithdrawal(ctx context.Context, nam
 	// ago that waiting for it is waiting for nothing, and the operator it is
 	// taken from finds out the same way anybody else does: its next apply is
 	// refused, because the field is no longer its own.
-	return r.Apply(ctx, withdrawingBy(name, r.DatabricksAccountNamespacedName, time.Now()),
+	return r.Apply(ctx, removingPoliciesBy(name, r.DatabricksAccountNamespacedName, time.Now()),
 		r.owner(), client.ForceOwnership)
 }
 
-// releaseWithdrawal gives a namespace back, by applying the same object without
-// the key: an apply keeps only what it sends.
+// releasePolicyRemoval gives a namespace back, by applying the same object
+// without the key: an apply keeps only what it sends.
 //
 // Only by the operator that holds it. An operator that was never the holder, or
 // that was taken over by another, has nothing here to give back, and sending
-// this anyway would be one operator ending another's withdrawal halfway through.
-func (r *DatabricksAccountReconciler) releaseWithdrawal(ctx context.Context, name string) error {
+// this anyway would be one operator ending another's removal halfway through.
+func (r *DatabricksAccountReconciler) releasePolicyRemoval(ctx context.Context, name string) error {
 	var namespace corev1.Namespace
 	switch err := r.Get(ctx, types.NamespacedName{Name: name}, &namespace); {
 	case apierrors.IsNotFound(err):
@@ -575,21 +576,21 @@ func (r *DatabricksAccountReconciler) releaseWithdrawal(ctx context.Context, nam
 	case err != nil:
 		return err
 	}
-	if namespace.Labels[dbxv1alpha1.WithdrawingLabel] != withdrawnBy(r.DatabricksAccountNamespacedName) {
+	if namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel] != removedPoliciesBy(r.DatabricksAccountNamespacedName) {
 		return nil
 	}
 	return r.Apply(ctx, corev1ac.Namespace(name), r.owner())
 }
 
-// withdrawalHeldBy is the operator that has suspended minting in this namespace,
-// and whether there is a namespace at all.
+// policyRemovalHeldBy is the operator that has suspended minting in this
+// namespace, and whether there is a namespace at all.
 //
 // The two are separate answers because a namespace that is gone is not a
 // namespace nobody holds. Nothing can be minted into one that does not exist, so
-// there is nothing for a claim to protect there and a withdrawal has nothing to
+// there is nothing for a claim to protect there and a removal has nothing to
 // wait for -- while a namespace that is there and unclaimed is one this operator
 // must claim before it removes anything.
-func withdrawalHeldBy(ctx context.Context, reader client.Reader, name string) (
+func policyRemovalHeldBy(ctx context.Context, reader client.Reader, name string) (
 	holder string, exists bool, err error) {
 	var namespace corev1.Namespace
 	switch err := reader.Get(ctx, types.NamespacedName{Name: name}, &namespace); {
@@ -598,26 +599,27 @@ func withdrawalHeldBy(ctx context.Context, reader client.Reader, name string) (
 	case err != nil:
 		return "", false, err
 	}
-	return namespace.Labels[dbxv1alpha1.WithdrawingLabel], true, nil
+	return namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel], true, nil
 }
 
-// withdrawingBy is the claim as this operator sends it: the key, its own name,
-// and the time it is saying so.
-func withdrawingBy(name string, account types.NamespacedName,
+// removingPoliciesBy is the claim as this operator sends it: the key, its own
+// name, and the time it is saying so.
+func removingPoliciesBy(name string, account types.NamespacedName,
 	at time.Time) *corev1ac.NamespaceApplyConfiguration {
 	return corev1ac.Namespace(name).
-		WithLabels(map[string]string{dbxv1alpha1.WithdrawingLabel: withdrawnBy(account)}).
+		WithLabels(map[string]string{dbxv1alpha1.RemovingPoliciesLabel: removedPoliciesBy(account)}).
 		WithAnnotations(map[string]string{
-			dbxv1alpha1.WithdrawingSinceAnnotation: at.UTC().Format(time.RFC3339),
+			dbxv1alpha1.RemovingPoliciesSinceAnnotation: at.UTC().Format(time.RFC3339),
 		})
 }
 
-// withdrawnBy is how one operator names itself to another in a label value.
+// removedPoliciesBy is how one operator names itself to another in a label
+// value.
 //
 // A "." where every other reference to an operator in this API uses a "/",
 // because a label value may not hold one. Both halves are read back by people,
 // not parsed: what a loser does with the name is print it.
-func withdrawnBy(account types.NamespacedName) string {
+func removedPoliciesBy(account types.NamespacedName) string {
 	return account.Namespace + "." + account.Name
 }
 
@@ -702,8 +704,9 @@ func verifyAccount(ctx context.Context, clients databricks.Clients) error {
 // interval would leave the operator looking broken for a minute after it was
 // fixed.
 //
-// Which namespaces it serves: taking one off that list is a withdrawal, and the
-// records in it are where the withdrawal is carried out. Nothing else says so --
+// Which namespaces it serves: taking one off that list removes the federation
+// policies there, and the records in it are where that is carried out. Nothing
+// else says so --
 // the edit changes no record, no ServiceAccount and no Namespace -- so without
 // this the trust stays in place until each record comes round on its own
 // interval, which for a settled identity is ten minutes. Putting a namespace

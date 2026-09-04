@@ -64,7 +64,7 @@ type Clients interface {
 	EnsureFederationPolicy(ctx context.Context, servicePrincipalID, issuer, subject, audience string) error
 
 	// RemoveFederationPolicies makes it unexchangeable again, and is the only
-	// thing this operator can withdraw without destroying anything: the service
+	// thing this operator can take back without destroying anything: the service
 	// principal and every grant on it stay, and a token already in a pod is
 	// unaffected, because Databricks alone decides what it accepts.
 	RemoveFederationPolicies(ctx context.Context, servicePrincipalID, issuer, subject string) error
@@ -72,7 +72,7 @@ type Clients interface {
 	// Snapshot is one view of these clients, which does not change under the
 	// caller.
 	//
-	// What the controllers hold is a Holder, and the account controller can
+	// What the controllers hold is a AccountInUse, and the account controller can
 	// replace what is inside it at any moment. A pass that asks which account it
 	// is in and then makes a call has taken two views, and the two can differ --
 	// so the guard passes on one account while the call goes to another. What
@@ -83,7 +83,7 @@ type Clients interface {
 	// be undone.
 	//
 	// Anything already fixed returns itself, so this is only ever a question for
-	// the Holder to answer.
+	// the AccountInUse to answer.
 	Snapshot() Clients
 }
 

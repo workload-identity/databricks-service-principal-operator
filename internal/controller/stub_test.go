@@ -55,13 +55,13 @@ type stubClients struct {
 	policyErr error
 
 	// removeErr fails only RemoveFederationPolicies, so a test can see what a
-	// withdrawal that did not land says about itself, and that it does not say
+	// removal that did not land says about itself, and that it does not say
 	// it is finished.
 	removeErr error
 
-	// withdrawn is every service principal this operator asked to have the trust
-	// taken off, in the order it asked.
-	withdrawn []string
+	// policiesRemoved is every service principal this operator asked to have the
+	// trust taken off, in the order it asked.
+	policiesRemoved []string
 
 	// policyPanics stands in for the process dying inside that call. Nothing
 	// after it runs -- which is the only way "written down before the next call"
@@ -79,8 +79,8 @@ type stubClients struct {
 
 func (s *stubClients) AccountClient() *databricks.AccountClient { panic("not used") }
 
-// Snapshot returns this stub. What the Holder does here is the thing being
-// stood in for.
+// Snapshot returns this stub. What the AccountInUse does here is the thing
+// being stood in for.
 func (s *stubClients) Snapshot() dbx.Clients { return s }
 
 // accountID is where this stub pretends to be acting. Empty means the stub was
@@ -186,7 +186,7 @@ func (s *stubClients) RemoveFederationPolicies(_ context.Context, servicePrincip
 	if s.removeErr != nil {
 		return s.removeErr
 	}
-	s.withdrawn = append(s.withdrawn, servicePrincipalID)
+	s.policiesRemoved = append(s.policiesRemoved, servicePrincipalID)
 	prefix := servicePrincipalID + " " + issuer + " " + subject + " "
 	s.policies = slices.DeleteFunc(s.policies, func(policy string) bool {
 		return strings.HasPrefix(policy, prefix)
@@ -239,8 +239,9 @@ func namespaceNamed(name string) *corev1.Namespace {
 //
 // Only somebody with cluster-wide access can open either, which is what stops
 // holding a namespace from being the power to mint identities without limit.
-// Neither moves without a person: an operator withdrawing from the namespace
-// suspends minting under a key of its own and gives it back afterwards.
+// Neither moves without a person: an operator removing federation policies in
+// the namespace suspends minting under a key of its own and gives it back
+// afterwards.
 func mintingNamespace(name string) *corev1.Namespace {
 	namespace := namespaceNamed(name)
 	namespace.Labels = map[string]string{

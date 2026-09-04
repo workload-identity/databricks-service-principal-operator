@@ -63,11 +63,11 @@ const (
 // and it is asked the same question every pass whether or not anybody saw
 // anything happen.
 //
-// One thing here waits on another controller, and only one: taking an identity's
-// trust back waits until this operator has claimed the identity's namespace, so
-// that the set being withdrawn from has stopped growing. It waits on the state
-// rather than on the pass -- it reads the Namespace -- so nothing has to run in
-// an order.
+// One thing here waits on another controller, and only one: taking an
+// identity's trust back waits until this operator has claimed the identity's
+// namespace, so that the set it is removing policies from has stopped growing.
+// It waits on the state rather than on the pass -- it reads the Namespace -- so
+// nothing has to run in an order.
 type IssuedDatabricksServicePrincipalReconciler struct {
 	client.Client
 	Scheme     *runtime.Scheme
@@ -114,7 +114,7 @@ type IssuedDatabricksServicePrincipalReconciler struct {
 // Is the ServiceAccount this was issued to still there, still asking, and still
 // the same one? No is the answer that destroys the identity, and it is reached
 // the same way whether the ServiceAccount was deleted, its annotation was
-// withdrawn, its namespace was torn down, or all of that happened while this
+// removed, its namespace was torn down, or all of that happened while this
 // operator was not running. Nothing here waits to be told.
 func (r *IssuedDatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var issued dbxv1alpha1.IssuedDatabricksServicePrincipal
@@ -125,7 +125,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) Reconcile(ctx context.Conte
 		return ctrl.Result{}, err
 	}
 
-	// One view of the clients for the whole pass. Asking the Holder again
+	// One view of the clients for the whole pass. Asking the AccountInUse again
 	// between the guard and the call it guards is what lets a pass check one
 	// account and act in another.
 	clients := r.Databricks.Snapshot()
@@ -207,13 +207,14 @@ func (r *IssuedDatabricksServicePrincipalReconciler) stillWanted(ctx context.Con
 	// asks at all would keep both -- and asking whether it asks for none would
 	// destroy both.
 	//
-	// Withdrawn rather than "not asked for", and the two differ on exactly one
-	// input: a key that is there and whose value will not parse. It asks for
-	// nothing and it withdraws nothing, and reading the second as the first is
-	// what deleted a service principal over a missing "/". This is the read that
-	// destroys, so it is the one place where uncertainty must not.
+	// NoLongerAsked rather than "not asked for", and the two differ on exactly
+	// one input: a key that is there and whose value will not parse. Nothing is
+	// asked for through it, and nothing is taken back through it either, and
+	// reading the second as the first is what deleted a service principal over a
+	// missing "/". This is the read that destroys, so it is the one place where
+	// uncertainty must not.
 	requested := dbxv1alpha1.RequestsFor(serviceAccount.Annotations, r.DatabricksAccountNamespacedName)
-	if requested.Withdrawn(issued.Spec.Identity) {
+	if requested.NoLongerAsked(issued.Spec.Identity) {
 		return false, nil
 	}
 	return serviceAccount.UID == issued.Spec.ServiceAccount.UID, nil
@@ -531,8 +532,8 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 	//
 	// Both controllers read one cache, so a claim this one sees is one the
 	// DatabricksServiceAccount controller sees too. Waiting for it is what makes
-	// the set this withdrawal acts on stop moving before any of it is removed.
-	holder, exists, err := withdrawalHeldBy(ctx, r.Client, namespace)
+	// the set this removal acts on stop moving before any of it is removed.
+	holder, exists, err := policyRemovalHeldBy(ctx, r.Client, namespace)
 	switch {
 	case err != nil:
 		return ctrl.Result{}, err
@@ -542,21 +543,21 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 				"%s there. Nothing has been asked of Databricks for this identity: a removal "+
 				"begun while identities can still be made here would leave behind the ones made "+
 				"after it. This operator writes that label on its account's own pass, and the "+
-				"withdrawal follows.",
-				namespace, r.DatabricksAccountNamespacedName, dbxv1alpha1.WithdrawingLabel))
-	case exists && holder != withdrawnBy(r.DatabricksAccountNamespacedName):
-		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAnotherWithdrawal,
-			fmt.Sprintf("namespace %s carries %s=%s, so operator %s is withdrawing from it and "+
-				"this one waits: one withdrawal at a time is what keeps either from working "+
-				"through a set the other is still adding to. Nothing has been asked of "+
-				"Databricks for this identity.",
-				namespace, dbxv1alpha1.WithdrawingLabel, holder, holder))
+				"removal follows.",
+				namespace, r.DatabricksAccountNamespacedName, dbxv1alpha1.RemovingPoliciesLabel))
+	case exists && holder != removedPoliciesBy(r.DatabricksAccountNamespacedName):
+		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAnotherRemoval,
+			fmt.Sprintf("namespace %s carries %s=%s, so operator %s is removing its federation "+
+				"policies there and this one waits: one removal at a time is what keeps either "+
+				"from working through a set the other is still adding to. Nothing has been "+
+				"asked of Databricks for this identity.",
+				namespace, dbxv1alpha1.RemovingPoliciesLabel, holder, holder))
 	}
 
 	// The same refusal converge and destroy make, for the same reason. Listing
 	// the policies on an id that was made in another account is a lookup in the
 	// wrong place, and whatever it answers -- nothing there, or a 404 -- reads
-	// exactly like the trust already being gone. Reporting that as a withdrawal
+	// exactly like the trust already being gone. Reporting that as a removal
 	// would be this operator saying it took back something it never looked at.
 	if issued.Status.AccountID == "" && clients.AccountID() != "" {
 		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
@@ -567,7 +568,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 	}
 
 	// The issuer alone, as a deletion takes it. The audience is what a policy
-	// being written needs, and holding a withdrawal over a token with no aud
+	// being written needs, and holding a removal over a token with no aud
 	// claim would leave the trust in place over a value nothing here sends.
 	issuer, err := r.issuer(ctx)
 	if err != nil {
@@ -577,7 +578,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 	if err := clients.RemoveFederationPolicies(ctx,
 		issued.Status.ServicePrincipalID, issuer, issued.Spec.Subject); err != nil {
 		result := outcomeFor(err)
-		return r.reportReady(ctx, issued, result.Status, reasonWithdrawFailed,
+		return r.reportReady(ctx, issued, result.Status, reasonRemovePoliciesFailed,
 			fmt.Sprintf("%s; namespace %s is no longer served and this cluster can still be "+
 				"exchanged for service principal %s, which is what the removal was for",
 				result.Message, namespace, issued.Status.ServicePrincipalID))
@@ -590,13 +591,14 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 			"same client id.", namespace, r.DatabricksAccountNamespacedName, issued.Status.ServicePrincipalID, namespace))
 }
 
-// settled reports a withdrawal that has finished, and asks to be looked at on
+// settled reports a removal that has finished, and asks to be looked at on
 // the long interval rather than the short one.
 //
 // The short interval is for an identity somebody is waiting on. Nobody is
 // waiting on this one: what would change it is an edit to the DatabricksAccount,
 // which wakes every record directly. Left on the short interval it would cost a
-// federation policy listing a minute, for every withdrawn identity, for as long
+// federation policy listing a minute, for every identity already let go of, for
+// as long
 // as the operator runs -- which is the cost the settled interval exists to
 // avoid.
 func (r *IssuedDatabricksServicePrincipalReconciler) settled(ctx context.Context,
@@ -612,7 +614,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) settled(ctx context.Context
 // letGoOf reports whether this record's trust was taken off on an earlier pass.
 //
 // Read from the condition the record already writes, which is where the account
-// that started the withdrawal reads it from too. A field beside it would be a
+// that started the removal reads it from too. A field beside it would be a
 // second place saying the same thing, and the disagreement that matters is this
 // record claiming a removal the account is still waiting for.
 //
@@ -644,8 +646,8 @@ func (r *IssuedDatabricksServicePrincipalReconciler) issuing(
 // account than the one the operator is acting in, and says so in the words
 // whoever reads it needs.
 //
-// Only when both are known. An unconfigured Holder reports no account, and that
-// is not evidence of anything.
+// Only when both are known. An unconfigured AccountInUse reports no account,
+// and that is not evidence of anything.
 func (r *IssuedDatabricksServicePrincipalReconciler) elsewhere(clients databricks.Clients,
 	issued *dbxv1alpha1.IssuedDatabricksServicePrincipal) (bool, string) {
 	here := clients.AccountID()
@@ -768,7 +770,8 @@ func (r *IssuedDatabricksServicePrincipalReconciler) SetupWithManager(mgr ctrl.M
 			})).
 		// An account that has just become usable makes every record here
 		// answerable, and one that has stopped serving a namespace makes the
-		// records in it withdrawable. Nothing on a record reports either.
+		// records in it ones to remove the policies from. Nothing on a record
+		// reports either.
 		Watches(enqueueOnAccountChange(mgr, r.DatabricksAccountNamespacedName,
 			&dbxv1alpha1.IssuedDatabricksServicePrincipalList{}, issuedRequests)).
 		Named("issueddatabricksserviceprincipal").
