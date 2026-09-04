@@ -66,9 +66,6 @@ func init() {
 // Between those two is where a dropped assignment lives, and this is what makes
 // that stretch reachable.
 type settings struct {
-	// Namespace is the operator's own, which is where the DatabricksAccount is
-	// read from and where the records of what was issued are kept.
-	Namespace                       string
 	DatabricksAccountNamespacedName types.NamespacedName
 	Holder                          *databricks.Holder
 	Runtime                         databricks.Config
@@ -93,7 +90,6 @@ func reconcilers(s settings, c client.Client, live client.Reader, scheme *runtim
 		}, &controller.DatabricksServiceAccountReconciler{
 			Client:                          c,
 			Scheme:                          scheme,
-			Records:                         s.Namespace,
 			DatabricksAccountNamespacedName: s.DatabricksAccountNamespacedName,
 		}, &controller.IssuedDatabricksServicePrincipalReconciler{
 			Client:                          c,
@@ -275,7 +271,6 @@ func main() {
 	// crashlooping with the reason only in its log.
 	dbClients := databricks.NewHolder(namespace, accountName)
 
-	decided.Namespace = namespace
 	decided.DatabricksAccountNamespacedName = account
 	decided.Holder = dbClients
 	decided.Runtime = runtimeCfg

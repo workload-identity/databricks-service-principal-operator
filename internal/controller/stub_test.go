@@ -347,7 +347,6 @@ func newHarnessWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
 		Projection: &DatabricksServiceAccountReconciler{
 			Client:                          c,
 			Scheme:                          scheme,
-			Records:                         testRecords,
 			DatabricksAccountNamespacedName: testOperator,
 		},
 		Issued: &IssuedDatabricksServicePrincipalReconciler{

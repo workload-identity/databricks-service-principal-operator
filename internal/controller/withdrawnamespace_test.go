@@ -69,7 +69,6 @@ func projectionFor(scheme *runtime.Scheme, c client.Client,
 	return &DatabricksServiceAccountReconciler{
 		Client:                          c,
 		Scheme:                          scheme,
-		Records:                         operator.Namespace,
 		DatabricksAccountNamespacedName: operator,
 	}
 }

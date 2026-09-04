@@ -16,15 +16,14 @@ import (
 // assembly does; the rendered-manifest test checks only that a flag is still in
 // the container's args, so it passes whatever the binary does with it. An
 // assignment dropped between the two is silent, and what it breaks is specific:
-// losing Records has the records of what was issued written to one namespace and
-// looked for in another, and losing DatabricksAccountNamespacedName makes the
-// operator act in whichever DatabricksAccount somebody created.
+// losing DatabricksAccountNamespacedName makes the operator act in whichever
+// DatabricksAccount somebody created, and write the records of what was issued
+// where nothing looks for them.
 //
 // So this asserts the one thing neither end can: that each value arrives.
 func TestEverySettingReachesAReconciler(t *testing.T) {
 	t.Parallel()
 	want := settings{
-		Namespace:                       "operators",
 		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: "operators", Name: "the-account"},
 		Holder:                          databricks.NewHolder("operators", "the-account"),
 		Runtime: databricks.Config{
@@ -35,15 +34,14 @@ func TestEverySettingReachesAReconciler(t *testing.T) {
 
 	account, projection, issued := reconcilers(want, nil, nil, nil)
 
-	if projection.Records != want.Namespace {
-		t.Errorf("Records is %q, want %q -- the records of what was issued would be written "+
-			"to, and looked for in, different namespaces", projection.Records, want.Namespace)
-	}
 	wanted := want.DatabricksAccountNamespacedName
-	if issued.DatabricksAccountNamespacedName != wanted || account.DatabricksAccountNamespacedName != wanted {
-		t.Errorf("DatabricksAccountNamespacedName is %v and %v, want %v -- the operator would "+
+	if issued.DatabricksAccountNamespacedName != wanted ||
+		account.DatabricksAccountNamespacedName != wanted ||
+		projection.DatabricksAccountNamespacedName != wanted {
+		t.Errorf("DatabricksAccountNamespacedName is %v, %v and %v, want %v -- the operator would "+
 			"act in whichever DatabricksAccount somebody created",
-			issued.DatabricksAccountNamespacedName, account.DatabricksAccountNamespacedName, wanted)
+			issued.DatabricksAccountNamespacedName, account.DatabricksAccountNamespacedName,
+			projection.DatabricksAccountNamespacedName, wanted)
 	}
 	if issued.Databricks != want.Holder || account.Holder != want.Holder {
 		t.Error("the two controllers were not given the same Holder; the account controller " +

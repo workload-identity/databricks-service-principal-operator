@@ -164,7 +164,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) Reconcile(ctx context.Conte
 	// this operator never made, or read the 404 that means "not here" as the one
 	// that means "gone".
 	if elsewhere, message := r.elsewhere(clients, &issued); elsewhere {
-		return r.report(ctx, &issued, metav1.ConditionUnknown, reasonAccountMismatch, message)
+		return r.reportReady(ctx, &issued, metav1.ConditionUnknown, reasonAccountMismatch, message)
 	}
 
 	switch wanted, err := r.stillWanted(ctx, &issued); {
@@ -238,7 +238,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 	// and it costs nothing to wait: the record is in the operator's own
 	// namespace, so nothing else is blocked by it.
 	if elsewhere, message := r.elsewhere(clients, issued); elsewhere {
-		return r.report(ctx, issued, metav1.ConditionUnknown, reasonAccountMismatch, message)
+		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountMismatch, message)
 	}
 
 	// The same refusal, for the same reason and a worse outcome. Deleting an id
@@ -247,7 +247,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 	// nothing anywhere recording it.
 	if issued.Status.ServicePrincipalID != "" && issued.Status.AccountID == "" &&
 		clients.AccountID() != "" {
-		return r.report(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
+		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
 			fmt.Sprintf("service principal %s is recorded with no Databricks account, so it is "+
 				"not deleted from here: an answer of 'not found' would mean 'not in this "+
 				"account' as readily as 'gone'. This record is held until somebody sets "+
@@ -266,12 +266,12 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 		// and this path writes none.
 		issuer, err := r.issuer(ctx)
 		if err != nil {
-			return r.report(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
+			return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
 		}
 		found, _, ok, err := clients.FindServicePrincipal(ctx, r.issuing(issued, issuer))
 		if err != nil {
 			result := outcomeFor(err)
-			return r.report(ctx, issued, result.Status, result.Reason, result.Message)
+			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 		}
 		if ok {
 			id = found
@@ -281,7 +281,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 	if id != "" {
 		if err := clients.DeleteServicePrincipal(ctx, id); err != nil {
 			result := outcomeFor(err)
-			return r.report(ctx, issued, result.Status, reasonRevokeFailed,
+			return r.reportReady(ctx, issued, result.Status, reasonDeleteFailed,
 				fmt.Sprintf("%s; the service principal is still there, and this record is held until it is not",
 					result.Message))
 		}
@@ -302,7 +302,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 	// by somebody entitled to, and replacing it every minute would be this
 	// operator overruling them on a timer, and winning.
 	if issued.Status.RemovedServicePrincipalID != "" {
-		return r.report(ctx, issued, metav1.ConditionFalse, reasonRemovedInDatabricks,
+		return r.reportReady(ctx, issued, metav1.ConditionFalse, reasonRemovedInDatabricks,
 			fmt.Sprintf("service principal %s was deleted in Databricks and is not replaced. To "+
 				"issue a new identity, remove %s from ServiceAccount %s/%s and add it again, "+
 				"which produces a new client id",
@@ -343,7 +343,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 	// the strength of never having looked at it.
 	issuer, audience, err := r.issued(ctx)
 	if err != nil {
-		return r.report(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
+		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
 	}
 
 	// Written before the first call and not with its answer. A pass that creates
@@ -376,7 +376,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 	// somebody has to say which account it was made in.
 	if issued.Status.ServicePrincipalID != "" && issued.Status.AccountID == "" &&
 		clients.AccountID() != "" {
-		return r.report(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
+		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
 			fmt.Sprintf("service principal %s is recorded with no Databricks account, so an "+
 				"answer of 'not found' cannot be told from a lookup in the wrong place. Nothing "+
 				"is done for it and nothing about it is concluded. Set status.accountId to the "+
@@ -388,7 +388,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 		switch there, err := clients.ServicePrincipalExists(ctx, id); {
 		case err != nil:
 			result := outcomeFor(err)
-			return r.report(ctx, issued, result.Status, result.Reason, result.Message)
+			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 		case !there:
 			// The id is kept, in its own field, because it is the value to
 			// search Databricks' audit log with: that says who deleted it and
@@ -399,7 +399,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 			// nothing: the DatabricksServiceAccount carries no client id, so the webhook
 			// injects none.
 			issued.Status.ClientID = ""
-			return r.report(ctx, issued, metav1.ConditionFalse, reasonRemovedInDatabricks,
+			return r.reportReady(ctx, issued, metav1.ConditionFalse, reasonRemovedInDatabricks,
 				fmt.Sprintf("service principal %s was deleted in Databricks and is not replaced. To "+
 					"issue a new identity, remove %s from ServiceAccount %s/%s and add it again, "+
 					"which produces a new client id",
@@ -419,14 +419,14 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 		id, clientID, found, err := clients.FindServicePrincipal(ctx, issuing)
 		if err != nil {
 			result := outcomeFor(err)
-			return r.report(ctx, issued, result.Status, result.Reason, result.Message)
+			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 		}
 		if !found {
 			id, clientID, err = clients.CreateServicePrincipal(ctx, issuing)
 		}
 		if err != nil {
 			result := outcomeFor(err)
-			return r.report(ctx, issued, result.Status, result.Reason, result.Message)
+			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 		}
 
 		issued.Status.ServicePrincipalID = id
@@ -459,10 +459,10 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 		issued.Status.ServicePrincipalID, issuer,
 		issued.Spec.Subject, issued.Status.Audience); err != nil {
 		result := outcomeFor(err)
-		return r.report(ctx, issued, result.Status, result.Reason, result.Message)
+		return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 	}
 
-	return r.report(ctx, issued, metav1.ConditionTrue, reasonExchangeable,
+	return r.reportReady(ctx, issued, metav1.ConditionTrue, reasonExchangeable,
 		fmt.Sprintf("exchanging tokens for %s as client %s", issued.Spec.Subject, issued.Status.ClientID))
 }
 
@@ -536,7 +536,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 	case err != nil:
 		return ctrl.Result{}, err
 	case exists && holder == "":
-		return r.report(ctx, issued, metav1.ConditionUnknown, reasonMintingNotSuspended,
+		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonMintingNotSuspended,
 			fmt.Sprintf("namespace %s is not one DatabricksAccount %s names, and nothing carries "+
 				"%s there. Nothing has been asked of Databricks for this identity: a removal "+
 				"begun while identities can still be made here would leave behind the ones made "+
@@ -544,7 +544,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 				"withdrawal follows.",
 				namespace, r.DatabricksAccountNamespacedName, dbxv1alpha1.WithdrawingLabel))
 	case exists && holder != withdrawnBy(r.DatabricksAccountNamespacedName):
-		return r.report(ctx, issued, metav1.ConditionUnknown, reasonAnotherWithdrawal,
+		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAnotherWithdrawal,
 			fmt.Sprintf("namespace %s carries %s=%s, so operator %s is withdrawing from it and "+
 				"this one waits: one withdrawal at a time is what keeps either from working "+
 				"through a set the other is still adding to. Nothing has been asked of "+
@@ -558,7 +558,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 	// exactly like the trust already being gone. Reporting that as a withdrawal
 	// would be this operator saying it took back something it never looked at.
 	if issued.Status.AccountID == "" && clients.AccountID() != "" {
-		return r.report(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
+		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
 			fmt.Sprintf("namespace %s is no longer served and service principal %s is recorded "+
 				"with no Databricks account, so its federation policies are not removed from "+
 				"here: this cluster may still be able to exchange for it. Set status.accountId "+
@@ -570,13 +570,13 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 	// claim would leave the trust in place over a value nothing here sends.
 	issuer, err := r.issuer(ctx)
 	if err != nil {
-		return r.report(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
+		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
 	}
 
 	if err := clients.RemoveFederationPolicies(ctx,
 		issued.Status.ServicePrincipalID, issuer, issued.Spec.Subject); err != nil {
 		result := outcomeFor(err)
-		return r.report(ctx, issued, result.Status, reasonWithdrawFailed,
+		return r.reportReady(ctx, issued, result.Status, reasonWithdrawFailed,
 			fmt.Sprintf("%s; namespace %s is no longer served and this cluster can still be "+
 				"exchanged for service principal %s, which is what the removal was for",
 				result.Message, namespace, issued.Status.ServicePrincipalID))
@@ -600,7 +600,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 // avoid.
 func (r *IssuedDatabricksServicePrincipalReconciler) settled(ctx context.Context,
 	issued *dbxv1alpha1.IssuedDatabricksServicePrincipal, message string) (ctrl.Result, error) {
-	result, err := r.report(ctx, issued, metav1.ConditionFalse, reasonNotServed, message)
+	result, err := r.reportReady(ctx, issued, metav1.ConditionFalse, reasonNotServed, message)
 	if err != nil {
 		return result, err
 	}
@@ -701,7 +701,13 @@ func (r *IssuedDatabricksServicePrincipalReconciler) issuer(context.Context) (st
 	return databricks.IssuerOf(claims)
 }
 
-func (r *IssuedDatabricksServicePrincipalReconciler) report(ctx context.Context,
+// reportReady ends the pass: it writes Ready, comes back at the interval that
+// status asks for, and does the status update.
+//
+// It is how a pass returns, which is what tells it from the status updates
+// above: those record what Databricks answered so that the next pass can find
+// it, and the pass goes on.
+func (r *IssuedDatabricksServicePrincipalReconciler) reportReady(ctx context.Context,
 	issued *dbxv1alpha1.IssuedDatabricksServicePrincipal,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 	setCondition(&issued.Status.Conditions, issued.Generation, conditionReady, status, reason, message)

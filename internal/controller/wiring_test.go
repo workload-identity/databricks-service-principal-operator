@@ -95,7 +95,6 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		projection := &DatabricksServiceAccountReconciler{
 			Client:                          manager.GetClient(),
 			Scheme:                          manager.GetScheme(),
-			Records:                         wiredRecords,
 			DatabricksAccountNamespacedName: types.NamespacedName{Namespace: wiredRecords, Name: "databricks-account"},
 		}
 		Expect(projection.SetupWithManager(manager)).To(Succeed())

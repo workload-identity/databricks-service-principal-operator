@@ -214,7 +214,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	clients, err := r.build(cfg)
 	if err != nil {
-		return r.report(ctx, &databricksAccount, metav1.ConditionFalse, reasonInvalidSpec, err.Error())
+		return r.reportReady(ctx, &databricksAccount, metav1.ConditionFalse, reasonInvalidSpec, err.Error())
 	}
 
 	if err := r.verify(ctx, clients); err != nil {
@@ -226,7 +226,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			message = fmt.Sprintf("%s (and the operator's own token could not be read: %v)", message, claimsErr)
 		}
 		result := outcomeFor(err)
-		return r.report(ctx, &databricksAccount, result.Status, result.Reason, message)
+		return r.reportReady(ctx, &databricksAccount, result.Status, result.Reason, message)
 	}
 
 	r.Holder.Set(cfg, clients)
@@ -237,7 +237,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// reached with the claims at their zero value, and rendering from them puts
 	// "as " on a Ready account. The status keeps the last one read for the same
 	// reason it is not blanked above: the value is not wrong, it was not read.
-	result, err := r.report(ctx, &databricksAccount, metav1.ConditionTrue, reasonAccountReady,
+	result, err := r.reportReady(ctx, &databricksAccount, metav1.ConditionTrue, reasonAccountReady,
 		fmt.Sprintf("acting in account %s as %s", databricksAccount.Spec.AccountID, databricksAccount.Status.Subject))
 	if !withdrawn {
 		// The settled interval is long because a working account has nobody
@@ -640,7 +640,14 @@ func (r *DatabricksAccountReconciler) setNotSelected(ctx context.Context, name t
 	return client.IgnoreNotFound(r.Status().Update(ctx, &databricksAccount))
 }
 
-func (r *DatabricksAccountReconciler) report(ctx context.Context, databricksAccount *dbxv1alpha1.DatabricksAccount,
+// reportReady ends the pass: it writes Ready, comes back at the interval that
+// status asks for, and does the status update.
+//
+// The update is what tells it from reportAgreement and reportPrepared, which set
+// their condition on the object in memory and return nothing. This is what
+// carries them to the API server.
+func (r *DatabricksAccountReconciler) reportReady(ctx context.Context,
+	databricksAccount *dbxv1alpha1.DatabricksAccount,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
 	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionReady,
 		status, reason, message)

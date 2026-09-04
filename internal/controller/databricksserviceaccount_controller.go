@@ -75,13 +75,12 @@ type DatabricksServiceAccountReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	// Records is the namespace the operator's own records live in, which is the
-	// operator's own.
-	Records string
-
 	// The DatabricksAccount naming this operator, which is how a ServiceAccount
 	// asks this one rather than another: the annotation names an operator by its
 	// account's namespace and name, which two of them cannot share.
+	//
+	// Its namespace is the operator's own, so it is also where the records are
+	// written and looked for.
 	DatabricksAccountNamespacedName types.NamespacedName
 }
 
@@ -248,7 +247,7 @@ func (r *DatabricksServiceAccountReconciler) entryFor(ctx context.Context,
 	entry := dbxv1alpha1.ProjectedIdentity{
 		Profile:                   request.String(),
 		Operator:                  request.Operator.String(),
-		Issued:                    r.Records + "/" + issued.Name,
+		Issued:                    r.DatabricksAccountNamespacedName.Namespace + "/" + issued.Name,
 		ServicePrincipalID:        issued.Status.ServicePrincipalID,
 		RemovedServicePrincipalID: issued.Status.RemovedServicePrincipalID,
 		ClientID:                  issued.Status.ClientID,
@@ -451,7 +450,7 @@ func (r *DatabricksServiceAccountReconciler) issued(ctx context.Context,
 	identity string) (*dbxv1alpha1.IssuedDatabricksServicePrincipal, error) {
 	var issued dbxv1alpha1.IssuedDatabricksServicePrincipal
 	switch err := r.Get(ctx, types.NamespacedName{
-		Namespace: r.Records,
+		Namespace: r.DatabricksAccountNamespacedName.Namespace,
 		Name:      dbxv1alpha1.IssuedNameFor(serviceAccount.Namespace, serviceAccount.Name, identity, serviceAccount.UID),
 	}, &issued); {
 	case apierrors.IsNotFound(err):
@@ -479,7 +478,7 @@ func (r *DatabricksServiceAccountReconciler) issue(ctx context.Context,
 
 	issued := &dbxv1alpha1.IssuedDatabricksServicePrincipal{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: r.Records,
+			Namespace: r.DatabricksAccountNamespacedName.Namespace,
 			Name: dbxv1alpha1.IssuedNameFor(
 				serviceAccount.Namespace, serviceAccount.Name, request.Name, serviceAccount.UID),
 			// Set at creation rather than on the first pass that builds

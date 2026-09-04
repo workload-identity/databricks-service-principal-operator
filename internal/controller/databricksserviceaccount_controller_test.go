@@ -528,7 +528,7 @@ func TestAFailedDeleteHoldsTheRecord(t *testing.T) {
 		t.Fatal("the record went while its service principal is still in Databricks")
 	}
 	ready := meta.FindStatusCondition(held.Status.Conditions, conditionReady)
-	if ready == nil || ready.Reason != reasonRevokeFailed {
+	if ready == nil || ready.Reason != reasonDeleteFailed {
 		t.Errorf("Ready is %v, want it to say the service principal is still there", ready)
 	}
 
@@ -1496,7 +1496,6 @@ func TestARecordThatHasNotReachedTheCacheIsNotDereferenced(t *testing.T) {
 	reconciler := &DatabricksServiceAccountReconciler{
 		Client:                          lagging,
 		Scheme:                          scheme,
-		Records:                         operatorNamespace,
 		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: "databricks-account"},
 	}
 

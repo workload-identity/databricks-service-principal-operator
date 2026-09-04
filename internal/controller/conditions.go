@@ -195,9 +195,13 @@ const (
 	// neither concludes nor acts.
 	reasonAccountUnknown = "AccountUnknown"
 
-	// reasonRevokeFailed is the service principal still being there after its
-	// record was asked to go. The finalizer is held until it is not.
-	reasonRevokeFailed = "RevokeFailed"
+	// reasonDeleteFailed is the service principal still being there after its
+	// record was asked to go: DeleteServicePrincipal did not confirm, and the
+	// finalizer is held until it does.
+	//
+	// What did not land is the delete against Databricks. Revoking is the asker
+	// removing the annotation, which nothing here can fail at.
+	reasonDeleteFailed = "DeleteFailed"
 
 	// reasonNotServed is an identity in a namespace this operator's account no
 	// longer names. Its trust has been removed, so no token from this cluster
