@@ -175,6 +175,12 @@ func TestManagerStartsWithWhatTheManifestSupplies(t *testing.T) {
 //
 // A predicate in the code could have stopped that reconcile. Only the permission
 // stops the next one somebody writes.
+//
+// The cluster-wide half is bounded a second way, by verb. Everything the
+// operator reaches outside its own namespace it reads, apart from the
+// projections it owns and one label of its own on a Namespace its account has
+// stopped naming -- and that one is patch, so the grant is a single label key
+// rather than the standing ability to rewrite every namespace in the cluster.
 func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join("..", "..", "config", "rbac", "role.yaml")
@@ -185,8 +191,10 @@ func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 
 	type rule struct {
 		Resources []string `json:"resources"`
+		Verbs     []string `json:"verbs"`
 	}
 	var cluster, namespaced []string
+	clusterVerbs := map[string][]string{}
 	for doc := range strings.SplitSeq(string(data), "\n---\n") {
 		var role struct {
 			Kind  string `json:"kind"`
@@ -199,6 +207,9 @@ func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 			switch role.Kind {
 			case "ClusterRole":
 				cluster = append(cluster, r.Resources...)
+				for _, resource := range r.Resources {
+					clusterVerbs[resource] = append(clusterVerbs[resource], r.Verbs...)
+				}
 			case "Role":
 				namespaced = append(namespaced, r.Resources...)
 			}
@@ -223,6 +234,37 @@ func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 		if !slices.Contains(cluster, outside) {
 			t.Errorf("the ClusterRole no longer grants %s; it is read or written in every "+
 				"namespace this operator serves, so it cannot be narrowed to one", outside)
+		}
+	}
+
+	// What this operator may write outside its own namespace: the projections it
+	// owns, and one label of its own on a Namespace its account has stopped
+	// naming. Everything else it reaches out there, it only reads.
+	//
+	// patch and not update on a Namespace, and the difference is the whole
+	// justification for the grant. patch sends one label key and one annotation;
+	// update sends the object, and update on every namespace in the cluster is
+	// the standing power to rewrite anybody's finalizers and anybody else's
+	// labels, held for the sake of one key of this operator's own.
+	written := map[string]bool{"create": true, "update": true, "patch": true, "delete": true}
+	mayWrite := map[string]bool{
+		"databricksserviceprincipals":        true,
+		"databricksserviceprincipals/status": true,
+	}
+	for resource, verbs := range clusterVerbs {
+		for _, verb := range verbs {
+			switch {
+			case !written[verb] || mayWrite[resource]:
+			case resource == "namespaces" && verb == "patch":
+			case resource == "namespaces":
+				t.Errorf("the ClusterRole grants %s on namespaces; one label key of this "+
+					"operator's own needs no more than patch, and anything wider is the "+
+					"standing power to rewrite every namespace in the cluster", verb)
+			default:
+				t.Errorf("the ClusterRole grants %s on %s; what this operator writes outside its "+
+					"own namespace is the projections it owns and one label of its own on a "+
+					"namespace it no longer serves", verb, resource)
+			}
 		}
 	}
 }

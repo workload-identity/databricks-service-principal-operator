@@ -76,6 +76,13 @@ const (
 	// somebody with cluster-wide access can write a Namespace, so it is the
 	// cluster's answer to a team's request rather than the team's own.
 	//
+	// No operator writes it and no operator removes it. Two operators can serve
+	// one namespace, and this key is the cluster's permission to both of them --
+	// so one of them taking it off is one operator revoking the other's
+	// permission, which nothing puts back without a person. An operator that
+	// needs minting to stop while it works suspends it with WithdrawingLabel
+	// instead, which is its own to write and its own to lift.
+	//
 	// It is not a security boundary, and that decides what withdrawing it does.
 	// The identity a ServiceAccount can ask for is
 	// system:serviceaccount:<its own namespace>:<itself>, bounded by what the
@@ -116,6 +123,46 @@ const (
 	// The operator's own namespace does not carry it, which is what stops
 	// admitting the operator's own pod from depending on the operator running.
 	InjectLabel = "databricks.workload-identity.io/inject"
+
+	// WithdrawingLabel on a Namespace suspends minting there while one operator
+	// takes back what it issued. Its value names the holder, as
+	// <the operator's namespace>.<its DatabricksAccount's name>.
+	//
+	// One key for every operator on the cluster, so that only one of them
+	// withdraws from a namespace at a time. Server-side apply is what enforces
+	// that: metadata.labels is a map and its keys are owned one by one, so the
+	// second operator to claim this one is refused a conflict, and being refused
+	// is what it means to lose. Nothing consults a register and nothing has to
+	// be cleaned up after a crash.
+	//
+	// It is not MintLabel and it is deliberately a different key. MintLabel is
+	// the cluster's permission, given to every operator serving the namespace at
+	// once, and an operator that removed it to stop its own minting would be
+	// revoking somebody else's -- for good, since no operator may write it back.
+	// This one is suspension: it is lifted by the operator that took it, and
+	// everybody's minting resumes with nothing for a person to do.
+	//
+	// A value rather than a bare presence because losing is only useful if the
+	// loser can say who won. A label value cannot hold "/", which is why the
+	// holder is spelled with a "." where every other reference to an operator in
+	// this API uses "/".
+	WithdrawingLabel = "databricks.workload-identity.io/withdrawing"
+
+	// WithdrawingSinceAnnotation is when the holder of WithdrawingLabel last said
+	// it was still there, RFC3339. It makes the label a lease: past a threshold
+	// the operator that wants it may take it, so that an operator killed
+	// mid-withdrawal does not leave a namespace unable to mint for ever.
+	//
+	// An annotation and not part of the label value, because a label value holds
+	// 63 characters and a namespace, a name and a timestamp do not fit in them.
+	//
+	// Rewritten on every pass, not written once when the claim was made.
+	// Measured against a live cluster: managedFields[].time moves only when the
+	// applied content actually changes, so re-applying an identical claim leaves
+	// every timestamp in the object standing. Written once, this would say when
+	// the claim was made and never that its holder is still alive -- and past any
+	// threshold a slow holder and a dead one would read the same.
+	WithdrawingSinceAnnotation = "databricks.workload-identity.io/withdrawing-since"
 
 	// Enabled is the value the two Namespace labels must carry. The labels
 	// switch an action on -- minting, injecting -- and are written by somebody

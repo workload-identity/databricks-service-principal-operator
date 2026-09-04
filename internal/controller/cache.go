@@ -30,6 +30,14 @@ import (
 // asserted. Two of the three things here are load-bearing in a way nothing else
 // would report: a kind scoped to the wrong namespace, or to none, is an operator
 // that works and quietly reaches into another operator's.
+//
+// Everything watched cluster-wide here is watched to be read. The one write this
+// operator makes on an object it does not own is worth naming beside them: a
+// Namespace gains one label of this operator's own while it takes back what it
+// issued there, and loses it again when it has finished. The cluster's own
+// labels are read and never written, so nothing here lets a team in or shuts one
+// out, and the permission behind it is patch on Namespaces alone for that
+// reason.
 func CacheOptions(namespace string) cache.Options {
 	own := map[string]cache.Config{namespace: {}}
 	return cache.Options{

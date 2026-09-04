@@ -17,17 +17,17 @@ func accountWith(name string, ready metav1.ConditionStatus) *dbxv1alpha1.Databri
 	return object
 }
 
-// TestOnlyTheCrossingWakesTheIdentities covers the predicate that keeps a
-// wake-up from being a loop.
+// TestOnlyAChangeARecordDependsOnWakesTheIdentities covers the predicate that
+// keeps a wake-up from being a loop.
 //
 // Every reconcile of the account writes its status, and most of those writes
 // change nothing an identity cares about. Waking every identity in the cluster
 // on each of them would put the whole set back in the queue once a minute,
-// forever, for no reason. Only the crossing into or out of usable matters.
-func TestOnlyTheCrossingWakesTheIdentities(t *testing.T) {
+// forever, for no reason.
+func TestOnlyAChangeARecordDependsOnWakesTheIdentities(t *testing.T) {
 	t.Parallel()
 	selected := types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
-	p := accountBecameUsable(selected)
+	p := accountChangedForRecords(selected)
 
 	notReady := accountWith(accountObject, metav1.ConditionFalse)
 	ready := accountWith(accountObject, metav1.ConditionTrue)
@@ -50,13 +50,60 @@ func TestOnlyTheCrossingWakesTheIdentities(t *testing.T) {
 	}
 }
 
+// accountServingWith is a usable account naming some namespaces, which is the
+// pair of facts the predicate reads.
+func accountServingWith(name string, namespaces ...string) *dbxv1alpha1.DatabricksAccount {
+	object := accountWith(name, metav1.ConditionTrue)
+	object.Spec.Namespaces = namespaces
+	return object
+}
+
+// TestChangingWhichNamespacesAreServedWakesEveryRecord covers the edit that
+// starts and ends a withdrawal reaching the records that carry it out.
+//
+// Taking a namespace off spec.namespaces changes no record, no ServiceAccount
+// and no Namespace, so this watch is the only thing that hears it. Without it
+// the trust stays in place, and the identities go on being exchangeable, until
+// each record comes round on its own interval -- ten minutes for a settled one.
+// Putting the namespace back has the same shape and the same wait.
+func TestChangingWhichNamespacesAreServedWakesEveryRecord(t *testing.T) {
+	t.Parallel()
+	selected := types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
+	p := accountChangedForRecords(selected)
+
+	both := accountServingWith(accountObject, "team-a", "team-b")
+	one := accountServingWith(accountObject, "team-a")
+
+	if !p.Update(event.UpdateEvent{ObjectOld: both, ObjectNew: one}) {
+		t.Error("a namespace taken out of scope woke no record; the trust it was supposed to " +
+			"withdraw stays in place until every record's own ten-minute interval comes round")
+	}
+	if !p.Update(event.UpdateEvent{ObjectOld: one, ObjectNew: both}) {
+		t.Error("a namespace named again woke no record; the identities there are exchangeable " +
+			"again only after the same wait")
+	}
+	if p.Update(event.UpdateEvent{
+		ObjectOld: both,
+		ObjectNew: accountServingWith(accountObject, "team-b", "team-a"),
+	}) {
+		t.Error("reordering the list woke every record in the cluster; it is a set, and the two " +
+			"spellings are one declaration")
+	}
+	if p.Update(event.UpdateEvent{
+		ObjectOld: accountServingWith("someone-elses", "team-a"),
+		ObjectNew: accountServingWith("someone-elses"),
+	}) {
+		t.Error("another operator's account changing what it serves woke this operator's records")
+	}
+}
+
 // TestAnotherAccountWakesNothing covers the operator being told which account to
 // act in. Any other one is somebody else's object in the same cluster, and its
 // condition says nothing about whether this operator can act.
 func TestAnotherAccountWakesNothing(t *testing.T) {
 	t.Parallel()
 	selected := types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
-	p := accountBecameUsable(selected)
+	p := accountChangedForRecords(selected)
 
 	other := accountWith("someone-elses", metav1.ConditionTrue)
 	if p.Create(event.CreateEvent{Object: other}) {

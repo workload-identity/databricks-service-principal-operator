@@ -130,6 +130,23 @@ spec:
                   permissive default would have an operator installed for one team quietly
                   answering every ServiceAccount in the cluster that happened to name it.
 
+                  Taking a namespace off this list means this account no longer serves it,
+                  and it destroys nothing. The operator suspends minting there -- it labels
+                  the Namespace with its own name, which is a claim no second operator can
+                  take while it is held -- and then removes every federation policy it wrote
+                  for identities in it, in that order, because a removal made while
+                  identities can still be minted there would leave behind the ones minted
+                  after it. Then it lifts the label, and whoever else serves the namespace
+                  goes on minting with nothing for a person to do. The service principals
+                  stay, with every grant made on them, and so do the records and their ids.
+                  What goes is the one thing a cluster can take back: a token from here can
+                  no longer be exchanged. A token already in a running pod is not recalled
+                  by any of this -- the pod holds it, and Databricks alone decides whether to
+                  accept it.
+
+                  Naming a namespace here again puts the trust back on the same service
+                  principals, with the same client ids and every grant intact.
+
                   Names rather than a label selector. Neither is safer -- a namespace coming
                   into scope still needs the cluster's mint label open and a ServiceAccount
                   naming this operator -- so the choice is auditability against flexibility.

@@ -110,13 +110,19 @@ func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, re
 		return ctrl.Result{}, err
 	}
 
-	// Ahead of everything. A namespace another operator serves is not this one's
-	// to describe.
-	switch mine, err := r.serves(ctx, account.Namespace); {
-	case err != nil:
+	// Read once for the whole pass. It decides whether a record may be made here,
+	// and nothing else -- in particular it does not end the pass.
+	//
+	// What this object holds is a copy of records that go on existing after a
+	// namespace is taken out of scope -- their service principals are not
+	// destroyed and their ids are intact -- and their trust is withdrawn, which
+	// makes every one of them stop being exchangeable. Stopping here would
+	// freeze this copy at the last thing that was true, so the team whose
+	// workloads have just stopped reaching Databricks would read Ready on the
+	// one object in their own namespace that is supposed to tell them.
+	declared, served, err := accountServes(ctx, r.Client, r.Account, account.Namespace)
+	if err != nil {
 		return ctrl.Result{}, err
-	case !mine:
-		return ctrl.Result{}, nil
 	}
 
 	requested := dbxv1alpha1.RequestsFor(account.Annotations, r.Account)
@@ -128,10 +134,10 @@ func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, re
 
 	if len(requested.Understood) == 0 && len(resent) == 0 {
 		// Nothing asked and nothing sent again, which is the only reading under
-		// which every entry this operator owns was withdrawn.
-		// The condition used to be "no requests", and a value that would not
-		// parse produced none -- so a lost "/" arrived here as a withdrawal and
-		// destroyed a service principal along with every grant made on it.
+		// which every entry this operator owns was withdrawn. The condition used
+		// to be "no requests", and a value that would not parse produced none --
+		// so a lost "/" arrived here as a withdrawal and destroyed a service
+		// principal along with every grant made on it.
 		//
 		// This operator's entries go and the others stay. Withdrawing is also
 		// what ends the identity, and that is the record's controller's to act
@@ -143,10 +149,17 @@ func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, re
 	// ServiceAccount: minting is a property of the namespace, and asking it per
 	// identity would read the same Namespace several times to get the same
 	// answer.
-	minting, err := r.minting(ctx, account.Namespace)
+	minting, err := namespaceMints(ctx, r.Client, account.Namespace)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// Every answer, not any of them. The label is the cluster letting a team in;
+	// the DatabricksAccount is the team that holds the account admin credential
+	// saying where it may be spent, and an operator that has not read one yet has
+	// not been told anything. A record made on the strength of the label alone
+	// would be this operator spending that credential in a namespace its own
+	// account does not name.
+	minting = minting && declared && served
 
 	entries := make([]dbxv1alpha1.ProjectedIdentity, 0, len(requested.Understood)+len(resent))
 	for _, request := range requested.Understood {
@@ -164,8 +177,8 @@ func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, re
 	// Ordered by the name the asker gave each identity, unnamed first, which is
 	// the order First reads and so decides what a pod naming no profile is
 	// given. It has to be imposed here: what was asked for and what is being
-	// resent arrive as two groups, and neither the annotations nor the projection
-	// carries an order to take instead.
+	// sent again arrive as two groups, and neither the annotations nor the
+	// projection carries an order to take instead.
 	slices.SortFunc(entries, func(a, b dbxv1alpha1.ProjectedIdentity) int {
 		return strings.Compare(r.identityNameOf(a), r.identityNameOf(b))
 	})
@@ -272,15 +285,21 @@ func readyStatus(conditions []metav1.Condition) metav1.ConditionStatus {
 	return metav1.ConditionUnknown
 }
 
-// owner is the field manager this operator writes as.
-//
-// It is the operator's own name, so the API server records which entries belong
-// to it and refuses to let another operator take them. That is what makes several
-// operators able to write one object without a lock and without undoing each
-// other -- the failure two of them writing one DatabricksAccount's status
-// produced, where each undid the other forever.
 func (r *DatabricksServicePrincipalReconciler) owner() client.FieldOwner {
-	return client.FieldOwner("databricks.workload-identity.io/" + r.Account.String())
+	return fieldOwnerFor(r.Account)
+}
+
+// fieldOwnerFor is the field manager one operator writes as.
+//
+// It is the operator's own name, so the API server records which fields belong
+// to it and refuses to let another operator take them. That is what makes
+// several operators able to write one object without undoing each other -- the
+// failure two of them writing one DatabricksAccount's status produced, where
+// each undid the other forever -- and it is also what makes one label key on a
+// Namespace an exclusive claim, since the second operator to send it is
+// refused.
+func fieldOwnerFor(account types.NamespacedName) client.FieldOwner {
+	return client.FieldOwner("databricks.workload-identity.io/" + account.String())
 }
 
 // apply writes this operator's entry and nothing else.
@@ -401,7 +420,7 @@ func (r *DatabricksServicePrincipalReconciler) removeIdentities(ctx context.Cont
 		// object that has no fields -- which structured merge writes as null,
 		// and the API server refuses: `status: Invalid value: "null": in body
 		// must be of type object`. The apply then fails on every pass, forever,
-		// and the projection it was supposed to empty stays exactly as it was.
+		// and the projection it was supposed to withdraw stays exactly as it was.
 		//
 		// The case where that happens is the case where the object goes anyway.
 		//
@@ -781,29 +800,6 @@ func (r *DatabricksServicePrincipalReconciler) identityNameOf(
 	return entry.Request
 }
 
-// serves reports whether this namespace is this operator's to act in.
-//
-// Read from this operator's own DatabricksAccount, which lives in its own
-// namespace and which only the team holding that account admin credential can
-// write. It is their refusal, and it is the only one of the three answers that
-// is: the cluster's mint label says a namespace may be served by somebody, and a
-// ServiceAccount's annotation says which operator it asks, but neither can
-// commit an operator to spending its credential.
-//
-// No DatabricksAccount, or one naming no namespaces, serves nothing. There is no
-// permissive reading of an absent answer here: acting on it would be this
-// operator using an account admin credential somewhere nobody said it could.
-func (r *DatabricksServicePrincipalReconciler) serves(ctx context.Context, name string) (bool, error) {
-	var account dbxv1alpha1.DatabricksAccount
-	switch err := r.Get(ctx, r.Account, &account); {
-	case apierrors.IsNotFound(err):
-		return false, nil
-	case err != nil:
-		return false, err
-	}
-	return account.Spec.Serves(name), nil
-}
-
 // injecting reports whether pods created in this namespace are given their
 // token. It is asked only when there is something to say about a pod, because
 // the answer only changes what is said.
@@ -818,19 +814,30 @@ func (r *DatabricksServicePrincipalReconciler) injecting(ctx context.Context, na
 	return namespace.Labels[dbxv1alpha1.InjectLabel] == dbxv1alpha1.Enabled, nil
 }
 
-// minting reports whether new identities may be made in this namespace.
+// namespaceMints reports whether new identities may be made in this namespace.
 //
 // Separate from the annotation, and answered separately, because the two are
 // different people saying different things and withdrawing them means different
 // things. A namespace where minting was never opened gets no identities; one
 // where it is closed keeps the identities it has. See MintLabel.
-func (r *DatabricksServicePrincipalReconciler) minting(ctx context.Context, name string) (bool, error) {
+//
+// No while any operator is withdrawing here, whichever operator that is. What it
+// is doing is taking the trust off a set of identities, and a set that can still
+// grow while it works is one it finishes without having covered -- so minting
+// stops for everybody until the withdrawal is over and the key comes off. The
+// permission underneath is untouched and needs nobody to give it again.
+//
+// A namespace that is not there mints nothing.
+func namespaceMints(ctx context.Context, reader client.Reader, name string) (bool, error) {
 	var namespace corev1.Namespace
-	switch err := r.Get(ctx, types.NamespacedName{Name: name}, &namespace); {
+	switch err := reader.Get(ctx, types.NamespacedName{Name: name}, &namespace); {
 	case apierrors.IsNotFound(err):
 		return false, nil
 	case err != nil:
 		return false, err
+	}
+	if _, withdrawing := namespace.Labels[dbxv1alpha1.WithdrawingLabel]; withdrawing {
+		return false, nil
 	}
 	return namespace.Labels[dbxv1alpha1.MintLabel] == dbxv1alpha1.Enabled, nil
 }
@@ -878,11 +885,12 @@ func (r *DatabricksServicePrincipalReconciler) identitiesInNamespace(ctx context
 // ServiceAccount in it, and is an event on none of them. Without this they stay
 // unserved until something unrelated happens to touch one.
 //
-// The list before the edit is not read, and does not need to be: a namespace
-// taken off it has ServiceAccounts this operator no longer serves, and the pass
-// that would tell them so is a pass that must not run. What it would do is
-// withdraw entries, and withdrawing is not what "somebody else serves this now"
-// means -- the identities stay until their own owner stops asking.
+// The list before the edit is not read, and does not need to be. A namespace
+// taken off it holds identities whose trust the record's controller withdraws,
+// and every one of those records writes its status when it does -- which is an
+// event this controller already watches, on the ServiceAccount it belongs to.
+// So the namespaces that left the list are woken by the work being done in them
+// rather than by being remembered here.
 func (r *DatabricksServicePrincipalReconciler) identitiesThisOperatorReaches(ctx context.Context,
 	object client.Object) []reconcile.Request {
 	account, ok := object.(*dbxv1alpha1.DatabricksAccount)

@@ -17,6 +17,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
@@ -197,6 +198,15 @@ var _ dbx.Clients = (*stubClients)(nil)
 
 func newFakeClient(t *testing.T, objects ...client.Object) (client.Client, *runtime.Scheme) {
 	t.Helper()
+	return newFakeClientWith(t, interceptor.Funcs{}, objects...)
+}
+
+// newFakeClientWith is the same cluster with some calls answered by the test.
+// It is how a write the API server refuses is arranged, which is the only way to
+// see what this operator says about work it could not do.
+func newFakeClientWith(t *testing.T, funcs interceptor.Funcs,
+	objects ...client.Object) (client.Client, *runtime.Scheme) {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -212,6 +222,7 @@ func newFakeClient(t *testing.T, objects ...client.Object) (client.Client, *runt
 			&dbxv1alpha1.IssuedDatabricksServicePrincipal{},
 			&dbxv1alpha1.DatabricksAccount{},
 		).
+		WithInterceptorFuncs(funcs).
 		Build(), scheme
 }
 
@@ -226,8 +237,10 @@ func namespaceNamed(name string) *corev1.Namespace {
 // labels, because that is what a namespace in use carries -- one without inject
 // mints identities no pod is ever equipped with.
 //
-// Only somebody with cluster-wide access can write either, which is what stops
+// Only somebody with cluster-wide access can open either, which is what stops
 // holding a namespace from being the power to mint identities without limit.
+// Neither moves without a person: an operator withdrawing from the namespace
+// suspends minting under a key of its own and gives it back afterwards.
 func mintingNamespace(name string) *corev1.Namespace {
 	namespace := namespaceNamed(name)
 	namespace.Labels = map[string]string{
@@ -278,7 +291,12 @@ func askingOf(namespace, name, value string) *corev1.ServiceAccount {
 // testRecords is the operator's own namespace, where the records of what it
 // issued are kept. It is not a tenant's, and that is the whole reason a record
 // survives a tenant's namespace being torn down.
-const testRecords = "operators"
+//
+// The same namespace the DatabricksAccount is in, because that is what the
+// operator is given: both come from its own POD_NAMESPACE. A harness that told
+// them apart would let the account controller list records it would find in a
+// cluster and find none here.
+const testRecords = operatorNamespace
 
 // harness is both controllers over one fake cluster.
 //
@@ -308,13 +326,20 @@ func accountServing(namespaces ...string) *dbxv1alpha1.DatabricksAccount {
 
 func newHarness(t *testing.T, stub *stubClients, objects ...client.Object) *harness {
 	t.Helper()
+	return newHarnessWith(t, stub, interceptor.Funcs{}, objects...)
+}
+
+// newHarnessWith is the same over a cluster that answers some calls itself.
+func newHarnessWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
+	objects ...client.Object) *harness {
+	t.Helper()
 	if !slices.ContainsFunc(objects, func(object client.Object) bool {
 		_, is := object.(*dbxv1alpha1.DatabricksAccount)
 		return is
 	}) {
 		objects = append(objects, accountServing(testNamespace))
 	}
-	c, scheme := newFakeClient(t, objects...)
+	c, scheme := newFakeClientWith(t, funcs, objects...)
 	// A real file, because the reconciler holds the path and reads it. Holding
 	// the reading instead is what made one bad moment at startup permanent.
 	token := writeTokenAs(t, testIssuer, "system:serviceaccount:operators:controller-manager", testAudience)
