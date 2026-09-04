@@ -26,10 +26,10 @@ import (
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
-// DatabricksServicePrincipalApplyConfiguration represents a declarative configuration of the DatabricksServicePrincipal type for use
+// DatabricksServiceAccountApplyConfiguration represents a declarative configuration of the DatabricksServiceAccount type for use
 // with apply.
 //
-// DatabricksServicePrincipal shows the owner of one ServiceAccount what this
+// DatabricksServiceAccount shows the owner of one ServiceAccount what this
 // operator issued to it. It is a projection and it decides nothing.
 //
 // Every field on it was copied from an IssuedDatabricksServicePrincipal in the
@@ -53,73 +53,76 @@ import (
 // request. A copy here would be new only in the sense of being able to disagree
 // with its source.
 //
-// The name is load-bearing. One object per ServiceAccount, named after it, is
-// what makes "one identity per ServiceAccount" a rule the API server enforces
-// rather than something this operator has to keep true.
-type DatabricksServicePrincipalApplyConfiguration struct {
+// The name is load-bearing, and it is the ServiceAccount's. One object per
+// ServiceAccount, named after it and in its namespace, is what makes "everything
+// one ServiceAccount was issued is in one place" something the API server keeps
+// true rather than something this operator has to. What is on it is a list --
+// one entry per identity, keyed on the profile name -- because a ServiceAccount
+// may hold several, which is why this object is not named for any one of them.
+type DatabricksServiceAccountApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`
-	Status                           *DatabricksServicePrincipalStatusApplyConfiguration `json:"status,omitempty"`
+	Status                           *DatabricksServiceAccountStatusApplyConfiguration `json:"status,omitempty"`
 }
 
-// DatabricksServicePrincipal constructs a declarative configuration of the DatabricksServicePrincipal type for use with
+// DatabricksServiceAccount constructs a declarative configuration of the DatabricksServiceAccount type for use with
 // apply.
-func DatabricksServicePrincipal(name, namespace string) *DatabricksServicePrincipalApplyConfiguration {
-	b := &DatabricksServicePrincipalApplyConfiguration{}
+func DatabricksServiceAccount(name, namespace string) *DatabricksServiceAccountApplyConfiguration {
+	b := &DatabricksServiceAccountApplyConfiguration{}
 	b.WithName(name)
 	b.WithNamespace(namespace)
-	b.WithKind("DatabricksServicePrincipal")
+	b.WithKind("DatabricksServiceAccount")
 	b.WithAPIVersion("databricks.workload-identity.io/v1alpha1")
 	return b
 }
 
-// ExtractDatabricksServicePrincipalFrom extracts the applied configuration owned by fieldManager from
-// databricksServicePrincipal for the specified subresource. Pass an empty string for subresource to extract
+// ExtractDatabricksServiceAccountFrom extracts the applied configuration owned by fieldManager from
+// databricksServiceAccount for the specified subresource. Pass an empty string for subresource to extract
 // the main resource. Common subresources include "status", "scale", etc.
-// databricksServicePrincipal must be a unmodified DatabricksServicePrincipal API object that was retrieved from the Kubernetes API.
-// ExtractDatabricksServicePrincipalFrom provides a way to perform a extract/modify-in-place/apply workflow.
+// databricksServiceAccount must be a unmodified DatabricksServiceAccount API object that was retrieved from the Kubernetes API.
+// ExtractDatabricksServiceAccountFrom provides a way to perform a extract/modify-in-place/apply workflow.
 // Note that an extracted apply configuration will contain fewer fields than what the fieldManager previously
 // applied if another fieldManager has updated or force applied any of the previously applied fields.
-func ExtractDatabricksServicePrincipalFrom(databricksServicePrincipal *apiv1alpha1.DatabricksServicePrincipal, fieldManager string, subresource string) (*DatabricksServicePrincipalApplyConfiguration, error) {
-	b := &DatabricksServicePrincipalApplyConfiguration{}
-	err := managedfields.ExtractInto(databricksServicePrincipal, internal.Parser().Type("com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.DatabricksServicePrincipal"), fieldManager, b, subresource)
+func ExtractDatabricksServiceAccountFrom(databricksServiceAccount *apiv1alpha1.DatabricksServiceAccount, fieldManager string, subresource string) (*DatabricksServiceAccountApplyConfiguration, error) {
+	b := &DatabricksServiceAccountApplyConfiguration{}
+	err := managedfields.ExtractInto(databricksServiceAccount, internal.Parser().Type("com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.DatabricksServiceAccount"), fieldManager, b, subresource)
 	if err != nil {
 		return nil, err
 	}
-	b.WithName(databricksServicePrincipal.Name)
-	b.WithNamespace(databricksServicePrincipal.Namespace)
+	b.WithName(databricksServiceAccount.Name)
+	b.WithNamespace(databricksServiceAccount.Namespace)
 
-	b.WithKind("DatabricksServicePrincipal")
+	b.WithKind("DatabricksServiceAccount")
 	b.WithAPIVersion("databricks.workload-identity.io/v1alpha1")
 	return b, nil
 }
 
-// ExtractDatabricksServicePrincipal extracts the applied configuration owned by fieldManager from
-// databricksServicePrincipal. If no managedFields are found in databricksServicePrincipal for fieldManager, a
-// DatabricksServicePrincipalApplyConfiguration is returned with only the Name, Namespace (if applicable),
+// ExtractDatabricksServiceAccount extracts the applied configuration owned by fieldManager from
+// databricksServiceAccount. If no managedFields are found in databricksServiceAccount for fieldManager, a
+// DatabricksServiceAccountApplyConfiguration is returned with only the Name, Namespace (if applicable),
 // APIVersion and Kind populated. It is possible that no managed fields were found for because other
 // field managers have taken ownership of all the fields previously owned by fieldManager, or because
 // the fieldManager never owned fields any fields.
-// databricksServicePrincipal must be a unmodified DatabricksServicePrincipal API object that was retrieved from the Kubernetes API.
-// ExtractDatabricksServicePrincipal provides a way to perform a extract/modify-in-place/apply workflow.
+// databricksServiceAccount must be a unmodified DatabricksServiceAccount API object that was retrieved from the Kubernetes API.
+// ExtractDatabricksServiceAccount provides a way to perform a extract/modify-in-place/apply workflow.
 // Note that an extracted apply configuration will contain fewer fields than what the fieldManager previously
 // applied if another fieldManager has updated or force applied any of the previously applied fields.
-func ExtractDatabricksServicePrincipal(databricksServicePrincipal *apiv1alpha1.DatabricksServicePrincipal, fieldManager string) (*DatabricksServicePrincipalApplyConfiguration, error) {
-	return ExtractDatabricksServicePrincipalFrom(databricksServicePrincipal, fieldManager, "")
+func ExtractDatabricksServiceAccount(databricksServiceAccount *apiv1alpha1.DatabricksServiceAccount, fieldManager string) (*DatabricksServiceAccountApplyConfiguration, error) {
+	return ExtractDatabricksServiceAccountFrom(databricksServiceAccount, fieldManager, "")
 }
 
-// ExtractDatabricksServicePrincipalStatus extracts the applied configuration owned by fieldManager from
-// databricksServicePrincipal for the status subresource.
-func ExtractDatabricksServicePrincipalStatus(databricksServicePrincipal *apiv1alpha1.DatabricksServicePrincipal, fieldManager string) (*DatabricksServicePrincipalApplyConfiguration, error) {
-	return ExtractDatabricksServicePrincipalFrom(databricksServicePrincipal, fieldManager, "status")
+// ExtractDatabricksServiceAccountStatus extracts the applied configuration owned by fieldManager from
+// databricksServiceAccount for the status subresource.
+func ExtractDatabricksServiceAccountStatus(databricksServiceAccount *apiv1alpha1.DatabricksServiceAccount, fieldManager string) (*DatabricksServiceAccountApplyConfiguration, error) {
+	return ExtractDatabricksServiceAccountFrom(databricksServiceAccount, fieldManager, "status")
 }
 
-func (b DatabricksServicePrincipalApplyConfiguration) IsApplyConfiguration() {}
+func (b DatabricksServiceAccountApplyConfiguration) IsApplyConfiguration() {}
 
 // WithKind sets the Kind field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Kind field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithKind(value string) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithKind(value string) *DatabricksServiceAccountApplyConfiguration {
 	b.TypeMetaApplyConfiguration.Kind = &value
 	return b
 }
@@ -127,7 +130,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithKind(value string) *D
 // WithAPIVersion sets the APIVersion field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the APIVersion field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithAPIVersion(value string) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithAPIVersion(value string) *DatabricksServiceAccountApplyConfiguration {
 	b.TypeMetaApplyConfiguration.APIVersion = &value
 	return b
 }
@@ -135,7 +138,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithAPIVersion(value stri
 // WithName sets the Name field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Name field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithName(value string) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithName(value string) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Name = &value
 	return b
@@ -144,7 +147,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithName(value string) *D
 // WithGenerateName sets the GenerateName field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the GenerateName field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithGenerateName(value string) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithGenerateName(value string) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.GenerateName = &value
 	return b
@@ -153,7 +156,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithGenerateName(value st
 // WithNamespace sets the Namespace field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Namespace field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithNamespace(value string) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithNamespace(value string) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Namespace = &value
 	return b
@@ -162,7 +165,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithNamespace(value strin
 // WithUID sets the UID field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the UID field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithUID(value types.UID) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithUID(value types.UID) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.UID = &value
 	return b
@@ -171,7 +174,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithUID(value types.UID) 
 // WithResourceVersion sets the ResourceVersion field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the ResourceVersion field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithResourceVersion(value string) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithResourceVersion(value string) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.ResourceVersion = &value
 	return b
@@ -180,7 +183,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithResourceVersion(value
 // WithGeneration sets the Generation field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Generation field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithGeneration(value int64) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithGeneration(value int64) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Generation = &value
 	return b
@@ -189,7 +192,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithGeneration(value int6
 // WithCreationTimestamp sets the CreationTimestamp field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the CreationTimestamp field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithCreationTimestamp(value metav1.Time) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithCreationTimestamp(value metav1.Time) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.CreationTimestamp = &value
 	return b
@@ -198,7 +201,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithCreationTimestamp(val
 // WithDeletionTimestamp sets the DeletionTimestamp field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the DeletionTimestamp field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithDeletionTimestamp(value metav1.Time) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithDeletionTimestamp(value metav1.Time) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.DeletionTimestamp = &value
 	return b
@@ -207,7 +210,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithDeletionTimestamp(val
 // WithDeletionGracePeriodSeconds sets the DeletionGracePeriodSeconds field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the DeletionGracePeriodSeconds field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.DeletionGracePeriodSeconds = &value
 	return b
@@ -217,7 +220,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithDeletionGracePeriodSe
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, the entries provided by each call will be put on the Labels field,
 // overwriting an existing map entries in Labels field with the same key.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithLabels(entries map[string]string) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithLabels(entries map[string]string) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	if b.ObjectMetaApplyConfiguration.Labels == nil && len(entries) > 0 {
 		b.ObjectMetaApplyConfiguration.Labels = make(map[string]string, len(entries))
@@ -232,7 +235,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithLabels(entries map[st
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, the entries provided by each call will be put on the Annotations field,
 // overwriting an existing map entries in Annotations field with the same key.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithAnnotations(entries map[string]string) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithAnnotations(entries map[string]string) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	if b.ObjectMetaApplyConfiguration.Annotations == nil && len(entries) > 0 {
 		b.ObjectMetaApplyConfiguration.Annotations = make(map[string]string, len(entries))
@@ -246,7 +249,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithAnnotations(entries m
 // WithOwnerReferences adds the given value to the OwnerReferences field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the OwnerReferences field.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithOwnerReferences(values ...*v1.OwnerReferenceApplyConfiguration) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithOwnerReferences(values ...*v1.OwnerReferenceApplyConfiguration) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	for i := range values {
 		if values[i] == nil {
@@ -260,7 +263,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithOwnerReferences(value
 // WithFinalizers adds the given value to the Finalizers field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Finalizers field.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithFinalizers(values ...string) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithFinalizers(values ...string) *DatabricksServiceAccountApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	for i := range values {
 		b.ObjectMetaApplyConfiguration.Finalizers = append(b.ObjectMetaApplyConfiguration.Finalizers, values[i])
@@ -268,7 +271,7 @@ func (b *DatabricksServicePrincipalApplyConfiguration) WithFinalizers(values ...
 	return b
 }
 
-func (b *DatabricksServicePrincipalApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
+func (b *DatabricksServiceAccountApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
 	if b.ObjectMetaApplyConfiguration == nil {
 		b.ObjectMetaApplyConfiguration = &v1.ObjectMetaApplyConfiguration{}
 	}
@@ -277,29 +280,29 @@ func (b *DatabricksServicePrincipalApplyConfiguration) ensureObjectMetaApplyConf
 // WithStatus sets the Status field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Status field is set to the value of the last call.
-func (b *DatabricksServicePrincipalApplyConfiguration) WithStatus(value *DatabricksServicePrincipalStatusApplyConfiguration) *DatabricksServicePrincipalApplyConfiguration {
+func (b *DatabricksServiceAccountApplyConfiguration) WithStatus(value *DatabricksServiceAccountStatusApplyConfiguration) *DatabricksServiceAccountApplyConfiguration {
 	b.Status = value
 	return b
 }
 
 // GetKind retrieves the value of the Kind field in the declarative configuration.
-func (b *DatabricksServicePrincipalApplyConfiguration) GetKind() *string {
+func (b *DatabricksServiceAccountApplyConfiguration) GetKind() *string {
 	return b.TypeMetaApplyConfiguration.Kind
 }
 
 // GetAPIVersion retrieves the value of the APIVersion field in the declarative configuration.
-func (b *DatabricksServicePrincipalApplyConfiguration) GetAPIVersion() *string {
+func (b *DatabricksServiceAccountApplyConfiguration) GetAPIVersion() *string {
 	return b.TypeMetaApplyConfiguration.APIVersion
 }
 
 // GetName retrieves the value of the Name field in the declarative configuration.
-func (b *DatabricksServicePrincipalApplyConfiguration) GetName() *string {
+func (b *DatabricksServiceAccountApplyConfiguration) GetName() *string {
 	b.ensureObjectMetaApplyConfigurationExists()
 	return b.ObjectMetaApplyConfiguration.Name
 }
 
 // GetNamespace retrieves the value of the Namespace field in the declarative configuration.
-func (b *DatabricksServicePrincipalApplyConfiguration) GetNamespace() *string {
+func (b *DatabricksServiceAccountApplyConfiguration) GetNamespace() *string {
 	b.ensureObjectMetaApplyConfigurationExists()
 	return b.ObjectMetaApplyConfiguration.Namespace
 }

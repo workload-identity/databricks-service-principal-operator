@@ -405,7 +405,7 @@ var _ = Describe("Identities", Ordered, func() {
 
 	It("says which object to create rather than failing silently", func() {
 		Eventually(func() string {
-			cmd := exec.Command("kubectl", "get", "databricksserviceprincipal", account, "-n", team,
+			cmd := exec.Command("kubectl", "get", "databricksserviceaccount", account, "-n", team,
 				"-o", "jsonpath={.status.identities[0].conditions[?(@.type=='Ready')].message}")
 			out, err := utils.Run(cmd)
 			if err != nil {
@@ -809,7 +809,7 @@ metadata:
   namespace: %s
 ---
 apiVersion: databricks.workload-identity.io/v1alpha1
-kind: DatabricksServicePrincipal
+kind: DatabricksServiceAccount
 metadata:
   name: %s
   namespace: %s
@@ -827,7 +827,7 @@ metadata:
 				`"clientId":"0000000%d-0000-0000-0000-000000000000","audience":"databricks"}`,
 			identity, operatorRef, i+1))
 	}
-	cmd = exec.Command("kubectl", "-n", team, "patch", "databricksserviceprincipal", account,
+	cmd = exec.Command("kubectl", "-n", team, "patch", "databricksserviceaccount", account,
 		"--subresource", "status", "--type", "merge",
 		"-p", fmt.Sprintf(`{"status":{"identities":[%s]}}`, strings.Join(entries, ",")))
 	_, err = utils.Run(cmd)
@@ -1008,7 +1008,7 @@ func withdraw(team, account, identity string) {
 // requestsOn lists the identities the projection carries, by the profile name
 // each is keyed under.
 func requestsOn(team, account string) []string {
-	cmd := exec.Command("kubectl", "get", "databricksserviceprincipal", account, "-n", team,
+	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", account, "-n", team,
 		"-o", "jsonpath={.status.identities[*].request}")
 	out, err := utils.Run(cmd)
 	if err != nil {
@@ -1019,7 +1019,7 @@ func requestsOn(team, account string) []string {
 
 // operatorsOn lists what those entries say about who issued them.
 func operatorsOn(team, account string) []string {
-	cmd := exec.Command("kubectl", "get", "databricksserviceprincipal", account, "-n", team,
+	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", account, "-n", team,
 		"-o", "jsonpath={.status.identities[*].operator}")
 	out, err := utils.Run(cmd)
 	if err != nil {
@@ -1194,7 +1194,7 @@ func heldBecause(name string) string {
 
 // identityNames lists the recorded identities in a namespace.
 func identityNames(namespace string) string {
-	cmd := exec.Command("kubectl", "get", "databricksserviceprincipal", "-n", namespace,
+	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", "-n", namespace,
 		"-o", "jsonpath={.items[*].metadata.name}")
 	out, err := utils.Run(cmd)
 	if err != nil {

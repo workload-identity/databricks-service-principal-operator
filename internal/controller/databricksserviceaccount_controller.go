@@ -58,7 +58,7 @@ const (
 	servicePrincipalRetryAfterSettled = time.Minute
 )
 
-// DatabricksServicePrincipalReconciler keeps one object in a tenant's namespace
+// DatabricksServiceAccountReconciler keeps one object in a tenant's namespace
 // showing what this operator issued to one ServiceAccount.
 //
 // It talks to nothing outside the cluster. Every fact it reports was read from
@@ -71,7 +71,7 @@ const (
 // open. Once the record exists nothing here reads MintLabel again, which is why
 // closing minting cannot destroy an identity -- not as a rule obeyed, but as a
 // question this controller no longer asks.
-type DatabricksServicePrincipalReconciler struct {
+type DatabricksServiceAccountReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
@@ -86,8 +86,8 @@ type DatabricksServicePrincipalReconciler struct {
 	Account types.NamespacedName
 }
 
-// +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksserviceprincipals,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksserviceprincipals/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksserviceaccounts,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksserviceaccounts/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=issueddatabricksserviceprincipals,verbs=get;list;watch;create,namespace=system
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
@@ -99,7 +99,7 @@ type DatabricksServicePrincipalReconciler struct {
 // ServiceAccount's name in its namespace, and so does the request. Both
 // directions are handled here -- an annotated ServiceAccount with no projection
 // yet, and a projection whose ServiceAccount no longer asks.
-func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *DatabricksServiceAccountReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var account corev1.ServiceAccount
 	switch err := r.Get(ctx, req.NamespacedName, &account); {
 	case apierrors.IsNotFound(err):
@@ -206,7 +206,7 @@ func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, re
 // One object, one requeue, so the interval is the shortest of them: an identity
 // still waiting on Databricks is checked at the awaited interval whatever its
 // neighbours are doing.
-func (r *DatabricksServicePrincipalReconciler) comeBackIn(
+func (r *DatabricksServiceAccountReconciler) comeBackIn(
 	entries []dbxv1alpha1.ProjectedIdentity) time.Duration {
 	soonest := servicePrincipalRetryAfterSettled
 	for i := range entries {
@@ -228,7 +228,7 @@ func (r *DatabricksServicePrincipalReconciler) comeBackIn(
 // A namespace where minting was open and has been closed is not that case. Its
 // records exist, so this returns their entries and the identities go on being
 // shown and go on working.
-func (r *DatabricksServicePrincipalReconciler) entryFor(ctx context.Context,
+func (r *DatabricksServiceAccountReconciler) entryFor(ctx context.Context,
 	account *corev1.ServiceAccount, request dbxv1alpha1.Request,
 	minting bool) (dbxv1alpha1.ProjectedIdentity, bool, error) {
 	issued, err := r.issued(ctx, account, request.Name)
@@ -285,7 +285,7 @@ func readyStatus(conditions []metav1.Condition) metav1.ConditionStatus {
 	return metav1.ConditionUnknown
 }
 
-func (r *DatabricksServicePrincipalReconciler) owner() client.FieldOwner {
+func (r *DatabricksServiceAccountReconciler) owner() client.FieldOwner {
 	return fieldOwnerFor(r.Account)
 }
 
@@ -308,17 +308,17 @@ func fieldOwnerFor(account types.NamespacedName) client.FieldOwner {
 // and the API server merges it with whatever other operators own. Read, change,
 // write would take the whole list -- including entries this operator did not
 // write and may have read before another operator changed them.
-func (r *DatabricksServicePrincipalReconciler) apply(ctx context.Context,
+func (r *DatabricksServiceAccountReconciler) apply(ctx context.Context,
 	account *corev1.ServiceAccount, entries ...dbxv1alpha1.ProjectedIdentity) error {
 	if _, err := r.project(ctx, account); err != nil {
 		return err
 	}
 
-	status := acv1alpha1.DatabricksServicePrincipalStatus()
+	status := acv1alpha1.DatabricksServiceAccountStatus()
 	for i := range entries {
 		status = status.WithIdentities(projectedIdentityFor(entries[i]))
 	}
-	projection := acv1alpha1.DatabricksServicePrincipal(account.Name, account.Namespace).
+	projection := acv1alpha1.DatabricksServiceAccount(account.Name, account.Namespace).
 		WithStatus(status)
 
 	return client.IgnoreNotFound(r.Status().Apply(ctx, projection, r.owner()))
@@ -383,9 +383,9 @@ func projectedIdentityFor(entry dbxv1alpha1.ProjectedIdentity) *acv1alpha1.Proje
 // not. An object left holding none says a ServiceAccount was issued nothing,
 // which is what every ServiceAccount in the cluster says by having no object at
 // all, so it goes.
-func (r *DatabricksServicePrincipalReconciler) removeIdentities(ctx context.Context,
+func (r *DatabricksServiceAccountReconciler) removeIdentities(ctx context.Context,
 	account *corev1.ServiceAccount) error {
-	var projection dbxv1alpha1.DatabricksServicePrincipal
+	var projection dbxv1alpha1.DatabricksServiceAccount
 	switch err := r.Get(ctx, client.ObjectKeyFromObject(account), &projection); {
 	case apierrors.IsNotFound(err):
 		return nil
@@ -443,7 +443,7 @@ func (r *DatabricksServicePrincipalReconciler) removeIdentities(ctx context.Cont
 // By name rather than by listing: the name is derived from the ServiceAccount's
 // uid and the identity's name, so one identity has exactly one record and a
 // ServiceAccount recreated under the same name has different records.
-func (r *DatabricksServicePrincipalReconciler) issued(ctx context.Context,
+func (r *DatabricksServiceAccountReconciler) issued(ctx context.Context,
 	account *corev1.ServiceAccount,
 	identity string) (*dbxv1alpha1.IssuedDatabricksServicePrincipal, error) {
 	var issued dbxv1alpha1.IssuedDatabricksServicePrincipal
@@ -466,7 +466,7 @@ func (r *DatabricksServicePrincipalReconciler) issued(ctx context.Context,
 // whole guarantee: a pass that writes this and then fails leaves a record naming
 // no service principal, which the marker resolves. The reverse order would leave
 // a service principal nothing anywhere names.
-func (r *DatabricksServicePrincipalReconciler) issue(ctx context.Context,
+func (r *DatabricksServiceAccountReconciler) issue(ctx context.Context,
 	account *corev1.ServiceAccount,
 	request dbxv1alpha1.Request) (*dbxv1alpha1.IssuedDatabricksServicePrincipal, error) {
 	var namespace corev1.Namespace
@@ -535,9 +535,9 @@ func (r *DatabricksServicePrincipalReconciler) issue(ctx context.Context,
 // the object to be there, and because the owner reference is written once and
 // belongs to whichever operator got here first -- it says the same thing whoever
 // wrote it.
-func (r *DatabricksServicePrincipalReconciler) project(ctx context.Context,
-	account *corev1.ServiceAccount) (*dbxv1alpha1.DatabricksServicePrincipal, error) {
-	var principal dbxv1alpha1.DatabricksServicePrincipal
+func (r *DatabricksServiceAccountReconciler) project(ctx context.Context,
+	account *corev1.ServiceAccount) (*dbxv1alpha1.DatabricksServiceAccount, error) {
+	var principal dbxv1alpha1.DatabricksServiceAccount
 	err := r.Get(ctx, client.ObjectKeyFromObject(account), &principal)
 	if err == nil {
 		return &principal, nil
@@ -546,7 +546,7 @@ func (r *DatabricksServicePrincipalReconciler) project(ctx context.Context,
 		return nil, err
 	}
 
-	principal = dbxv1alpha1.DatabricksServicePrincipal{
+	principal = dbxv1alpha1.DatabricksServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Namespace: account.Namespace, Name: account.Name},
 	}
 	if err := controllerutil.SetControllerReference(account, &principal, r.Scheme); err != nil {
@@ -578,7 +578,7 @@ func (r *DatabricksServicePrincipalReconciler) project(ctx context.Context,
 // Only pods that are still going to run: one that is completed or on its way out
 // is history, and reporting it would keep an alarm on for something nobody can
 // or should fix.
-func (r *DatabricksServicePrincipalReconciler) equipment(ctx context.Context,
+func (r *DatabricksServiceAccountReconciler) equipment(ctx context.Context,
 	account *corev1.ServiceAccount, entry dbxv1alpha1.ProjectedIdentity) (outcome, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(account.Namespace)); err != nil {
@@ -762,14 +762,14 @@ func tokenAudienceOf(pod *corev1.Pod, request string) (audience string, carries 
 // service principal itself is untouched and still in use. Nothing about it is
 // recomputed either, because the request that would say what to compute is the
 // thing that could not be read.
-func (r *DatabricksServicePrincipalReconciler) resentIdentities(ctx context.Context,
+func (r *DatabricksServiceAccountReconciler) resentIdentities(ctx context.Context,
 	account *corev1.ServiceAccount,
 	requested dbxv1alpha1.Requested) ([]dbxv1alpha1.ProjectedIdentity, error) {
 	if len(requested.Refused) == 0 {
 		return nil, nil
 	}
 
-	var projection dbxv1alpha1.DatabricksServicePrincipal
+	var projection dbxv1alpha1.DatabricksServiceAccount
 	switch err := r.Get(ctx, client.ObjectKeyFromObject(account), &projection); {
 	case apierrors.IsNotFound(err):
 		return nil, nil
@@ -792,7 +792,7 @@ func (r *DatabricksServicePrincipalReconciler) resentIdentities(ctx context.Cont
 // An entry is keyed by the profile name, and for the unnamed identity that is
 // this operator's own reference rather than anything a person wrote. Reading it
 // back is this operator's to do, because only it knows its own reference.
-func (r *DatabricksServicePrincipalReconciler) identityNameOf(
+func (r *DatabricksServiceAccountReconciler) identityNameOf(
 	entry dbxv1alpha1.ProjectedIdentity) string {
 	if entry.Request == r.Account.String() {
 		return ""
@@ -803,7 +803,7 @@ func (r *DatabricksServicePrincipalReconciler) identityNameOf(
 // injecting reports whether pods created in this namespace are given their
 // token. It is asked only when there is something to say about a pod, because
 // the answer only changes what is said.
-func (r *DatabricksServicePrincipalReconciler) injecting(ctx context.Context, name string) (bool, error) {
+func (r *DatabricksServiceAccountReconciler) injecting(ctx context.Context, name string) (bool, error) {
 	var namespace corev1.Namespace
 	switch err := r.Get(ctx, types.NamespacedName{Name: name}, &namespace); {
 	case apierrors.IsNotFound(err):
@@ -851,7 +851,7 @@ func namespaceMints(ctx context.Context, reader client.Reader, name string) (boo
 // access enable the namespace, and in that order nothing happens and nothing
 // says so. Not visible to a unit test, because every one of them calls Reconcile
 // directly and a namespace label is not an event on anything this watched.
-func (r *DatabricksServicePrincipalReconciler) identitiesInNamespace(ctx context.Context,
+func (r *DatabricksServiceAccountReconciler) identitiesInNamespace(ctx context.Context,
 	object client.Object) []reconcile.Request {
 	var accounts corev1.ServiceAccountList
 	if err := r.List(ctx, &accounts, client.InNamespace(object.GetName())); err != nil {
@@ -891,7 +891,7 @@ func (r *DatabricksServicePrincipalReconciler) identitiesInNamespace(ctx context
 // event this controller already watches, on the ServiceAccount it belongs to.
 // So the namespaces that left the list are woken by the work being done in them
 // rather than by being remembered here.
-func (r *DatabricksServicePrincipalReconciler) identitiesThisOperatorReaches(ctx context.Context,
+func (r *DatabricksServiceAccountReconciler) identitiesThisOperatorReaches(ctx context.Context,
 	object client.Object) []reconcile.Request {
 	account, ok := object.(*dbxv1alpha1.DatabricksAccount)
 	if !ok || client.ObjectKeyFromObject(account) != r.Account {
@@ -912,13 +912,13 @@ func (r *DatabricksServicePrincipalReconciler) identitiesThisOperatorReaches(ctx
 // Everything is keyed on the ServiceAccount, because the ServiceAccount is what
 // the request means. Owns alone would not do it -- an annotated ServiceAccount
 // with no projection yet owns nothing, so nothing would wake this.
-func (r *DatabricksServicePrincipalReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *DatabricksServiceAccountReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		// What this operator may act in is written here, and a namespace added
 		// to it is an event on no ServiceAccount.
 		Watches(&dbxv1alpha1.DatabricksAccount{},
 			handler.EnqueueRequestsFromMapFunc(r.identitiesThisOperatorReaches)).
-		For(&dbxv1alpha1.DatabricksServicePrincipal{}).
+		For(&dbxv1alpha1.DatabricksServiceAccount{}).
 		// Pods are watched so that one admitted without a token is reported
 		// rather than left looking normal. The map is to the ServiceAccount it
 		// runs as, which is one request per pod event and nothing when there is
@@ -963,6 +963,6 @@ func (r *DatabricksServicePrincipalReconciler) SetupWithManager(mgr ctrl.Manager
 					},
 				}}
 			})).
-		Named("databricksserviceprincipal").
+		Named("databricksserviceaccount").
 		Complete(r)
 }

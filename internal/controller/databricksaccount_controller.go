@@ -110,7 +110,7 @@ type DatabricksAccountReconciler struct {
 // The identities are read to count the ones made in another account, and to find
 // the namespaces this account has stopped naming. Read only: this controller
 // writes none of them.
-// +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksserviceprincipals,verbs=get;list;watch
+// +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksserviceaccounts,verbs=get;list;watch
 
 // The only object this operator writes that it does not own -- the projections
 // beside it are its own kind, which it makes and deletes. What it writes is one

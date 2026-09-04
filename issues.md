@@ -17,8 +17,8 @@ both come back as an empty string.
 ## Removing a namespace from `spec.namespaces` does not stop what it has issued
 
 `Serves` is read in exactly one place: `Reconcile` on
-`DatabricksServicePrincipalReconciler`
-(`internal/controller/databricksserviceprincipal_controller.go:118`, via
+`DatabricksServiceAccountReconciler`
+(`internal/controller/databricksserviceaccount_controller.go:118`, via
 `serves()` at `:810`). `IssuedDatabricksServicePrincipalReconciler`, which owns
 the service principal and the federation policy, never reads it. Removing a
 namespace therefore freezes the projection at its last value: still
@@ -103,7 +103,7 @@ Each controller therefore has a single worker, and one `Reconcile` that is slow
 or stuck holds it while every other object of that kind waits in the queue
 behind it. The three have separate workers and separate queues, so this does
 not spread between them: `IssuedDatabricksServicePrincipalReconciler` stalling
-leaves `DatabricksServicePrincipalReconciler` and `DatabricksAccountReconciler`
+leaves `DatabricksServiceAccountReconciler` and `DatabricksAccountReconciler`
 running.
 
 The concrete shape is `IssuedDatabricksServicePrincipalReconciler`. It owns

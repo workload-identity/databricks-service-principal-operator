@@ -218,7 +218,7 @@ func newFakeClientWith(t *testing.T, funcs interceptor.Funcs,
 		WithScheme(scheme).
 		WithObjects(objects...).
 		WithStatusSubresource(
-			&dbxv1alpha1.DatabricksServicePrincipal{},
+			&dbxv1alpha1.DatabricksServiceAccount{},
 			&dbxv1alpha1.IssuedDatabricksServicePrincipal{},
 			&dbxv1alpha1.DatabricksAccount{},
 		).
@@ -305,7 +305,7 @@ const testRecords = operatorNamespace
 // and destroys it. A test that ran only one would be asserting about half of a
 // sentence.
 type harness struct {
-	Projection *DatabricksServicePrincipalReconciler
+	Projection *DatabricksServiceAccountReconciler
 	Issued     *IssuedDatabricksServicePrincipalReconciler
 	Client     client.Client
 	Stub       *stubClients
@@ -344,7 +344,7 @@ func newHarnessWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
 	// the reading instead is what made one bad moment at startup permanent.
 	token := writeTokenAs(t, testIssuer, "system:serviceaccount:operators:controller-manager", testAudience)
 	return &harness{
-		Projection: &DatabricksServicePrincipalReconciler{
+		Projection: &DatabricksServiceAccountReconciler{
 			Client:  c,
 			Scheme:  scheme,
 			Records: testRecords,
@@ -452,7 +452,7 @@ func recordFor(account *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServ
 // Not "the identity its owner named first" -- there is no such thing any more,
 // the request being a set of annotation keys. With one entry there is nothing
 // for an order to decide, which is the only case this helper is used in.
-func identityIn(t *testing.T, principal *dbxv1alpha1.DatabricksServicePrincipal) dbxv1alpha1.ProjectedIdentity {
+func identityIn(t *testing.T, principal *dbxv1alpha1.DatabricksServiceAccount) dbxv1alpha1.ProjectedIdentity {
 	t.Helper()
 	if principal == nil {
 		t.Fatal("no projection to read an identity from")

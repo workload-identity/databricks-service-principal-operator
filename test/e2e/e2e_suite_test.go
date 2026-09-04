@@ -409,7 +409,7 @@ spec:
 `, name, team, account))
 }
 
-// projection is enough of a DatabricksServicePrincipal to answer what the
+// projection is enough of a DatabricksServiceAccount to answer what the
 // operator says it issued.
 type projection struct {
 	Status struct {
@@ -424,7 +424,7 @@ type projection struct {
 }
 
 func read(team, account string) projection {
-	out := kubectlOut("-n", team, "get", "databricksserviceprincipal", account, "-o", "json")
+	out := kubectlOut("-n", team, "get", "databricksserviceaccount", account, "-o", "json")
 	var p projection
 	if out == "" || json.Unmarshal([]byte(out), &p) != nil {
 		return projection{}
@@ -475,7 +475,7 @@ func operatorOf(team, account, request string) string {
 
 // conditionOn is the reason one identity gives for the state it is in.
 func conditionOn(team, account, request, condition string) string {
-	return kubectlOut("-n", team, "get", "databricksserviceprincipal", account, "-o",
+	return kubectlOut("-n", team, "get", "databricksserviceaccount", account, "-o",
 		fmt.Sprintf("jsonpath={.status.identities[?(@.request==%q)].conditions[?(@.type==%q)].reason}",
 			request, condition))
 }

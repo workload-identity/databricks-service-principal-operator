@@ -82,7 +82,7 @@ type settings struct {
 // destroyed.
 func reconcilers(s settings, c client.Client, live client.Reader, scheme *runtime.Scheme) (
 	*controller.DatabricksAccountReconciler,
-	*controller.DatabricksServicePrincipalReconciler,
+	*controller.DatabricksServiceAccountReconciler,
 	*controller.IssuedDatabricksServicePrincipalReconciler) {
 	return &controller.DatabricksAccountReconciler{
 			Client:  c,
@@ -90,7 +90,7 @@ func reconcilers(s settings, c client.Client, live client.Reader, scheme *runtim
 			Account: s.Account,
 			Holder:  s.Holder,
 			Runtime: s.Runtime,
-		}, &controller.DatabricksServicePrincipalReconciler{
+		}, &controller.DatabricksServiceAccountReconciler{
 			Client:  c,
 			Scheme:  scheme,
 			Records: s.Namespace,
@@ -292,7 +292,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := projectionReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "databricksserviceprincipal")
+		setupLog.Error(err, "Failed to create controller", "controller", "databricksserviceaccount")
 		os.Exit(1)
 	}
 	// The webhook that puts a Databricks-audienced token into the pods of

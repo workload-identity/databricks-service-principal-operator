@@ -15,7 +15,7 @@ Databricks is told to trust that ServiceAccount's token as that principal, and
 every pod running under it comes up holding the identity:
 
 ```sh
-$ kubectl -n team-a get databricksserviceprincipal etl
+$ kubectl -n team-a get databricksserviceaccount etl
 NAME   CLIENT ID                              READY   AGE
 etl    11111111-1111-1111-1111-111111111111   True    4s
 ```
@@ -245,7 +245,7 @@ A namespace this operator does not serve is left entirely alone — not served, 
 not revoked.
 
 Both operators are asked about the same pods, and they agree without
-coordinating: each reads the same `DatabricksServicePrincipal`, which carries
+coordinating: each reads the same `DatabricksServiceAccount`, which carries
 every identity the ServiceAccount was issued, so whichever is asked first equips
 the pod with all of them and the second finds its work already done.
 
@@ -292,7 +292,7 @@ OPERATOR=dbxsp-operator-system/databricks-account
 kubectl -n team-a annotate serviceaccount etl \
   databricks.workload-identity.io/service-principal=$OPERATOR
 
-kubectl -n team-a get databricksserviceprincipal etl
+kubectl -n team-a get databricksserviceaccount etl
 ```
 
 ```
@@ -333,7 +333,7 @@ object's `Equipped` condition names the pods that are missing what they should
 have:
 
 ```sh
-kubectl -n team-a get databricksserviceprincipal etl \
+kubectl -n team-a get databricksserviceaccount etl \
   -o jsonpath='{.status.conditions[?(@.type=="Equipped")].message}'
 ```
 
@@ -471,7 +471,7 @@ deleting the namespace.**
 
 **Nothing else destroys one.** Removing the namespace's `mint` label stops new
 identities and leaves existing ones alone. Deleting the
-`DatabricksServicePrincipal` in your namespace does nothing at all: that object
+`DatabricksServiceAccount` in your namespace does nothing at all: that object
 is a projection, and it is rebuilt on the next pass.
 
 ---
@@ -544,8 +544,8 @@ one.
 |-----------------------------------------|---------------------------------------------------------------------|
 | `DatabricksAccount` `Ready`             | Whether this Databricks account was reached and read                |
 | `DatabricksAccount` `Prepared`          | Whether the operator can issue anything at all                      |
-| `DatabricksServicePrincipal` `Ready`    | Whether the operator is getting this identity to where it should be |
-| `DatabricksServicePrincipal` `Equipped` | Whether its pods carry what they need to reach Databricks           |
+| `DatabricksServiceAccount` `Ready`      | Whether the operator is getting this identity to where it should be |
+| `DatabricksServiceAccount` `Equipped`   | Whether its pods carry what they need to reach Databricks           |
 | `IssuedDatabricksServicePrincipal`      | The same answers, on the object the operator actually acts on       |
 
 `DatabricksAccount` Ready does not mean the operator can create anything —

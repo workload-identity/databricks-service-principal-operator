@@ -196,7 +196,7 @@ type IssuedDatabricksServicePrincipalStatus struct {
 // the time.
 //
 // Deleting this object destroys the identity. That is what it means, and it is
-// the only object here that means it. The DatabricksServicePrincipal in the
+// the only object here that means it. The DatabricksServiceAccount in the
 // tenant's namespace is a projection of this one: it can be deleted, and it
 // comes back.
 //

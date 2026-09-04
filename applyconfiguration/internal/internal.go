@@ -91,7 +91,7 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: subject
       type:
         scalar: string
-- name: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.DatabricksServicePrincipal
+- name: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.DatabricksServiceAccount
   map:
     fields:
     - name: apiVersion
@@ -105,8 +105,8 @@ var schemaYAML = typed.YAMLObject(`types:
         namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
     - name: status
       type:
-        namedType: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.DatabricksServicePrincipalStatus
-- name: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.DatabricksServicePrincipalStatus
+        namedType: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.DatabricksServiceAccountStatus
+- name: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.DatabricksServiceAccountStatus
   map:
     fields:
     - name: identities

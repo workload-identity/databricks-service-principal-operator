@@ -46,7 +46,7 @@ No `--overwrite`, and that is not an accident of the example: each key is writte
 on its own, so adding an identity does not touch the ones already there.
 
 ```
-$ kubectl -n team-a get databricksserviceprincipal etl -o yaml
+$ kubectl -n team-a get databricksserviceaccount etl -o yaml
 status:
   identities:
   - request: reader

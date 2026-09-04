@@ -65,8 +65,8 @@ func serving(operator types.NamespacedName, namespaces ...string) *dbxv1alpha1.D
 // cluster. It is a different operator by the only thing that makes one: the
 // DatabricksAccount it acts on, which is also its field manager.
 func projectionFor(scheme *runtime.Scheme, c client.Client,
-	operator types.NamespacedName) *DatabricksServicePrincipalReconciler {
-	return &DatabricksServicePrincipalReconciler{
+	operator types.NamespacedName) *DatabricksServiceAccountReconciler {
+	return &DatabricksServiceAccountReconciler{
 		Client:  c,
 		Scheme:  scheme,
 		Records: operator.Namespace,

@@ -26,7 +26,7 @@ resources:
 - databricksaccount_admin_role.yaml
 - databricksaccount_editor_role.yaml
 - databricksaccount_viewer_role.yaml
-- databricksserviceprincipal_admin_role.yaml
-- databricksserviceprincipal_editor_role.yaml
-- databricksserviceprincipal_viewer_role.yaml
+- databricksserviceaccount_admin_role.yaml
+- databricksserviceaccount_editor_role.yaml
+- databricksserviceaccount_viewer_role.yaml
 

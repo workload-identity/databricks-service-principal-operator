@@ -50,10 +50,10 @@ func newInjector(t *testing.T, objects ...client.Object) *PodTokenInjector {
 	}
 }
 
-// identity is a converged DatabricksServicePrincipal holding the unnamed
+// identity is a converged DatabricksServiceAccount holding the unnamed
 // identity: Databricks has assigned both ids and the audience is recorded.
-func identity(namespace, name string) *dbxv1alpha1.DatabricksServicePrincipal {
-	principal := &dbxv1alpha1.DatabricksServicePrincipal{
+func identity(namespace, name string) *dbxv1alpha1.DatabricksServiceAccount {
+	principal := &dbxv1alpha1.DatabricksServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 	}
 	principal.Status.Identities = []dbxv1alpha1.ProjectedIdentity{{
@@ -288,7 +288,7 @@ func TestAPodWithNoIdentityIsLeftAlone(t *testing.T) {
 // failure for an illegible one: a workload that does not start, with an error
 // naming this operator to somebody whose Deployment says nothing about
 // Databricks, instead of a workload that starts and whose first Databricks call
-// is refused with the reason on its own DatabricksServicePrincipal.
+// is refused with the reason on its own DatabricksServiceAccount.
 //
 // Admitted and unequipped are one answer, not two. Equipping from a read that
 // never arrived would mount a token for an identity nobody confirmed exists.

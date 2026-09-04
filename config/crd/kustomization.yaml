@@ -2,7 +2,7 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/databricks.workload-identity.io_databricksserviceprincipals.yaml
+- bases/databricks.workload-identity.io_databricksserviceaccounts.yaml
 - bases/databricks.workload-identity.io_databricksaccounts.yaml
 - bases/databricks.workload-identity.io_issueddatabricksserviceprincipals.yaml
 # +kubebuilder:scaffold:crdkustomizeresource

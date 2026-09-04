@@ -25,7 +25,7 @@ rules:
 - apiGroups:
   - databricks.workload-identity.io
   resources:
-  - databricksserviceprincipals
+  - databricksserviceaccounts
   verbs:
   - create
   - delete
@@ -36,7 +36,7 @@ rules:
 - apiGroups:
   - databricks.workload-identity.io
   resources:
-  - databricksserviceprincipals/status
+  - databricksserviceaccounts/status
   verbs:
   - get
   - patch

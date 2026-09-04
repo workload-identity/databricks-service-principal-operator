@@ -17,12 +17,12 @@ limitations under the License.
 
 package v1alpha1
 
-// DatabricksServicePrincipalStatusApplyConfiguration represents a declarative configuration of the DatabricksServicePrincipalStatus type for use
+// DatabricksServiceAccountStatusApplyConfiguration represents a declarative configuration of the DatabricksServiceAccountStatus type for use
 // with apply.
 //
-// DatabricksServicePrincipalStatus is every identity this ServiceAccount was
+// DatabricksServiceAccountStatus is every identity this ServiceAccount was
 // issued, as its owner can see them.
-type DatabricksServicePrincipalStatusApplyConfiguration struct {
+type DatabricksServiceAccountStatusApplyConfiguration struct {
 	// identities is one entry per identity, keyed by what was asked for.
 	//
 	// A list rather than an object per identity, so that the name of this object
@@ -32,16 +32,16 @@ type DatabricksServicePrincipalStatusApplyConfiguration struct {
 	Identities []ProjectedIdentityApplyConfiguration `json:"identities,omitempty"`
 }
 
-// DatabricksServicePrincipalStatusApplyConfiguration constructs a declarative configuration of the DatabricksServicePrincipalStatus type for use with
+// DatabricksServiceAccountStatusApplyConfiguration constructs a declarative configuration of the DatabricksServiceAccountStatus type for use with
 // apply.
-func DatabricksServicePrincipalStatus() *DatabricksServicePrincipalStatusApplyConfiguration {
-	return &DatabricksServicePrincipalStatusApplyConfiguration{}
+func DatabricksServiceAccountStatus() *DatabricksServiceAccountStatusApplyConfiguration {
+	return &DatabricksServiceAccountStatusApplyConfiguration{}
 }
 
 // WithIdentities adds the given value to the Identities field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Identities field.
-func (b *DatabricksServicePrincipalStatusApplyConfiguration) WithIdentities(values ...*ProjectedIdentityApplyConfiguration) *DatabricksServicePrincipalStatusApplyConfiguration {
+func (b *DatabricksServiceAccountStatusApplyConfiguration) WithIdentities(values ...*ProjectedIdentityApplyConfiguration) *DatabricksServiceAccountStatusApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
 			panic("nil value passed to WithIdentities")

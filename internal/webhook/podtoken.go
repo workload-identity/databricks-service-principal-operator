@@ -124,7 +124,7 @@ type PodTokenInjector struct {
 // answer is a workload that does not start for a reason unrelated to what it
 // does, and the failure this prevents is visible and specific: the workload's
 // first call to Databricks is refused, with the reason on its
-// DatabricksServicePrincipal. Refusing here trades a legible failure for an
+// DatabricksServiceAccount. Refusing here trades a legible failure for an
 // illegible one.
 func (i *PodTokenInjector) Handle(ctx context.Context, req admission.Request) admission.Response {
 	pod := &corev1.Pod{}
@@ -147,7 +147,7 @@ func (i *PodTokenInjector) Handle(ctx context.Context, req admission.Request) ad
 	// The identity is what says this pod's ServiceAccount asked and was allowed.
 	// Reading it rather than re-deriving the answer means the webhook and the
 	// controller cannot disagree about who gets a token.
-	var principal dbxv1alpha1.DatabricksServicePrincipal
+	var principal dbxv1alpha1.DatabricksServiceAccount
 	switch err := i.Get(ctx, types.NamespacedName{Namespace: namespace, Name: account}, &principal); {
 	case apierrors.IsNotFound(err):
 		return admission.Allowed("no Databricks identity for this ServiceAccount")

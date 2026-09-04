@@ -14,7 +14,7 @@ resources:
     namespaced: true
   controller: true
   domain: databricks.workload-identity.io
-  kind: DatabricksServicePrincipal
+  kind: DatabricksServiceAccount
   path: github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1
   version: v1alpha1
 - api:

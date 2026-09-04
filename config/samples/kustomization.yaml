@@ -1,5 +1,5 @@
 ## Append samples of your project ##
 resources:
-- v1alpha1_databricksserviceprincipal.yaml
+- v1alpha1_databricksserviceaccount.yaml
 - v1alpha1_databricksaccount.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

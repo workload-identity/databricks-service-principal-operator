@@ -43,9 +43,11 @@ const (
 	// eks.amazonaws.com/role-arn, azure.workload.identity/client-id -- and this
 	// operator has nothing like it to name, because the identity does not exist
 	// until this asks for it. So what the value names is the operator to ask,
-	// and the key carries the rest of the meaning: what appears in Databricks is
-	// a service principal, what appears in the cluster is a
-	// DatabricksServicePrincipal, and this is what asks for one.
+	// and the key carries the rest of the meaning: this is what asks for an
+	// identity, what answers in Databricks is a service principal, and what
+	// answers in the cluster is one entry on this ServiceAccount's own
+	// DatabricksServiceAccount -- one object per ServiceAccount, however many
+	// identities it asked for.
 	//
 	// The request is made on the ServiceAccount rather than in an object of its
 	// own, and that is the whole reason a name typed here cannot be wrong:
@@ -289,9 +291,9 @@ type ProjectedIdentity struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// DatabricksServicePrincipalStatus is every identity this ServiceAccount was
+// DatabricksServiceAccountStatus is every identity this ServiceAccount was
 // issued, as its owner can see them.
-type DatabricksServicePrincipalStatus struct {
+type DatabricksServiceAccountStatus struct {
 	// identities is one entry per identity, keyed by what was asked for.
 	//
 	// A list rather than an object per identity, so that the name of this object
@@ -311,7 +313,7 @@ type DatabricksServicePrincipalStatus struct {
 // ServiceAccount asking for exactly one has. There is no order its owner wrote
 // to honour instead: the request is a set of annotation keys, and a map has no
 // order.
-func (s *DatabricksServicePrincipalStatus) First() (ProjectedIdentity, bool) {
+func (s *DatabricksServiceAccountStatus) First() (ProjectedIdentity, bool) {
 	if len(s.Identities) == 0 {
 		return ProjectedIdentity{}, false
 	}
@@ -319,7 +321,7 @@ func (s *DatabricksServicePrincipalStatus) First() (ProjectedIdentity, bool) {
 }
 
 // Identity returns the entry for one profile name, and whether there is one.
-func (s *DatabricksServicePrincipalStatus) Identity(request string) (*ProjectedIdentity, bool) {
+func (s *DatabricksServiceAccountStatus) Identity(request string) (*ProjectedIdentity, bool) {
 	for i := range s.Identities {
 		if s.Identities[i].Request == request {
 			return &s.Identities[i], true
@@ -339,12 +341,12 @@ func (i ProjectedIdentity) AskedOf(operator types.NamespacedName) bool {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=dbxsp
+// +kubebuilder:resource:shortName=dbxsa
 // +kubebuilder:printcolumn:name="Client ID",type=string,JSONPath=".status.identities[0].clientId"
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.identities[0].conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
-// DatabricksServicePrincipal shows the owner of one ServiceAccount what this
+// DatabricksServiceAccount shows the owner of one ServiceAccount what this
 // operator issued to it. It is a projection and it decides nothing.
 //
 // Every field on it was copied from an IssuedDatabricksServicePrincipal in the
@@ -368,29 +370,32 @@ func (i ProjectedIdentity) AskedOf(operator types.NamespacedName) bool {
 // request. A copy here would be new only in the sense of being able to disagree
 // with its source.
 //
-// The name is load-bearing. One object per ServiceAccount, named after it, is
-// what makes "one identity per ServiceAccount" a rule the API server enforces
-// rather than something this operator has to keep true.
-type DatabricksServicePrincipal struct {
+// The name is load-bearing, and it is the ServiceAccount's. One object per
+// ServiceAccount, named after it and in its namespace, is what makes "everything
+// one ServiceAccount was issued is in one place" something the API server keeps
+// true rather than something this operator has to. What is on it is a list --
+// one entry per identity, keyed on the profile name -- because a ServiceAccount
+// may hold several, which is why this object is not named for any one of them.
+type DatabricksServiceAccount struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// +optional
-	Status DatabricksServicePrincipalStatus `json:"status,omitempty"`
+	Status DatabricksServiceAccountStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// DatabricksServicePrincipalList contains a list of DatabricksServicePrincipal.
-type DatabricksServicePrincipalList struct {
+// DatabricksServiceAccountList contains a list of DatabricksServiceAccount.
+type DatabricksServiceAccountList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []DatabricksServicePrincipal `json:"items"`
+	Items           []DatabricksServiceAccount `json:"items"`
 }
 
 func init() {
 	SchemeBuilder.Register(func(s *runtime.Scheme) error {
-		s.AddKnownTypes(SchemeGroupVersion, &DatabricksServicePrincipal{}, &DatabricksServicePrincipalList{})
+		s.AddKnownTypes(SchemeGroupVersion, &DatabricksServiceAccount{}, &DatabricksServiceAccountList{})
 		return nil
 	})
 }

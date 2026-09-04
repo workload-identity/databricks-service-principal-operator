@@ -34,9 +34,9 @@ const (
 )
 
 // principalOf returns the projection, or nil if there is none.
-func principalOf(t *testing.T, c client.Client) *dbxv1alpha1.DatabricksServicePrincipal {
+func principalOf(t *testing.T, c client.Client) *dbxv1alpha1.DatabricksServiceAccount {
 	t.Helper()
-	var got dbxv1alpha1.DatabricksServicePrincipal
+	var got dbxv1alpha1.DatabricksServiceAccount
 	err := c.Get(context.Background(),
 		types.NamespacedName{Namespace: testNamespace, Name: testName}, &got)
 	if apierrors.IsNotFound(err) {
@@ -1431,7 +1431,7 @@ func TestARecordThatHasNotReachedTheCacheIsNotDereferenced(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(mintingNamespace(testNamespace), asking(testNamespace, testName)).
 		WithStatusSubresource(
-			&dbxv1alpha1.DatabricksServicePrincipal{},
+			&dbxv1alpha1.DatabricksServiceAccount{},
 			&dbxv1alpha1.IssuedDatabricksServicePrincipal{},
 			&dbxv1alpha1.DatabricksAccount{},
 		).
@@ -1461,7 +1461,7 @@ func TestARecordThatHasNotReachedTheCacheIsNotDereferenced(t *testing.T) {
 		}).
 		Build()
 
-	reconciler := &DatabricksServicePrincipalReconciler{
+	reconciler := &DatabricksServiceAccountReconciler{
 		Client:  lagging,
 		Scheme:  scheme,
 		Records: operatorNamespace,

@@ -230,7 +230,7 @@ func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 
 	// Outside it, and genuinely so: these live in namespaces this operator does
 	// not own and cannot be narrowed.
-	for _, outside := range []string{"serviceaccounts", "namespaces", "pods", "databricksserviceprincipals"} {
+	for _, outside := range []string{"serviceaccounts", "namespaces", "pods", "databricksserviceaccounts"} {
 		if !slices.Contains(cluster, outside) {
 			t.Errorf("the ClusterRole no longer grants %s; it is read or written in every "+
 				"namespace this operator serves, so it cannot be narrowed to one", outside)
@@ -248,8 +248,8 @@ func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 	// labels, held for the sake of one key of this operator's own.
 	written := map[string]bool{"create": true, "update": true, "patch": true, "delete": true}
 	mayWrite := map[string]bool{
-		"databricksserviceprincipals":        true,
-		"databricksserviceprincipals/status": true,
+		"databricksserviceaccounts":        true,
+		"databricksserviceaccounts/status": true,
 	}
 	for resource, verbs := range clusterVerbs {
 		for _, verb := range verbs {

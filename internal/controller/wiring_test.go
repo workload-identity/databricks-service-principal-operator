@@ -92,7 +92,7 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		tokenFile := filepath.Join(GinkgoT().TempDir(), "token")
 		Expect(os.WriteFile(tokenFile, []byte(token), 0o600)).To(Succeed())
 
-		projection := &DatabricksServicePrincipalReconciler{
+		projection := &DatabricksServiceAccountReconciler{
 			Client:  manager.GetClient(),
 			Scheme:  manager.GetScheme(),
 			Records: wiredRecords,
@@ -198,7 +198,7 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		account.Spec.Namespaces = []string{wiredNamespace}
 		Expect(k8sClient.Update(ctx, account)).To(Succeed())
 
-		Eventually(func() *dbxv1alpha1.DatabricksServicePrincipal {
+		Eventually(func() *dbxv1alpha1.DatabricksServiceAccount {
 			return recordedIdentity(wiredNamespace, wiredAccount)
 		}, 20*time.Second, 250*time.Millisecond).ShouldNot(BeNil(),
 			"widening this operator's reach woke nothing; every ServiceAccount in the namespace "+
@@ -252,8 +252,8 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 	})
 
 	It("owns the projection by the ServiceAccount and holds nothing with it", func() {
-		var recorded *dbxv1alpha1.DatabricksServicePrincipal
-		Eventually(func() *dbxv1alpha1.DatabricksServicePrincipal {
+		var recorded *dbxv1alpha1.DatabricksServiceAccount
+		Eventually(func() *dbxv1alpha1.DatabricksServiceAccount {
 			recorded = recordedIdentity(wiredNamespace, wiredAccount)
 			return recorded
 		}, 20*time.Second, 250*time.Millisecond).ShouldNot(BeNil())
@@ -342,8 +342,8 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		// The other operator, writing as itself. Nothing about it exists in this
 		// binary: what makes it a different operator is the field manager, which
 		// is what the API server records ownership against.
-		theirs := acv1alpha1.DatabricksServicePrincipal("shared", wiredNamespace).
-			WithStatus(acv1alpha1.DatabricksServicePrincipalStatus().
+		theirs := acv1alpha1.DatabricksServiceAccount("shared", wiredNamespace).
+			WithStatus(acv1alpha1.DatabricksServiceAccountStatus().
 				WithIdentities(acv1alpha1.ProjectedIdentity().
 					WithRequest(stranger).
 					WithOperator(stranger).
@@ -445,8 +445,8 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 // way out. A object with a deletionTimestamp is gone as far as anything here is
 // concerned: envtest runs no garbage collector, so it lingers after its
 // finalizer is dropped.
-func recordedIdentity(namespace, name string) *dbxv1alpha1.DatabricksServicePrincipal {
-	var recorded dbxv1alpha1.DatabricksServicePrincipal
+func recordedIdentity(namespace, name string) *dbxv1alpha1.DatabricksServiceAccount {
+	var recorded dbxv1alpha1.DatabricksServiceAccount
 	err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &recorded)
 	if apierrors.IsNotFound(err) || err != nil {
 		return nil
@@ -541,7 +541,7 @@ var _ = Describe("what the webhook produces", func() {
 	It("makes a pod the API server accepts, carrying every identity", func() {
 		const reader, writer = "reader", "writer"
 
-		projection := &dbxv1alpha1.DatabricksServicePrincipal{
+		projection := &dbxv1alpha1.DatabricksServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{Namespace: admitting, Name: "etl"},
 		}
 		Expect(k8sClient.Create(ctx, projection)).To(Succeed())

@@ -363,7 +363,7 @@ func deleteEverythingIn(t *testing.T, c client.Client, namespace string) {
 		}
 	}
 
-	var principals dbxv1alpha1.DatabricksServicePrincipalList
+	var principals dbxv1alpha1.DatabricksServiceAccountList
 	if err := c.List(ctx, &principals, client.InNamespace(namespace)); err != nil {
 		t.Fatal(err)
 	}

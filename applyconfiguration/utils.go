@@ -37,10 +37,10 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.DatabricksAccountSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DatabricksAccountStatus"):
 		return &apiv1alpha1.DatabricksAccountStatusApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("DatabricksServicePrincipal"):
-		return &apiv1alpha1.DatabricksServicePrincipalApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("DatabricksServicePrincipalStatus"):
-		return &apiv1alpha1.DatabricksServicePrincipalStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("DatabricksServiceAccount"):
+		return &apiv1alpha1.DatabricksServiceAccountApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("DatabricksServiceAccountStatus"):
+		return &apiv1alpha1.DatabricksServiceAccountStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("IssuedDatabricksServicePrincipal"):
 		return &apiv1alpha1.IssuedDatabricksServicePrincipalApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("IssuedDatabricksServicePrincipalSpec"):

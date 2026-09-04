@@ -49,7 +49,7 @@ webhooks:
   #
   # What Ignore costs is a pod that starts without its token and fails on its
   # first call to Databricks. That failure is legible: the workload's
-  # DatabricksServicePrincipal says whether the identity is ready, and the pod
+  # DatabricksServiceAccount says whether the identity is ready, and the pod
   # is missing a volume anybody can see is missing. Trading a legible failure
   # for cluster-wide unschedulability is the wrong way round.
   failurePolicy: Ignore
