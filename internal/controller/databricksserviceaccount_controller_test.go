@@ -268,6 +268,38 @@ func TestAFailedPolicyIsNotReportedAsWorking(t *testing.T) {
 	}
 }
 
+// TestDatabricksNotAnsweringIsNotTheDeclarationBeingWrong covers the branch
+// everything unclassified falls into.
+//
+// It is outcomeFor's default, so it is what a create, a delete and a federation
+// policy write report when Databricks did not answer -- not only a lookup.
+// Unknown rather than False, because False is the answer somebody edits their
+// spec over, and nothing about the spec has been shown to be wrong: the same
+// declaration will work when Databricks answers again.
+func TestDatabricksNotAnsweringIsNotTheDeclarationBeingWrong(t *testing.T) {
+	t.Parallel()
+	unreachable := errors.New("dial tcp: lookup accounts.cloud.databricks.com: no such host")
+	h := newHarness(t, &stubClients{policyErr: unreachable},
+		mintingNamespace(testNamespace), asking(testNamespace, testName))
+	h.settle(t)
+
+	ready := meta.FindStatusCondition(
+		identityIn(t, principalOf(t, h.Client)).Conditions, conditionReady)
+	if ready == nil || ready.Reason != reasonDatabricksUnavailable {
+		t.Fatalf("Ready is %v, want %s -- this is the reason a tenant reads while Databricks "+
+			"is unreachable, and it is the only one that goes back to the workqueue",
+			ready, reasonDatabricksUnavailable)
+	}
+	if ready.Status != metav1.ConditionUnknown {
+		t.Errorf("Ready is %s, want Unknown: False sends whoever reads it to a declaration that "+
+			"has nothing wrong with it", ready.Status)
+	}
+	if !strings.Contains(ready.Message, unreachable.Error()) {
+		t.Errorf("Ready says %q and does not carry what Databricks answered, which is the only "+
+			"place it is written down", ready.Message)
+	}
+}
+
 // TestARefusedRequestIsNotReportedAsSomethingMissing covers two answers that
 // call for different people.
 //

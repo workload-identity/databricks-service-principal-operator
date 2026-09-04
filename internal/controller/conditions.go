@@ -115,7 +115,17 @@ const (
 	reasonInvalidSpec   = "InvalidSpec"
 	reasonDenied        = "Denied"
 	reasonNotConfigured = "NotConfigured"
-	reasonLookupFailed  = "LookupFailed"
+
+	// reasonDatabricksUnavailable is Databricks not having answered, whatever it
+	// was asked. It is outcomeFor's default -- everything KindOf did not
+	// classify -- so a create, a delete and a federation policy write all report
+	// through it, and naming a lookup would send its reader after a read that may
+	// never have happened.
+	//
+	// It is also the only reason here that goes back to the workqueue rather than
+	// waiting a fixed interval, because it is the only one where trying again
+	// sooner and sooner is the right thing to do.
+	reasonDatabricksUnavailable = "DatabricksUnavailable"
 
 	// reasonRejected is Databricks refusing the request itself as invalid, which
 	// it answers 400 rather than 404. NotFound next to it is answered by

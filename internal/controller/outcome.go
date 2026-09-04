@@ -104,7 +104,7 @@ func outcomeFor(err error) outcome {
 		// This is the one branch that goes back to the workqueue, where the
 		// backoff belongs.
 		return outcome{
-			Status: metav1.ConditionUnknown, Reason: reasonLookupFailed, Message: message,
+			Status: metav1.ConditionUnknown, Reason: reasonDatabricksUnavailable, Message: message,
 			Err: err,
 		}
 	}
