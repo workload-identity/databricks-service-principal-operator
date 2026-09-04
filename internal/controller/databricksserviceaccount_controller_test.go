@@ -1520,3 +1520,80 @@ func TestARecordThatHasNotReachedTheCacheIsNotDereferenced(t *testing.T) {
 			"the answer is to come back rather than to look somewhere else", err)
 	}
 }
+
+// TestAnIdentityWithNoClientIdDescribesNoPod covers the guard describes needs in
+// order to answer a question about a string at all.
+//
+// The webhook writes nothing for an identity with no client id, and every string
+// contains the empty one. Without the guard the containment check answers yes
+// for every pod in the namespace, so Equipped reports True for pods carrying a
+// profile for a service principal that is not there -- and clearing the client
+// id is exactly what recording one as removed in Databricks does, which is the
+// moment those pods are worth reporting.
+func TestAnIdentityWithNoClientIdDescribesNoPod(t *testing.T) {
+	t.Parallel()
+	removed := dbxv1alpha1.ProjectedIdentity{
+		Profile: testOperatorRef.String(), Audience: testAudience,
+	}
+
+	for _, pod := range []*corev1.Pod{
+		equippedPod(testName),
+		rawPodRunningAs(testName),
+	} {
+		if describes(pod, removed) {
+			t.Errorf("pod %s is reported as describing an identity with no client id; every "+
+				"pod in the namespace would be, and Equipped would say True for a service "+
+				"principal that is not there", pod.Name)
+		}
+	}
+}
+
+// TestAPodDescribesTheIdentityItWasAdmittedWith is the pair of answers Equipped
+// is built out of: the pod carries what this identity says now, or it carries an
+// older answer.
+//
+// The stale case is the one nothing else notices. A pod admitted before
+// Databricks assigned the client id is holding a profile that was right when it
+// was written, and nothing rewrites a running pod -- so the only way it is ever
+// reported is this comparison.
+func TestAPodDescribesTheIdentityItWasAdmittedWith(t *testing.T) {
+	t.Parallel()
+	converged := dbxv1alpha1.ProjectedIdentity{
+		Profile: testOperatorRef.String(), ClientID: "app-uuid", Audience: testAudience,
+	}
+	pod := equippedPod(testName, converged)
+
+	if !describes(pod, converged) {
+		t.Error("a pod admitted with this identity's own profile is not reported as carrying " +
+			"it; every equipped pod would be asked to be recreated for ever")
+	}
+
+	reassigned := converged
+	reassigned.ClientID = "another-app-uuid"
+	if describes(pod, reassigned) {
+		t.Error("a pod carrying a profile written before the client id changed is reported as " +
+			"up to date; nothing rewrites a running pod, so nothing else would ever say so")
+	}
+}
+
+// TestAPodNamingNoServiceAccountRunsAsDefault covers the substitution Kubernetes
+// makes and the API object does not show.
+//
+// An empty spec.serviceAccountName is a pod running as "default", which can hold
+// an identity like any other. Read literally it matches no ServiceAccount, so
+// every such pod drops out of the count of what this DatabricksServiceAccount is
+// answerable for -- silently, and in the direction of reporting Equipped True
+// for pods that were never equipped.
+func TestAPodNamingNoServiceAccountRunsAsDefault(t *testing.T) {
+	t.Parallel()
+	named := rawPodRunningAs(testName)
+	if got := serviceAccountOf(named); got != testName {
+		t.Errorf("serviceAccountOf is %q, want %q", got, testName)
+	}
+
+	unnamed := rawPodRunningAs("")
+	if got := serviceAccountOf(unnamed); got != "default" {
+		t.Errorf("serviceAccountOf is %q, want %q -- the pod runs as default and would be "+
+			"counted against no DatabricksServiceAccount at all", got, "default")
+	}
+}

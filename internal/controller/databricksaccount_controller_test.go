@@ -644,3 +644,63 @@ func TestNothingIsBlankedByAReadThatFailed(t *testing.T) {
 			ready.Message, reported.Status.Subject)
 	}
 }
+
+// TestNotKnowingIsNotAnAnswerAboutANamespace covers the difference
+// databricksAccountServes exists to carry: an operator that was told nothing
+// and an operator that was told no.
+//
+// Both name no namespace, and only one of them is a refusal. The absent case is
+// the one a caller must never act on -- a DatabricksAccount somebody deleted, or
+// a first pass whose cache has not filled, would otherwise read as "this
+// namespace is out of scope" and take the trust off every identity in the
+// cluster on the strength of nobody having said anything.
+func TestNotKnowingIsNotAnAnswerAboutANamespace(t *testing.T) {
+	t.Parallel()
+	elsewhere := databricksAccountNamed(databricksAccountName)
+	elsewhere.Spec.Namespaces = []string{"somebody-elses-namespace"}
+	here := databricksAccountNamed(databricksAccountName)
+	here.Spec.Namespaces = []string{testNamespace}
+
+	for _, asked := range []struct {
+		what             string
+		objects          []client.Object
+		declared, served bool
+	}{
+		{
+			what:     "no DatabricksAccount at all",
+			declared: false,
+			served:   false,
+		},
+		{
+			what:     "a DatabricksAccount naming this namespace",
+			objects:  []client.Object{here},
+			declared: true,
+			served:   true,
+		},
+		{
+			what:     "a DatabricksAccount naming another namespace",
+			objects:  []client.Object{elsewhere},
+			declared: true,
+			served:   false,
+		},
+	} {
+		t.Run(asked.what, func(t *testing.T) {
+			t.Parallel()
+			c, _ := newFakeClient(t, asked.objects...)
+
+			declared, served, err := databricksAccountServes(
+				context.Background(), c, testOperatorRef, testNamespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if declared != asked.declared {
+				t.Errorf("declared is %v, want %v, given %s -- a caller that cannot tell "+
+					"silence from a refusal acts on both, and one of them must never be "+
+					"acted on", declared, asked.declared, asked.what)
+			}
+			if served != asked.served {
+				t.Errorf("served is %v, want %v, given %s", served, asked.served, asked.what)
+			}
+		})
+	}
+}
