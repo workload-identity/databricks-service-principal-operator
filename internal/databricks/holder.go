@@ -178,12 +178,12 @@ func (h *Holder) CreateServicePrincipal(ctx context.Context, issuing Issuing) (s
 	return h.Snapshot().CreateServicePrincipal(ctx, issuing)
 }
 
-func (h *Holder) ServicePrincipalExists(ctx context.Context, id string) (bool, error) {
-	return h.Snapshot().ServicePrincipalExists(ctx, id)
+func (h *Holder) ServicePrincipalExists(ctx context.Context, servicePrincipalID string) (bool, error) {
+	return h.Snapshot().ServicePrincipalExists(ctx, servicePrincipalID)
 }
 
-func (h *Holder) DeleteServicePrincipal(ctx context.Context, id string) error {
-	return h.Snapshot().DeleteServicePrincipal(ctx, id)
+func (h *Holder) DeleteServicePrincipal(ctx context.Context, servicePrincipalID string) error {
+	return h.Snapshot().DeleteServicePrincipal(ctx, servicePrincipalID)
 }
 
 func (h *Holder) EnsureFederationPolicy(ctx context.Context, servicePrincipalID, issuer, subject, audience string) error {

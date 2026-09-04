@@ -133,24 +133,24 @@ func (s *stubClients) CreateServicePrincipal(_ context.Context, issuing dbx.Issu
 	return fmt.Sprintf("7788%d", len(s.created)), fmt.Sprintf("app-uuid-%d", len(s.created)), nil
 }
 
-func (s *stubClients) ServicePrincipalExists(_ context.Context, id string) (bool, error) {
+func (s *stubClients) ServicePrincipalExists(_ context.Context, servicePrincipalID string) (bool, error) {
 	if s.err != nil {
 		return false, s.err
 	}
-	if s.gone == id {
+	if s.gone == servicePrincipalID {
 		return false, nil
 	}
 	return true, nil
 }
 
-func (s *stubClients) DeleteServicePrincipal(_ context.Context, id string) error {
+func (s *stubClients) DeleteServicePrincipal(_ context.Context, servicePrincipalID string) error {
 	if s.err != nil {
 		return s.err
 	}
 	if s.deleteErr != nil {
 		return s.deleteErr
 	}
-	s.deleted = append(s.deleted, id)
+	s.deleted = append(s.deleted, servicePrincipalID)
 	return nil
 }
 

@@ -249,12 +249,12 @@ images:
 // grantItself gives it what the operator already there was given by hand: a
 // service principal, a federation policy naming its own subject, and a
 // DatabricksAccount pointing at both.
-func (o *otherOperator) grantItself(account string) {
-	subject := databricks.SubjectFor(o.namespace, account)
+func (o *otherOperator) grantItself(serviceAccount string) {
+	subject := databricks.SubjectFor(o.namespace, serviceAccount)
 	issuing := databricks.Issuing{
 		Issuer:            clusterIssuer(),
 		Namespace:         o.namespace,
-		Name:              account,
+		Name:              serviceAccount,
 		ServiceAccountUID: string(uuid.NewUUID()),
 		Operator:          o.namespace + "/" + accountName,
 	}

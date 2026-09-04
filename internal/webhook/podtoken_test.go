@@ -96,11 +96,11 @@ func resolvedProfile(t *testing.T, rendered, profile string) *sdkconfig.Config {
 	return cfg
 }
 
-func podUsing(account string) *corev1.Pod {
+func podUsing(serviceAccount string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: testNamespace},
 		Spec: corev1.PodSpec{
-			ServiceAccountName: account,
+			ServiceAccountName: serviceAccount,
 			Containers:         []corev1.Container{{Name: "app", Image: "busybox"}},
 		},
 	}
@@ -216,9 +216,9 @@ func TestAPodGetsATokenItsFederationPolicyWillAccept(t *testing.T) {
 
 // tokenFor is the token projected for one identity, found by the path that says
 // which identity it belongs to.
-func tokenFor(t *testing.T, pod *corev1.Pod, request string) *corev1.ServiceAccountTokenProjection {
+func tokenFor(t *testing.T, pod *corev1.Pod, profile string) *corev1.ServiceAccountTokenProjection {
 	t.Helper()
-	wanted := TokenProjectionPathFor(request)
+	wanted := TokenProjectionPathFor(profile)
 	for _, volume := range pod.Spec.Volumes {
 		if volume.Name != TokenVolume || volume.Projected == nil {
 			continue

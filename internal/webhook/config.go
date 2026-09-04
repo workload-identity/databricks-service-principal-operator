@@ -100,12 +100,12 @@ func Configuration(identities []dbxv1alpha1.ProjectedIdentity) string {
 // the unnamed one's reference holds the one slash that makes it two -- so
 // nothing has to be escaped or shortened, and the path a workload reads in its
 // profile is the name it asked under.
-func TokenPathFor(request string) string {
-	return path.Join(TokenMountPath, request, TokenFile)
+func TokenPathFor(profile string) string {
+	return path.Join(TokenMountPath, profile, TokenFile)
 }
 
 // TokenProjectionPathFor is the same path relative to the volume, which is what
 // a projected source names.
-func TokenProjectionPathFor(request string) string {
-	return path.Join(request, TokenFile)
+func TokenProjectionPathFor(profile string) string {
+	return path.Join(profile, TokenFile)
 }

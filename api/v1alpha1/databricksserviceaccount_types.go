@@ -325,9 +325,9 @@ func (s *DatabricksServiceAccountStatus) First() (ProjectedIdentity, bool) {
 }
 
 // Identity returns the entry for one profile name, and whether there is one.
-func (s *DatabricksServiceAccountStatus) Identity(request string) (*ProjectedIdentity, bool) {
+func (s *DatabricksServiceAccountStatus) Identity(profile string) (*ProjectedIdentity, bool) {
 	for i := range s.Identities {
-		if s.Identities[i].Profile == request {
+		if s.Identities[i].Profile == profile {
 			return &s.Identities[i], true
 		}
 	}

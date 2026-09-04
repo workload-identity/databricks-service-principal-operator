@@ -337,7 +337,7 @@ func TestEquipmentIsReportedPerNamedIdentity(t *testing.T) {
 		t.Fatal("nothing was projected")
 	}
 	for _, want := range []struct {
-		request string
+		profile string
 		status  metav1.ConditionStatus
 		says    string
 		why     string
@@ -352,18 +352,18 @@ func TestEquipmentIsReportedPerNamedIdentity(t *testing.T) {
 		{writer, metav1.ConditionFalse, "running without this identity's Databricks token",
 			"the pod has no token for this identity, whatever it holds for another"},
 	} {
-		entry, carried := databricksServiceAccount.Status.Identity(want.request)
+		entry, carried := databricksServiceAccount.Status.Identity(want.profile)
 		if !carried {
-			t.Fatalf("no entry for %q", want.request)
+			t.Fatalf("no entry for %q", want.profile)
 		}
 		got := meta.FindStatusCondition(entry.Conditions, conditionEquipped)
 		if got == nil || got.Status != want.status {
-			t.Errorf("Equipped for %q is %v, want %v -- %s", want.request, got, want.status, want.why)
+			t.Errorf("Equipped for %q is %v, want %v -- %s", want.profile, got, want.status, want.why)
 			continue
 		}
 		if !strings.Contains(got.Message, want.says) {
 			t.Errorf("Equipped for %q says %q, want it to say %q -- %s",
-				want.request, got.Message, want.says, want.why)
+				want.profile, got.Message, want.says, want.why)
 		}
 	}
 }

@@ -735,8 +735,8 @@ func serviceAccountOf(pod *corev1.Pod) string {
 // whatever else is right, and it looks equipped from the outside. Two ways in:
 // a pod admitted before this identity had recorded its own audience, and a
 // volume of that name this operator did not write.
-func tokenAudienceOf(pod *corev1.Pod, request string) (audience string, carries bool) {
-	wanted := dbxwebhook.TokenProjectionPathFor(request)
+func tokenAudienceOf(pod *corev1.Pod, profile string) (audience string, carries bool) {
+	wanted := dbxwebhook.TokenProjectionPathFor(profile)
 	for _, volume := range pod.Spec.Volumes {
 		if volume.Name != dbxwebhook.TokenVolume || volume.Projected == nil {
 			continue

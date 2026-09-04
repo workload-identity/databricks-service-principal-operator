@@ -796,7 +796,7 @@ var _ = Describe("What a pod is equipped with", Ordered, func() {
 // entries are keyed by. Each is written as this operator's because an entry has
 // to name one: operator is required in the CRD, so an entry without it is not an
 // entry this can write.
-func equipTeam(team, account string, identities ...string) {
+func equipTeam(team, serviceAccount string, identities ...string) {
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: Namespace
 metadata:
@@ -815,7 +815,7 @@ kind: DatabricksServiceAccount
 metadata:
   name: %s
   namespace: %s
-`, team, account, team, account, team)
+`, team, serviceAccount, team, serviceAccount, team)
 
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
@@ -829,7 +829,7 @@ metadata:
 				`"clientId":"0000000%d-0000-0000-0000-000000000000","audience":"databricks"}`,
 			identity, operatorRef, i+1))
 	}
-	cmd = exec.Command("kubectl", "-n", team, "patch", "databricksserviceaccount", account,
+	cmd = exec.Command("kubectl", "-n", team, "patch", "databricksserviceaccount", serviceAccount,
 		"--subresource", "status", "--type", "merge",
 		"-p", fmt.Sprintf(`{"status":{"identities":[%s]}}`, strings.Join(entries, ",")))
 	_, err = utils.Run(cmd)
@@ -853,7 +853,7 @@ func awaitOperator() {
 
 // runPod creates a pod that stays up long enough to be looked inside, replacing
 // one left by an earlier attempt.
-func runPod(team, name, account string) {
+func runPod(team, name, serviceAccount string) {
 	cmd := exec.Command("kubectl", "delete", "pod", name, "-n", team,
 		"--ignore-not-found", "--force", "--grace-period=0")
 	_, _ = utils.Run(cmd)
@@ -870,7 +870,7 @@ spec:
   - name: app
     image: busybox:1.37
     command: ["sleep", "600"]
-`, name, team, account)
+`, name, team, serviceAccount)
 
 	cmd = exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
@@ -956,7 +956,7 @@ const unnamed = ""
 // applyTeam creates the namespace and a ServiceAccount asking this operator for
 // the identities named, one annotation key each, written as apply so that it
 // says the same thing whether or not anything is there.
-func applyTeam(team, account string, identities ...string) {
+func applyTeam(team, serviceAccount string, identities ...string) {
 	var annotations strings.Builder
 	for _, identity := range identities {
 		fmt.Fprintf(&annotations, "    %q: %q\n",
@@ -974,7 +974,7 @@ metadata:
   name: %s
   namespace: %s
   annotations:
-%s`, team, account, team, annotations.String())
+%s`, team, serviceAccount, team, annotations.String())
 
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
@@ -1009,8 +1009,8 @@ func withdraw(team, account, identity string) {
 
 // requestsOn lists the identities the DatabricksServiceAccount carries, by the
 // profile name each is keyed under.
-func requestsOn(team, account string) []string {
-	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", account, "-n", team,
+func requestsOn(team, serviceAccount string) []string {
+	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", serviceAccount, "-n", team,
 		"-o", "jsonpath={.status.identities[*].request}")
 	out, err := utils.Run(cmd)
 	if err != nil {
@@ -1020,8 +1020,8 @@ func requestsOn(team, account string) []string {
 }
 
 // operatorsOn lists what those entries say about who issued them.
-func operatorsOn(team, account string) []string {
-	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", account, "-n", team,
+func operatorsOn(team, serviceAccount string) []string {
+	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", serviceAccount, "-n", team,
 		"-o", "jsonpath={.status.identities[*].operator}")
 	out, err := utils.Run(cmd)
 	if err != nil {
@@ -1036,21 +1036,21 @@ func operatorsOn(team, account string) []string {
 // jsonpath reads as structure. Asked at all because half of what these specs
 // write is a key the API server may refuse, and a spec about this operator
 // refusing something has to know the cluster took it first.
-func annotationsOn(team, account string) map[string]string {
-	cmd := exec.Command("kubectl", "get", "serviceaccount", account, "-n", team, "-o", "json")
+func annotationsOn(team, serviceAccount string) map[string]string {
+	cmd := exec.Command("kubectl", "get", "serviceaccount", serviceAccount, "-n", team, "-o", "json")
 	out, err := utils.Run(cmd)
 	if err != nil {
 		return nil
 	}
-	var serviceAccount struct {
+	var fetched struct {
 		Metadata struct {
 			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
 	}
-	if err := json.Unmarshal([]byte(out), &serviceAccount); err != nil {
+	if err := json.Unmarshal([]byte(out), &fetched); err != nil {
 		return nil
 	}
-	return serviceAccount.Metadata.Annotations
+	return fetched.Metadata.Annotations
 }
 
 // serveNamespaces is the platform team's half of the answer, on the operator's

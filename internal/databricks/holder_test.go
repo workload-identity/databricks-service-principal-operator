@@ -51,13 +51,13 @@ func (n *namingClients) FindServicePrincipal(_ context.Context, issuing Issuing)
 	return "", "", false, nil
 }
 
-func (n *namingClients) ServicePrincipalExists(_ context.Context, id string) (bool, error) {
-	n.name("ServicePrincipalExists", id)
+func (n *namingClients) ServicePrincipalExists(_ context.Context, servicePrincipalID string) (bool, error) {
+	n.name("ServicePrincipalExists", servicePrincipalID)
 	return false, nil
 }
 
-func (n *namingClients) DeleteServicePrincipal(_ context.Context, id string) error {
-	n.name("DeleteServicePrincipal", id)
+func (n *namingClients) DeleteServicePrincipal(_ context.Context, servicePrincipalID string) error {
+	n.name("DeleteServicePrincipal", servicePrincipalID)
 	return nil
 }
 

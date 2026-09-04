@@ -255,23 +255,23 @@ func (c *clients) FindServicePrincipal(ctx context.Context, issuing Issuing) (
 // being deleted in Databricks, and a recorded id that no longer names anything
 // makes this object a record of something that is not there -- while whatever
 // still reaches it goes on being reported as usable.
-func (c *clients) ServicePrincipalExists(ctx context.Context, id string) (bool, error) {
+func (c *clients) ServicePrincipalExists(ctx context.Context, servicePrincipalID string) (bool, error) {
 	// Refused rather than asked. An empty id makes the URL the collection's own
 	// -- ".../ServicePrincipals/" -- which Databricks answers with 200 and every
 	// service principal in the account, so the call succeeds and this reports
 	// that a service principal naming nothing is there. A recorded identity
 	// always has an id; an empty one is a caller that has not got one yet, and
 	// the answer to "is this there" is not "yes".
-	if id == "" {
+	if servicePrincipalID == "" {
 		return false, fmt.Errorf("no service principal id to look up: an empty one asks Databricks "+
 			"for the whole collection, which answers %s", "200")
 	}
 	if _, err := c.accountClient.ServicePrincipalsV2.Get(ctx,
-		iam.GetAccountServicePrincipalRequest{Id: id}); err != nil {
+		iam.GetAccountServicePrincipalRequest{Id: servicePrincipalID}); err != nil {
 		if KindOf(err) == NotFound {
 			return false, nil
 		}
-		return false, fmt.Errorf("looking up service principal %s: %w", id, err)
+		return false, fmt.Errorf("looking up service principal %s: %w", servicePrincipalID, err)
 	}
 	return true, nil
 }
@@ -283,13 +283,13 @@ func (c *clients) ServicePrincipalExists(ctx context.Context, id string) (bool, 
 // leaves behind is nothing that can be presented -- the federation policies go
 // with it, measured against a live account, so no token can be exchanged for it
 // again.
-func (c *clients) DeleteServicePrincipal(ctx context.Context, id string) error {
+func (c *clients) DeleteServicePrincipal(ctx context.Context, servicePrincipalID string) error {
 	if err := c.accountClient.ServicePrincipalsV2.Delete(ctx,
-		iam.DeleteAccountServicePrincipalRequest{Id: id}); err != nil {
+		iam.DeleteAccountServicePrincipalRequest{Id: servicePrincipalID}); err != nil {
 		if KindOf(err) == NotFound {
 			return nil
 		}
-		return fmt.Errorf("deleting service principal %s: %w", id, err)
+		return fmt.Errorf("deleting service principal %s: %w", servicePrincipalID, err)
 	}
 	return nil
 }

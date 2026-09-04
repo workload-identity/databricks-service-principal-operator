@@ -430,16 +430,16 @@ func stable(t *testing.T, what string, fn func() bool) {
 	}
 }
 
-func policiesOn(t *testing.T, clients Clients, id string) []oauth2.FederationPolicy {
+func policiesOn(t *testing.T, clients Clients, servicePrincipalID string) []oauth2.FederationPolicy {
 	t.Helper()
-	numeric, err := strconv.ParseInt(id, 10, 64)
+	numeric, err := strconv.ParseInt(servicePrincipalID, 10, 64)
 	if err != nil {
-		t.Fatalf("the id Databricks returned is not numeric: %q", id)
+		t.Fatalf("the id Databricks returned is not numeric: %q", servicePrincipalID)
 	}
 	stored, err := clients.AccountClient().ServicePrincipalFederationPolicy.ListByServicePrincipalId(
 		context.Background(), numeric)
 	if err != nil {
-		t.Fatalf("listing the federation policies on service principal %s: %v", id, err)
+		t.Fatalf("listing the federation policies on service principal %s: %v", servicePrincipalID, err)
 	}
 	return stored.Policies
 }

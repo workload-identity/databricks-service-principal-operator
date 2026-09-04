@@ -239,15 +239,15 @@ func databricksHost() string      { return host }
 func databricksAccountID() string { return accountID }
 
 // exists asks Databricks whether a service principal is there.
-func exists(id string) bool {
+func exists(servicePrincipalID string) bool {
 	// Named rather than assumed. Every caller here got this id from a
 	// DatabricksServiceAccount that may not carry one yet, and "is it there" asked
 	// of nothing is a question with no true answer -- so a spec that asked it
 	// would pass or fail on something it never checked.
-	ExpectWithOffset(1, id).NotTo(BeEmpty(),
+	ExpectWithOffset(1, servicePrincipalID).NotTo(BeEmpty(),
 		"asked whether a service principal is in Databricks without having one to ask about")
-	there, err := clients.ServicePrincipalExists(context.Background(), id)
-	Expect(err).NotTo(HaveOccurred(), "asking Databricks about service principal %s", id)
+	there, err := clients.ServicePrincipalExists(context.Background(), servicePrincipalID)
+	Expect(err).NotTo(HaveOccurred(), "asking Databricks about service principal %s", servicePrincipalID)
 	return there
 }
 
@@ -336,12 +336,12 @@ func serve(name string) {
 // applyTeam creates the tenant's half: a namespace enabled for both minting and
 // injection, and a ServiceAccount asking this operator for the named identities,
 // one annotation key each.
-func applyTeam(team, account string, identities ...string) {
+func applyTeam(team, serviceAccount string, identities ...string) {
 	asks := make(map[string]string, len(identities))
 	for _, identity := range identities {
 		asks[identity] = operatorRef()
 	}
-	applyAsking(team, account, asks)
+	applyAsking(team, serviceAccount, asks)
 }
 
 // applyAsking is applyTeam for a ServiceAccount whose identities do not all ask
@@ -351,7 +351,7 @@ func applyTeam(team, account string, identities ...string) {
 // Written in sorted order because a map has none. A helper that produced a
 // different manifest on each call would leave what a spec applied depending on a
 // map iteration.
-func applyAsking(team, account string, asks map[string]string) {
+func applyAsking(team, serviceAccount string, asks map[string]string) {
 	var annotations strings.Builder
 	for _, identity := range slices.Sorted(maps.Keys(asks)) {
 		fmt.Fprintf(&annotations, "    %q: %q\n",
@@ -372,7 +372,7 @@ metadata:
   name: %s
   namespace: %s
   annotations:
-%s`, team, account, team, annotations.String()))
+%s`, team, serviceAccount, team, annotations.String()))
 }
 
 // ask writes one identity's key on a ServiceAccount that is already there.
@@ -401,7 +401,7 @@ func withdraw(team, account, identity string) {
 
 // runPod creates a pod that stays up long enough to be looked inside, and that
 // carries a shell and curl so the exchange can be made from where the token is.
-func runPod(team, name, account string) {
+func runPod(team, name, serviceAccount string) {
 	_, _ = kubectl("delete", "pod", name, "-n", team, "--ignore-not-found",
 		"--force", "--grace-period=0")
 	apply(fmt.Sprintf(`apiVersion: v1
@@ -416,7 +416,7 @@ spec:
   - name: app
     image: curlimages/curl:latest
     command: ["sleep", "900"]
-`, name, team, account))
+`, name, team, serviceAccount))
 }
 
 // Enough of the object to answer what the operator says it issued. The suite
@@ -433,8 +433,8 @@ type databricksServiceAccount struct {
 	} `json:"status"`
 }
 
-func read(team, account string) databricksServiceAccount {
-	out := kubectlOut("-n", team, "get", "databricksserviceaccount", account, "-o", "json")
+func read(team, serviceAccount string) databricksServiceAccount {
+	out := kubectlOut("-n", team, "get", "databricksserviceaccount", serviceAccount, "-o", "json")
 	var p databricksServiceAccount
 	if out == "" || json.Unmarshal([]byte(out), &p) != nil {
 		return databricksServiceAccount{}
@@ -448,9 +448,9 @@ func read(team, account string) databricksServiceAccount {
 // Not "as the asker wrote them": a named identity is keyed by the name in its
 // key, but the unnamed one is keyed by the operator's reference, which nobody
 // wrote anywhere.
-func requestsOn(team, account string) []string {
+func requestsOn(team, serviceAccount string) []string {
 	var requests []string
-	for _, identity := range read(team, account).Status.Identities {
+	for _, identity := range read(team, serviceAccount).Status.Identities {
 		requests = append(requests, identity.Profile)
 	}
 	return requests
@@ -460,9 +460,9 @@ func requestsOn(team, account string) []string {
 // no longer in Databricks. It is kept rather than a flag because it is what an
 // audit log is searched with: a flag says something is wrong, an id says whom to
 // ask.
-func removedIDOf(team, account, request string) string {
+func removedIDOf(team, account, profile string) string {
 	for _, identity := range read(team, account).Status.Identities {
-		if identity.Profile == request {
+		if identity.Profile == profile {
 			return identity.RemovedServicePrincipalID
 		}
 	}
@@ -474,9 +474,9 @@ func removedIDOf(team, account, request string) string {
 // Worth asking now that a named identity's key is its name alone: the entry for
 // "reader" carries no operator anywhere in its key, so this field is the only
 // thing on the object that says whose the entry is.
-func operatorOf(team, account, request string) string {
+func operatorOf(team, account, profile string) string {
 	for _, identity := range read(team, account).Status.Identities {
-		if identity.Profile == request {
+		if identity.Profile == profile {
 			return identity.Operator
 		}
 	}
@@ -492,9 +492,9 @@ func conditionOn(team, account, request, condition string) string {
 
 // clientIDOf is what the workload presents, and what a grant to this identity
 // records.
-func clientIDOf(team, account, request string) string {
+func clientIDOf(team, account, profile string) string {
 	for _, identity := range read(team, account).Status.Identities {
-		if identity.Profile == request {
+		if identity.Profile == profile {
 			return identity.ClientID
 		}
 	}
@@ -503,9 +503,9 @@ func clientIDOf(team, account, request string) string {
 
 // servicePrincipalIDOf is what federation policies hang off, and what the
 // account is asked about.
-func servicePrincipalIDOf(team, account, request string) string {
+func servicePrincipalIDOf(team, account, profile string) string {
 	for _, identity := range read(team, account).Status.Identities {
-		if identity.Profile == request {
+		if identity.Profile == profile {
 			return identity.ServicePrincipalID
 		}
 	}
@@ -515,25 +515,25 @@ func servicePrincipalIDOf(team, account, request string) string {
 // destroyIfLeft removes a service principal the suite made and the operator did
 // not, which is what a failed run leaves behind: one in a real account that
 // nothing in the cluster names.
-func destroyIfLeft(id string) {
-	if id == "" {
+func destroyIfLeft(servicePrincipalID string) {
+	if servicePrincipalID == "" {
 		return
 	}
 	// Both errors are reported rather than swallowed. This ran once with an
 	// expired token, read the error as "nothing to clean up", and left a real
 	// identity in a real account with nothing anywhere naming it -- the outcome
 	// this exists to prevent, arrived at by this.
-	there, err := clients.ServicePrincipalExists(context.Background(), id)
+	there, err := clients.ServicePrincipalExists(context.Background(), servicePrincipalID)
 	Expect(err).NotTo(HaveOccurred(),
 		"could not find out whether service principal %s is still there, so it may be left behind",
-		id)
+		servicePrincipalID)
 	if !there {
 		return
 	}
 	_, _ = fmt.Fprintf(GinkgoWriter,
-		"removing service principal %s, which this run made and left behind\n", id)
-	Expect(clients.DeleteServicePrincipal(context.Background(), id)).To(Succeed(),
-		"service principal %s was made by this run and is still in the account", id)
+		"removing service principal %s, which this run made and left behind\n", servicePrincipalID)
+	Expect(clients.DeleteServicePrincipal(context.Background(), servicePrincipalID)).To(Succeed(),
+		"service principal %s was made by this run and is still in the account", servicePrincipalID)
 }
 
 // makeOrphan puts an identity in the account that trusts this namespace and name
@@ -543,11 +543,11 @@ func destroyIfLeft(id string) {
 // and the subject are the ones the operator writes. The uid is invented: it is
 // what makes this an identity issued to a ServiceAccount that no longer exists,
 // which is the whole of what an orphan is.
-func makeOrphan(team, account string) (id, clientID string) {
+func makeOrphan(team, serviceAccount string) (id, clientID string) {
 	issuing := databricks.Issuing{
 		Issuer:            clusterIssuer(),
 		Namespace:         team,
-		Name:              account,
+		Name:              serviceAccount,
 		ServiceAccountUID: string(uuid.NewUUID()),
 		Operator:          operatorRef(),
 	}
@@ -555,10 +555,10 @@ func makeOrphan(team, account string) (id, clientID string) {
 	id, clientID, err := clients.CreateServicePrincipal(context.Background(), issuing)
 	Expect(err).NotTo(HaveOccurred(), "creating the orphan")
 	Expect(clients.EnsureFederationPolicy(context.Background(), id,
-		issuing.Issuer, databricks.SubjectFor(team, account), orphanAudience)).To(Succeed(),
+		issuing.Issuer, databricks.SubjectFor(team, serviceAccount), orphanAudience)).To(Succeed(),
 		"the orphan has no federation policy, so it trusts nothing and is not the hazard")
 	_, _ = fmt.Fprintf(GinkgoWriter,
-		"orphan %s (%s) now trusts %s\n", id, clientID, databricks.SubjectFor(team, account))
+		"orphan %s (%s) now trusts %s\n", id, clientID, databricks.SubjectFor(team, serviceAccount))
 	return id, clientID
 }
 

@@ -52,12 +52,12 @@ type Clients interface {
 	// still there. Nothing in Kubernetes hears about one being deleted in
 	// Databricks, so a recorded id that no longer names anything would go on
 	// being reported as usable.
-	ServicePrincipalExists(ctx context.Context, id string) (bool, error)
+	ServicePrincipalExists(ctx context.Context, servicePrincipalID string) (bool, error)
 
 	// DeleteServicePrincipal removes one, and with it everything Databricks
 	// recorded against it -- Databricks doing the removing, with no list read
 	// and nothing belonging to anybody else written.
-	DeleteServicePrincipal(ctx context.Context, id string) error
+	DeleteServicePrincipal(ctx context.Context, servicePrincipalID string) error
 
 	// EnsureFederationPolicy makes a subject's token exchangeable for that
 	// service principal's, adding nothing if it already is.

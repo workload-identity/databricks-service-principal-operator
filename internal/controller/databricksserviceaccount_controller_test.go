@@ -596,18 +596,18 @@ func cached(pod *corev1.Pod) *corev1.Pod {
 	return trimmed.(*corev1.Pod)
 }
 
-func rawPodRunningAs(account string, volumes ...corev1.Volume) *corev1.Pod {
+func rawPodRunningAs(serviceAccount string, volumes ...corev1.Volume) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "runner-" + account, Namespace: testNamespace,
+			Name: "runner-" + serviceAccount, Namespace: testNamespace,
 		},
-		Spec:   corev1.PodSpec{ServiceAccountName: account, Volumes: volumes},
+		Spec:   corev1.PodSpec{ServiceAccountName: serviceAccount, Volumes: volumes},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 }
 
-func podRunningAs(account string, volumes ...corev1.Volume) *corev1.Pod {
-	return cached(rawPodRunningAs(account, volumes...))
+func podRunningAs(serviceAccount string, volumes ...corev1.Volume) *corev1.Pod {
+	return cached(rawPodRunningAs(serviceAccount, volumes...))
 }
 
 // tokenVolume is what the webhook injects for this operator's identity, as the
@@ -640,13 +640,13 @@ func tokenVolumeFor(audience string) corev1.Volume {
 // being equipped means -- the pod says about this identity what the identity
 // says now. A fixture with the string typed in would drift from the renderer
 // instead of from the identity, and would then be testing itself.
-func equippedPod(account string, identities ...dbxv1alpha1.ProjectedIdentity) *corev1.Pod {
+func equippedPod(serviceAccount string, identities ...dbxv1alpha1.ProjectedIdentity) *corev1.Pod {
 	if len(identities) == 0 {
 		identities = []dbxv1alpha1.ProjectedIdentity{{
 			Profile: testOperator.String(), ClientID: "app-uuid", Audience: testAudience,
 		}}
 	}
-	pod := rawPodRunningAs(account, tokenVolume())
+	pod := rawPodRunningAs(serviceAccount, tokenVolume())
 	pod.Annotations = map[string]string{
 		dbxwebhook.ConfigAnnotation: dbxwebhook.Configuration(identities),
 	}
