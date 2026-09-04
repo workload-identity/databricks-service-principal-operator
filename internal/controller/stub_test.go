@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"testing"
 
@@ -51,6 +52,15 @@ type stubClients struct {
 	// policyErr fails only EnsureFederationPolicy, so a test can arrange the one
 	// order that matters: a service principal made, and something after it not.
 	policyErr error
+
+	// removeErr fails only RemoveFederationPolicies, so a test can see what a
+	// withdrawal that did not land says about itself, and that it does not say
+	// it is finished.
+	removeErr error
+
+	// withdrawn is every service principal this operator asked to have the trust
+	// taken off, in the order it asked.
+	withdrawn []string
 
 	// policyPanics stands in for the process dying inside that call. Nothing
 	// after it runs -- which is the only way "written down before the next call"
@@ -161,6 +171,25 @@ func (s *stubClients) EnsureFederationPolicy(_ context.Context, servicePrincipal
 	if !slices.Contains(s.policies, policy) {
 		s.policies = append(s.policies, policy)
 	}
+	return nil
+}
+
+// RemoveFederationPolicies drops what EnsureFederationPolicy recorded, matched
+// the way the real one matches: on the service principal, the issuer and the
+// subject, and not on the audience -- a policy naming an audience this operator
+// no longer hands out is still one a token minted for it satisfies.
+func (s *stubClients) RemoveFederationPolicies(_ context.Context, servicePrincipalID, issuer, subject string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.removeErr != nil {
+		return s.removeErr
+	}
+	s.withdrawn = append(s.withdrawn, servicePrincipalID)
+	prefix := servicePrincipalID + " " + issuer + " " + subject + " "
+	s.policies = slices.DeleteFunc(s.policies, func(policy string) bool {
+		return strings.HasPrefix(policy, prefix)
+	})
 	return nil
 }
 

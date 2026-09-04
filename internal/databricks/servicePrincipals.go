@@ -331,6 +331,63 @@ func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID
 	return nil
 }
 
+// RemoveFederationPolicies takes back the one thing a cluster can take back.
+//
+// A running pod holds a token that was already minted, and Databricks alone
+// decides whether to accept it, so nothing here reaches the workload. What goes
+// is the account-side statement that a token from this issuer, for this subject,
+// may be exchanged at all -- and with it, the exchange. The service principal
+// stays, and so does everything granted to it.
+//
+// Matched on issuer and subject, where the create beside it also compares the
+// audience. A policy naming an audience this operator no longer hands out is
+// still one that a token minted for that audience satisfies, so matching the
+// current audience would leave the exchange open under an older name.
+//
+// Every page is read, where EnsureFederationPolicy takes the first one.
+// Returning nil here claims that nothing of this cluster's is left on that
+// service principal, and a policy past a page boundary would make the claim
+// false while the call reported success. Ensure's worst case at the same
+// boundary is a second policy saying what the first says, which this removes.
+//
+// A policy already gone is not a failure. A withdrawal that lost its namespace
+// partway through and is retried finds some of its policies already deleted, and
+// that is the answer it wanted, not an error to report over work that is done.
+func (c *clients) RemoveFederationPolicies(ctx context.Context, servicePrincipalID, issuer, subject string) error {
+	numeric, err := strconv.ParseInt(servicePrincipalID, 10, 64)
+	if err != nil {
+		return &ErrMalformedCoordinate{Field: "servicePrincipalId", Value: servicePrincipalID, Cause: err}
+	}
+
+	existing, err := c.account.ServicePrincipalFederationPolicy.ListAll(ctx,
+		oauth2.ListServicePrincipalFederationPoliciesRequest{ServicePrincipalId: numeric})
+	if err != nil {
+		return fmt.Errorf("listing the federation policies on service principal %s: %w",
+			servicePrincipalID, err)
+	}
+
+	for _, policy := range existing {
+		if policy.OidcPolicy == nil ||
+			policy.OidcPolicy.Issuer != issuer || policy.OidcPolicy.Subject != subject {
+			continue
+		}
+		err := c.account.ServicePrincipalFederationPolicy.Delete(ctx,
+			oauth2.DeleteServicePrincipalFederationPolicyRequest{
+				ServicePrincipalId: numeric,
+				PolicyId:           policy.PolicyId,
+			})
+		if err != nil && KindOf(err) != NotFound {
+			// Stopped at the first one that did not go, rather than carried on
+			// and summarised. The caller reports this as trust still in place,
+			// which is true of the one that failed and of everything after it,
+			// and the next pass starts again from what is actually there.
+			return fmt.Errorf("removing the trust in %s on service principal %s: %w",
+				subject, servicePrincipalID, err)
+		}
+	}
+	return nil
+}
+
 func matches(policy *oauth2.OidcFederationPolicy, issuer, subject, audience string) bool {
 	if policy == nil {
 		return false

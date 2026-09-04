@@ -64,6 +64,12 @@ type Clients interface {
 	// service principal's, adding nothing if it already is.
 	EnsureFederationPolicy(ctx context.Context, servicePrincipalID, issuer, subject, audience string) error
 
+	// RemoveFederationPolicies makes it unexchangeable again, and is the only
+	// thing this operator can withdraw without destroying anything: the service
+	// principal and every grant on it stay, and a token already in a pod is
+	// unaffected, because Databricks alone decides what it accepts.
+	RemoveFederationPolicies(ctx context.Context, servicePrincipalID, issuer, subject string) error
+
 	// Snapshot is one view of these clients, which does not change under the
 	// caller.
 	//

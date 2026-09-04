@@ -64,6 +64,12 @@ func (n *namingClients) EnsureFederationPolicy(
 	return nil
 }
 
+func (n *namingClients) RemoveFederationPolicies(
+	_ context.Context, servicePrincipalID, issuer, subject string) error {
+	n.name("RemoveFederationPolicies", servicePrincipalID, issuer, subject)
+	return nil
+}
+
 var _ Clients = (*namingClients)(nil)
 
 // testIssuing is one issuing, for calls whose arguments are not what is being
@@ -127,6 +133,12 @@ func delegates(t *testing.T) map[string]delegate {
 				return c.EnsureFederationPolicy(ctx, "7788", testIssuer, testSubject, testAudience)
 			},
 			given: []any{"7788", testIssuer, testSubject, testAudience},
+		},
+		"RemoveFederationPolicies": {
+			invoke: func(c Clients) error {
+				return c.RemoveFederationPolicies(ctx, "7788", testIssuer, testSubject)
+			},
+			given: []any{"7788", testIssuer, testSubject},
 		},
 	}
 

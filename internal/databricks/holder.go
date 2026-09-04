@@ -190,6 +190,10 @@ func (h *Holder) EnsureFederationPolicy(ctx context.Context, servicePrincipalID,
 	return h.Snapshot().EnsureFederationPolicy(ctx, servicePrincipalID, issuer, subject, audience)
 }
 
+func (h *Holder) RemoveFederationPolicies(ctx context.Context, servicePrincipalID, issuer, subject string) error {
+	return h.Snapshot().RemoveFederationPolicies(ctx, servicePrincipalID, issuer, subject)
+}
+
 // unconfigured is what a Snapshot holds when nothing has been installed.
 //
 // Every call reports which DatabricksAccount the operator is looking for, so a
@@ -227,5 +231,9 @@ func (u unconfigured) ServicePrincipalExists(context.Context, string) (bool, err
 func (u unconfigured) DeleteServicePrincipal(context.Context, string) error { return u.err() }
 
 func (u unconfigured) EnsureFederationPolicy(context.Context, string, string, string, string) error {
+	return u.err()
+}
+
+func (u unconfigured) RemoveFederationPolicies(context.Context, string, string, string) error {
 	return u.err()
 }

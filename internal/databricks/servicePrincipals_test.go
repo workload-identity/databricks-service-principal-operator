@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -258,6 +259,91 @@ func TestAPolicyThatIsNotThisOneIsNotAMatch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestWithdrawingTakesEveryPolicyThisClusterWroteAndLeavesTheRest covers what a
+// withdrawal is allowed to reach.
+//
+// Matched on issuer and subject and not on the audience, which is the one way
+// this differs from the create beside it: a policy naming an audience this
+// operator no longer hands out is still one a token minted for that audience
+// satisfies, so leaving it would leave the exchange open under an older name.
+// Another cluster's issuer and another workload's subject are not this
+// withdrawal's to touch -- somebody put them there deliberately, and the service
+// principal is still theirs to reach.
+func TestWithdrawingTakesEveryPolicyThisClusterWroteAndLeavesTheRest(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, answer: map[string]string{
+		"GET " + federationPoliciesAPI("7788"): `{"policies":[
+			{"policy_id":"current","oidc_policy":{"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}},
+			{"policy_id":"older-audience","oidc_policy":{"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["was-the-audience"]}},
+			{"policy_id":"another-cluster","oidc_policy":{"issuer":"https://oidc.example/other","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}},
+			{"policy_id":"another-workload","oidc_policy":{"issuer":"` + testIssuer + `","subject":"system:serviceaccount:team-b:loader","audiences":["` + testAudience + `"]}}
+		]}`,
+	}}
+	c := server.clients()
+
+	if err := c.RemoveFederationPolicies(context.Background(), "7788", testIssuer, testSubject); err != nil {
+		t.Fatal(err)
+	}
+
+	var deleted []string
+	for _, made := range server.calls {
+		if made.method == "DELETE" {
+			deleted = append(deleted, strings.TrimPrefix(made.path, federationPoliciesAPI("7788")+"/"))
+		}
+	}
+	slices.Sort(deleted)
+	want := []string{"current", "older-audience"}
+	if !slices.Equal(deleted, want) {
+		t.Errorf("deleted %v, want %v -- anything missing is trust this cluster still has, and "+
+			"anything extra is trust somebody else put there", deleted, want)
+	}
+}
+
+// TestAPolicyThatIsAlreadyGoneIsWithdrawn covers the answer a retried withdrawal
+// is asked for.
+//
+// A removal that failed partway, or one made twice because the namespace changed
+// hands, finds policies it already deleted. If that were a failure the record
+// would report the withdrawal as unfinished for ever, and the account it left
+// would never say it had let go.
+func TestAPolicyThatIsAlreadyGoneIsWithdrawn(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{
+		t: t,
+		answer: map[string]string{
+			"GET " + federationPoliciesAPI("7788"): `{"policies":[{"policy_id":"p1","oidc_policy":{
+				"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}}]}`,
+		},
+		status: map[string]int{
+			"DELETE " + federationPoliciesAPI("7788") + "/p1": 404,
+		},
+	}
+	c := server.clients()
+
+	if err := c.RemoveFederationPolicies(context.Background(), "7788", testIssuer, testSubject); err != nil {
+		t.Errorf("error is %v; the trust is gone, which is what was asked for", err)
+	}
+}
+
+// TestWithdrawingRefusesAnIdThatIsNotANumber covers the same coordinate the
+// create refuses, on the call that would otherwise report a withdrawal it never
+// attempted.
+func TestWithdrawingRefusesAnIdThatIsNotANumber(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t}
+	c := server.clients()
+
+	var malformed *ErrMalformedCoordinate
+	err := c.RemoveFederationPolicies(context.Background(), "not-a-number", testIssuer, testSubject)
+	if !errors.As(err, &malformed) {
+		t.Errorf("error is %v, want a malformed coordinate; nil would be this reporting a "+
+			"withdrawal it never made", err)
+	}
+	if len(server.calls) != 0 {
+		t.Errorf("made %+v for an id that could not be read", server.calls)
 	}
 }
 
