@@ -31,9 +31,10 @@ import (
 // this operator builds an apply configuration rather than filling in a struct.
 //
 // Under server-side apply an operator owns everything it sends. Sending a value
-// nobody set is not a cosmetic waste: it is this operator claiming "host is the
-// empty string" where the truth is that it has no opinion, and the next operator
-// to set host is refused with a conflict over a claim nobody meant to make.
+// nobody set is not a cosmetic waste: it is this operator claiming "clientId is
+// the empty string" where the truth is that it has no opinion, and the next
+// operator to set clientId is refused with a conflict over a claim nobody meant
+// to make.
 //
 // The loop is over the type's own fields rather than a written-out list, so a
 // field added to ProjectedIdentity is covered the day it is added. It fails two

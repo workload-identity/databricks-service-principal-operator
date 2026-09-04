@@ -87,11 +87,11 @@ still working — until the key is either fixed or deleted. That is why a mistyp
 value costs you the edit rather than a service principal.
 
 It reads as an obvious property and it was not available before. A single
-comma-separated value made "this identity was withdrawn" and "this identity was
-misspelled" the same input — an entry that is no longer in the string — so the
-operator had to guess, and guessing withdrawal deletes a service principal and
-every grant made on it. As map entries, the two are a key that is gone and a key
-that is there.
+comma-separated value made "this identity is no longer asked for" and "this
+identity was misspelled" the same input — an entry that is no longer in the
+string — so the operator had to guess, and guessing that nobody is asking for it
+deletes a service principal and every grant made on it. As map entries, the two
+are a key that is gone and a key that is there.
 
 ## The name is what your code looks things up by
 

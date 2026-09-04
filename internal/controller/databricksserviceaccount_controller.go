@@ -330,9 +330,9 @@ func (r *DatabricksServiceAccountReconciler) apply(ctx context.Context,
 // An apply configuration exists for one reason and it is this: under
 // server-side apply an operator owns everything it sends, and a Go struct has no
 // way to send nothing. A string with no value marshals as "", so sending the
-// struct says "host is empty" where the truth is "this operator has no opinion
-// about host" -- and the next operator to set it is refused with a conflict over
-// a value nobody meant to claim.
+// struct says "clientId is empty" where the truth is "this operator has no
+// opinion about clientId" -- and the next operator to set it is refused with a
+// conflict over a value nobody meant to claim.
 //
 // So each field is set only when it has one, and nothing else is sent. That
 // rule is what TestTheDatabricksServiceAccountSendsOnlyWhatIsSet holds: it also
@@ -620,9 +620,10 @@ func (r *DatabricksServiceAccountReconciler) equipment(ctx context.Context,
 			wrongAudience = append(wrongAudience, pod.Name)
 		case !describes(pod, entry):
 			// The pod carries this identity's token and a configuration written
-			// before the identity said something the workload needs -- a host it
-			// has since named, or a client id it did not have then. The pod is
-			// not wrong about anything it holds; it is holding an older answer.
+			// before the identity said something the workload needs -- a client
+			// id Databricks had not assigned when the pod was admitted. The pod
+			// is not wrong about anything it holds; it is holding an older
+			// answer.
 			stale = append(stale, pod.Name)
 		}
 	}
@@ -709,8 +710,8 @@ func (r *DatabricksServiceAccountReconciler) equipment(ctx context.Context,
 //
 // Compared rather than inspected key by key: what the webhook writes for one
 // identity is one block, so the whole block either appears in the pod or does
-// not, and every way it can be out of date -- a host named since, a client id
-// assigned since -- is the same answer without a check for each.
+// not, and every way it can be out of date -- a client id assigned since it was
+// written -- is the same answer without a check for each.
 //
 // A pod whose configuration was written by hand is left alone by the webhook and
 // will not match. That is the right report: this operator did not equip it, and

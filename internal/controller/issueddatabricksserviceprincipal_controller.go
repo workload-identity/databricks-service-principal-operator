@@ -772,11 +772,11 @@ const issuedByServiceAccount = "spec.serviceAccount.uid"
 
 // SetupWithManager sets up the controller with the Manager.
 //
-// ServiceAccounts are watched because they are what the question is about, and
-// the record's name is derived from the ServiceAccount's uid alone, so an event
-// names the record without anything having to be read to find out which one.
-// The watch is the fast path; correctness rests on the periodic pass, which asks
-// the same question whether or not any event was seen.
+// ServiceAccounts are watched because they are what the question is about. An
+// event on one names none of its records: there is a record per identity and
+// the name carries a hash of the identity, so the map function below lists
+// them. The watch is the fast path; correctness rests on the periodic pass,
+// which asks the same question whether or not any event was seen.
 func (r *IssuedDatabricksServicePrincipalReconciler) SetupWithManager(mgr ctrl.Manager, namespace string) error {
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(),
 		&dbxv1alpha1.IssuedDatabricksServicePrincipal{}, issuedByServiceAccount,

@@ -53,8 +53,11 @@ webhooks:
   # is missing a volume anybody can see is missing. Trading a legible failure
   # for cluster-wide unschedulability is the wrong way round.
   failurePolicy: Ignore
-  # Only namespaces that were allowed to ask. The same label gates minting, so
-  # a namespace nobody enabled is one this webhook is never consulted for --
+  # Only namespaces enabled for injection. The label is inject and not mint:
+  # mint is whether new identities may be made in a namespace, and the two end
+  # at different times -- taking mint off leaves the identities already minted
+  # working, and the pods that come after it still have to be equipped. A
+  # namespace nobody enabled is one this webhook is never consulted for --
   # which is also what keeps the blast radius of the line above small.
   namespaceSelector:
     matchLabels:
