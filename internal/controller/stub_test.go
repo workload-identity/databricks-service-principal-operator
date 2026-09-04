@@ -273,7 +273,7 @@ func serviceAccountNamed(namespace, name string) *corev1.ServiceAccount {
 
 // testOperatorRef names the operator these tests are, the way a ServiceAccount
 // names one: by the DatabricksAccount it acts on.
-var testOperatorRef = types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
+var testOperatorRef = types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName}
 
 // asking is a ServiceAccount whose bare key names this operator, which is the
 // request for its unnamed identity.
@@ -313,15 +313,15 @@ type controllers struct {
 	Stub                      *stubClients
 }
 
-// accountServing is this operator's DatabricksAccount, declaring which
+// databricksAccountServing is this operator's DatabricksAccount, declaring which
 // namespaces it will act in.
 //
 // Supplied by a test that is about the reach itself. Every other test gets the
 // one newControllers seeds, which serves testNamespace: an operator that serves
 // nothing does nothing, so without a default every test in this package would be
 // asserting about a closed door.
-func accountServing(namespaces ...string) *dbxv1alpha1.DatabricksAccount {
-	served := databricksAccountNamed(accountObject)
+func databricksAccountServing(namespaces ...string) *dbxv1alpha1.DatabricksAccount {
+	served := databricksAccountNamed(databricksAccountName)
 	served.Spec.Namespaces = namespaces
 	return served
 }
@@ -339,7 +339,7 @@ func newControllersWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs
 		_, is := object.(*dbxv1alpha1.DatabricksAccount)
 		return is
 	}) {
-		objects = append(objects, accountServing(testNamespace))
+		objects = append(objects, databricksAccountServing(testNamespace))
 	}
 	c, scheme := newFakeClientWith(t, funcs, objects...)
 	// A real file, because the reconciler holds the path and reads it. Holding

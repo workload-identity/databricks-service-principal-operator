@@ -104,7 +104,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	By("starting from a served-namespace list that is empty and exists")
 	// Exists, because what each container adds to it is a JSON patch append,
 	// and an append has nowhere to go when the field is absent.
-	_, err := kubectl("-n", operatorNamespace, "patch", "databricksaccount", accountName,
+	_, err := kubectl("-n", operatorNamespace, "patch", "databricksaccount", databricksAccountName,
 		"--type", "merge", "-p", `{"spec":{"namespaces":[]}}`)
 	Expect(err).NotTo(HaveOccurred(), "clearing what the operator serves")
 	return nil
@@ -143,7 +143,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	// would otherwise have this as its first candidate cause, and it is one
 	// question with one answer.
 	Eventually(func() string {
-		return kubectlOut("-n", operatorNamespace, "get", "databricksaccount", accountName,
+		return kubectlOut("-n", operatorNamespace, "get", "databricksaccount", databricksAccountName,
 			"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
 	}, 2*time.Minute, 5*time.Second).Should(Equal("True"),
 		"the DatabricksAccount in %s is not Ready, so nothing here can be issued. This suite "+
@@ -152,7 +152,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 
 // Left as it was found, once, after every process has finished with it.
 var _ = SynchronizedAfterSuite(func() {}, func() {
-	_, _ = kubectl("-n", operatorNamespace, "patch", "databricksaccount", accountName,
+	_, _ = kubectl("-n", operatorNamespace, "patch", "databricksaccount", databricksAccountName,
 		"--type", "merge", "-p", `{"spec":{"namespaces":[]}}`)
 })
 
@@ -175,15 +175,15 @@ func readInputs() {
 	}
 }
 
-// accountName is what the operator's DatabricksAccount is called. It is half of
-// how a ServiceAccount names an operator, so the suite writes it the same way a
-// tenant does rather than assembling the reference differently.
-const accountName = "databricks-account"
+// databricksAccountName is what the operator's DatabricksAccount is called. It
+// is half of how a ServiceAccount names an operator, so the suite writes it the
+// same way a tenant does rather than assembling the reference differently.
+const databricksAccountName = "databricks-account"
 
 // operatorRef is how a ServiceAccount names this operator: the value every
 // service-principal annotation key here carries, and the profile name of the
 // identity asked for by the bare key.
-func operatorRef() string { return operatorNamespace + "/" + accountName }
+func operatorRef() string { return operatorNamespace + "/" + databricksAccountName }
 
 // unnamed is what a ServiceAccount asks for by writing the bare key: this
 // operator's only identity, which is what nearly every ServiceAccount wants.
@@ -327,7 +327,7 @@ func removeTeam(team string) {
 // deleted its namespace, and serving a namespace that is not there costs the
 // operator nothing. The list is emptied once, after every process is done.
 func serve(name string) {
-	_, err := kubectl("-n", operatorNamespace, "patch", "databricksaccount", accountName,
+	_, err := kubectl("-n", operatorNamespace, "patch", "databricksaccount", databricksAccountName,
 		"--type", "json", "-p",
 		fmt.Sprintf(`[{"op":"add","path":"/spec/namespaces/-","value":%q}]`, name))
 	Expect(err).NotTo(HaveOccurred(), "declaring that this operator serves %s", name)
@@ -579,7 +579,7 @@ const orphanAudience = "databricks"
 // cannot work without it, so a copy given to this suite could only ever be a
 // second place for it to be wrong.
 func operatorClientID() string {
-	id := kubectlOut("-n", operatorNamespace, "get", "databricksaccount", accountName,
+	id := kubectlOut("-n", operatorNamespace, "get", "databricksaccount", databricksAccountName,
 		"-o", "jsonpath={.spec.clientId}")
 	Expect(id).NotTo(BeEmpty(),
 		"the DatabricksAccount in %s names no clientId, so there is no identity for this suite "+

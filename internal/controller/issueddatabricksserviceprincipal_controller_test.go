@@ -353,12 +353,12 @@ func deleteEverythingIn(t *testing.T, c client.Client, namespace string) {
 	t.Helper()
 	ctx := context.Background()
 
-	var accounts corev1.ServiceAccountList
-	if err := c.List(ctx, &accounts, client.InNamespace(namespace)); err != nil {
+	var serviceAccounts corev1.ServiceAccountList
+	if err := c.List(ctx, &serviceAccounts, client.InNamespace(namespace)); err != nil {
 		t.Fatal(err)
 	}
-	for i := range accounts.Items {
-		if err := client.IgnoreNotFound(c.Delete(ctx, &accounts.Items[i])); err != nil {
+	for i := range serviceAccounts.Items {
+		if err := client.IgnoreNotFound(c.Delete(ctx, &serviceAccounts.Items[i])); err != nil {
 			t.Fatal(err)
 		}
 	}

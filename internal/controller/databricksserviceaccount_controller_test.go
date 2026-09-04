@@ -882,7 +882,7 @@ func TestWithNoDatabricksAccountNothingBreaksAndEverythingSaysWhy(t *testing.T) 
 	// The real AccountInUse rather than the stub: with no DatabricksAccount it
 	// has no clients, and answering NotConfigured is the whole of what is being
 	// tested.
-	c.Issued.Databricks = dbx.NewAccountInUse(operatorNamespace, accountObject)
+	c.Issued.Databricks = dbx.NewAccountInUse(operatorNamespace, databricksAccountName)
 
 	c.settle(t)
 
@@ -907,7 +907,7 @@ func TestWithNoDatabricksAccountNothingBreaksAndEverythingSaysWhy(t *testing.T) 
 	if ready.Status != metav1.ConditionUnknown || ready.Reason != reasonNotConfigured {
 		t.Errorf("Ready is %v, want Unknown/NotConfigured", ready)
 	}
-	if !strings.Contains(ready.Message, accountObject) ||
+	if !strings.Contains(ready.Message, databricksAccountName) ||
 		!strings.Contains(ready.Message, operatorNamespace) {
 		t.Errorf("message is %q; it has to name the DatabricksAccount to create, or it tells "+
 			"somebody they are stuck without telling them what unsticks them", ready.Message)
@@ -1081,7 +1081,7 @@ func TestANamespaceThisOperatorDoesNotServeIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	c := newControllers(t, stub,
-		accountServing("somebody-elses-namespace"),
+		databricksAccountServing("somebody-elses-namespace"),
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 
 	c.settle(t)
@@ -1098,7 +1098,7 @@ func TestANamespaceThisOperatorDoesNotServeIsLeftAlone(t *testing.T) {
 func TestANamespaceThisOperatorServesIsServed(t *testing.T) {
 	t.Parallel()
 	c := newControllers(t, &stubClients{},
-		accountServing(testNamespace),
+		databricksAccountServing(testNamespace),
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 
 	c.settle(t)
@@ -1119,7 +1119,7 @@ func TestNamingNoNamespacesServesNothing(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	c := newControllers(t, stub,
-		accountServing(), mintingNamespace(testNamespace), asking(testNamespace, testName))
+		databricksAccountServing(), mintingNamespace(testNamespace), asking(testNamespace, testName))
 
 	c.settle(t)
 

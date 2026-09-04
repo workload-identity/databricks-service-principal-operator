@@ -33,19 +33,19 @@ const otherNamespace = "team-b"
 // look the same.
 var otherOperator = types.NamespacedName{Namespace: "other-operators", Name: "elsewhere"}
 
-// accounts wires the account controller onto the same fake cluster.
+// databricksAccounts wires the account controller onto the same fake cluster.
 //
 // All three controllers over one fake client, because the removal is not in
 // any one of them: the account controller claims the namespace and the record's
 // controller takes the trust back, and a test that ran either alone would be
 // asserting about half of it.
-func (c *controllers) accounts(t *testing.T) *DatabricksAccountReconciler {
+func (c *controllers) databricksAccounts(t *testing.T) *DatabricksAccountReconciler {
 	t.Helper()
 	return &DatabricksAccountReconciler{
 		Client:                          c.Client,
 		Scheme:                          c.DatabricksServiceAccounts.Scheme,
 		DatabricksAccountNamespacedName: testOperatorRef,
-		AccountInUse:                    dbx.NewAccountInUse(operatorNamespace, accountObject),
+		AccountInUse:                    dbx.NewAccountInUse(operatorNamespace, databricksAccountName),
 		OwnToken:                        dbx.Config{OIDCTokenFilepath: c.Issued.TokenPath, TokenAudience: testAudience},
 		build:                           func(dbx.Config) (dbx.Clients, error) { return c.Stub, nil },
 		verify:                          func(context.Context, dbx.Clients) error { return nil },
@@ -188,14 +188,14 @@ func TestANamespaceTakenOutOfScopeIsClaimedAndKeepsItsPermission(t *testing.T) {
 	stub := &stubClients{}
 	asker := asking(testNamespace, testName)
 	c := newControllers(t, stub,
-		accountServing(otherNamespace),
+		databricksAccountServing(otherNamespace),
 		mintingNamespace(testNamespace),
 		mintingNamespace(otherNamespace),
 		asker,
 		recordFor(asker),
 	)
 
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
 	if got := claimOn(t, c.Client, testNamespace); got != removedPoliciesBy(testOperatorRef) {
 		t.Errorf("%s is claimed by %q, want %q; identities can still be minted there while this "+
@@ -236,12 +236,12 @@ func TestANamespaceThisOperatorNeverEnteredIsLeftAlone(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	c := newControllers(t, stub,
-		accountServing(testNamespace),
+		databricksAccountServing(testNamespace),
 		mintingNamespace(testNamespace),
 		mintingNamespace(otherNamespace),
 	)
 
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
 	if got := claimOn(t, c.Client, otherNamespace); got != "" {
 		t.Errorf("%s is claimed by %q, and this operator has never issued anything there; "+
@@ -270,7 +270,7 @@ func TestTakingANamespaceBackDestroysNothingAndEndsTheExchange(t *testing.T) {
 	before := issued.Status
 
 	nowServing(t, c.Client)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	c.records(t)
 
 	if len(stub.policies) != 0 {
@@ -343,7 +343,7 @@ func TestNothingIsWrittenBackWhileTheNamespaceIsUnclaimed(t *testing.T) {
 			"to see that it has not started and why", waiting, reasonMintingNotSuspended)
 	}
 
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	c.records(t)
 	if len(stub.policies) != 0 {
 		t.Fatalf("federation policies are %v; the namespace is claimed and the trust is still "+
@@ -465,7 +465,7 @@ func TestNamingANamespaceAgainRestoresTheSameIdentity(t *testing.T) {
 	before := c.issuedOf(t, asker).Status
 
 	nowServing(t, c.Client)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	c.records(t)
 	if len(stub.policies) != 0 {
 		t.Fatal("the trust was not taken back, so there is nothing for this to restore")
@@ -553,7 +553,7 @@ func TestARemovalThatDidNotLandIsNotReportedAsFinished(t *testing.T) {
 
 	stub.removeErr = errors.New("the service is temporarily unavailable")
 	nowServing(t, c.Client)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	c.records(t)
 
 	if len(stub.policies) != 1 {
@@ -569,7 +569,7 @@ func TestARemovalThatDidNotLandIsNotReportedAsFinished(t *testing.T) {
 			"is what somebody alerts on", ready, reasonRemovePoliciesFailed)
 	}
 
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	removed := policiesRemovedCondition(t, c.Client)
 	if removed == nil || removed.Status != metav1.ConditionFalse {
 		t.Fatalf("%s is %v, want False -- the object whose edit started the removal is the "+
@@ -609,13 +609,13 @@ func TestANamespaceThisOperatorCannotClaimSaysSo(t *testing.T) {
 		},
 	}
 	c := newControllersWith(t, stub, refusing,
-		accountServing(otherNamespace),
+		databricksAccountServing(otherNamespace),
 		mintingNamespace(testNamespace),
 		asker,
 		recordFor(asker),
 	)
 
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
 	if claimOn(t, c.Client, testNamespace) != "" {
 		t.Fatal("the write was not refused, so this test asserts nothing")
@@ -653,7 +653,7 @@ func TestASecondOperatorWaitsWhileTheFirstHoldsTheNamespace(t *testing.T) {
 
 	claims(t, c.Client, testNamespace, otherOperator, time.Now())
 	nowServing(t, c.Client)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	c.records(t)
 
 	if got := claimOn(t, c.Client, testNamespace); got != removedPoliciesBy(otherOperator) {
@@ -702,7 +702,7 @@ func TestAnOperatorWhoseClaimWasTakenStopsRemovingPolicies(t *testing.T) {
 	c.settle(t)
 
 	nowServing(t, c.Client)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	if claimOn(t, c.Client, testNamespace) != removedPoliciesBy(testOperatorRef) {
 		t.Fatal("this operator never held the namespace, so there was nothing for the other " +
 			"one to take")
@@ -711,7 +711,7 @@ func TestAnOperatorWhoseClaimWasTakenStopsRemovingPolicies(t *testing.T) {
 	claims(t, c.Client, testNamespace, otherOperator, time.Now(), client.ForceOwnership)
 
 	stub.policiesRemoved = nil
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	c.records(t)
 
 	if got := claimOn(t, c.Client, testNamespace); got != removedPoliciesBy(otherOperator) {
@@ -758,7 +758,7 @@ func TestAClaimNobodyHasRefreshedCanBeTakenAndAFreshOneCannot(t *testing.T) {
 
 			claims(t, c.Client, testNamespace, otherOperator, time.Now().Add(-held.since))
 			nowServing(t, c.Client)
-			reconcileAccount(t, c.accounts(t), accountObject)
+			reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
 			if got := claimOn(t, c.Client, testNamespace); got != removedPoliciesBy(held.want) {
 				t.Errorf("%s is claimed by %q, want %q after %s without a word from its holder",
@@ -792,7 +792,7 @@ func TestAHolderSaysAgainOnEveryPassThatItIsStillThere(t *testing.T) {
 	stopped := time.Now().Add(time.Minute - policyRemovalClaimStale).UTC().Truncate(time.Second)
 	claims(t, c.Client, testNamespace, testOperatorRef, stopped)
 	nowServing(t, c.Client)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
 	if got := claimOn(t, c.Client, testNamespace); got != removedPoliciesBy(testOperatorRef) {
 		t.Fatalf("%s is claimed by %q, want %q -- there is no claim of this operator's to refresh",
@@ -820,7 +820,7 @@ func TestReleasingLetsTheOtherOperatorMintAgain(t *testing.T) {
 	asker := asking(testNamespace, testName)
 	theirs := askingOf(testNamespace, "loader", otherOperator.String())
 	c := newControllers(t, stub,
-		accountServing(testNamespace),
+		databricksAccountServing(testNamespace),
 		mintingNamespace(testNamespace),
 		asker,
 		theirs,
@@ -830,7 +830,7 @@ func TestReleasingLetsTheOtherOperatorMintAgain(t *testing.T) {
 	other := databricksServiceAccountsFor(c.DatabricksServiceAccounts.Scheme, c.Client, otherOperator)
 
 	nowServing(t, c.Client)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
 	if _, err := other.Reconcile(context.Background(), requestFor(theirs)); err != nil {
 		t.Fatal(err)
@@ -842,7 +842,7 @@ func TestReleasingLetsTheOtherOperatorMintAgain(t *testing.T) {
 	}
 
 	c.records(t)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
 	if got := claimOn(t, c.Client, testNamespace); got != "" {
 		t.Fatalf("%s is still claimed by %q after the removal finished; every other operator "+
@@ -880,16 +880,16 @@ func TestAnIdentityAlreadyLetGoOfDoesNotTakeTheNamespaceBack(t *testing.T) {
 	c.settle(t)
 
 	nowServing(t, c.Client)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	c.records(t)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	if claimOn(t, c.Client, testNamespace) != "" {
 		t.Fatal("the namespace was not given back, so there is nothing here to take again")
 	}
 	asked := len(stub.policiesRemoved)
 
 	c.records(t)
-	reconcileAccount(t, c.accounts(t), accountObject)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
 	if got := claimOn(t, c.Client, testNamespace); got != "" {
 		t.Errorf("%s is claimed by %q again with nothing left to remove; every other operator "+

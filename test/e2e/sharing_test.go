@@ -74,7 +74,7 @@ var _ = Describe("One ServiceAccount asking two operators", Ordered, Serial, fun
 
 		other.install()
 		mine = operatorRef()
-		theirs = other.namespace + "/" + accountName
+		theirs = other.namespace + "/" + databricksAccountName
 		myProfile = unnamedProfile()
 
 		serve(team)
@@ -161,7 +161,7 @@ var _ = Describe("One ServiceAccount asking two operators", Ordered, Serial, fun
 // serveOn declares a namespace served by an operator other than the one this
 // suite was pointed at.
 func serveOn(operator, name string) {
-	_, err := kubectl("-n", operator, "patch", "databricksaccount", accountName,
+	_, err := kubectl("-n", operator, "patch", "databricksaccount", databricksAccountName,
 		"--type", "json", "-p",
 		fmt.Sprintf(`[{"op":"add","path":"/spec/namespaces/-","value":%q}]`, name))
 	Expect(err).NotTo(HaveOccurred(), "declaring that the operator in %s serves %s", operator, name)
@@ -228,19 +228,19 @@ images:
 	// <this prefix><that prefix>controller-manager -- and a guess at it produces
 	// a federation policy for a subject no token will ever have, which surfaces
 	// as the operator being unable to reach Databricks at all.
-	account := kubectlOut("-n", o.namespace, "get", "deployment",
+	serviceAccountName := kubectlOut("-n", o.namespace, "get", "deployment",
 		"-l", "control-plane=controller-manager",
 		"-o", "jsonpath={.items[0].spec.template.spec.serviceAccountName}")
-	Expect(account).NotTo(BeEmpty(), "the other operator's deployment names no ServiceAccount")
+	Expect(serviceAccountName).NotTo(BeEmpty(), "the other operator's deployment names no ServiceAccount")
 
-	o.grantItself(account)
+	o.grantItself(serviceAccountName)
 
 	_, err = kubectl("-n", o.namespace, "wait", "--for=condition=Available",
 		"deployment", "-l", "control-plane=controller-manager", "--timeout=5m")
 	Expect(err).NotTo(HaveOccurred(), "the other operator never became available")
 
 	Eventually(func() string {
-		return kubectlOut("-n", o.namespace, "get", "databricksaccount", accountName,
+		return kubectlOut("-n", o.namespace, "get", "databricksaccount", databricksAccountName,
 			"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
 	}, 3*time.Minute, 5*time.Second).Should(Equal("True"),
 		"the other operator never reached the account it was pointed at")
@@ -256,7 +256,7 @@ func (o *otherOperator) grantItself(serviceAccount string) {
 		Namespace:         o.namespace,
 		Name:              serviceAccount,
 		ServiceAccountUID: string(uuid.NewUUID()),
-		Operator:          o.namespace + "/" + accountName,
+		Operator:          o.namespace + "/" + databricksAccountName,
 	}
 	id, clientID, err := clients.CreateServicePrincipal(context.Background(), issuing)
 	Expect(err).NotTo(HaveOccurred(), "creating the other operator's own service principal")
@@ -280,7 +280,7 @@ spec:
   accountId: %s
   clientId: %s
   namespaces: []
-`, accountName, o.namespace, host, accountID, clientID))
+`, databricksAccountName, o.namespace, host, accountID, clientID))
 }
 
 // uninstall removes everything this install put on the cluster, including

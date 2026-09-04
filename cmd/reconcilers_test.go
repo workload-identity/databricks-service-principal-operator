@@ -32,24 +32,24 @@ func TestEverySettingReachesAReconciler(t *testing.T) {
 		},
 	}
 
-	account, databricksServiceAccountReconciler, issued := reconcilers(want, nil, nil, nil)
+	databricksAccountReconciler, databricksServiceAccountReconciler, issued := reconcilers(want, nil, nil, nil)
 
 	wanted := want.DatabricksAccountNamespacedName
 	if issued.DatabricksAccountNamespacedName != wanted ||
-		account.DatabricksAccountNamespacedName != wanted ||
+		databricksAccountReconciler.DatabricksAccountNamespacedName != wanted ||
 		databricksServiceAccountReconciler.DatabricksAccountNamespacedName != wanted {
 		t.Errorf("DatabricksAccountNamespacedName is %v, %v and %v, want %v -- the operator would "+
 			"act in whichever DatabricksAccount somebody created",
-			issued.DatabricksAccountNamespacedName, account.DatabricksAccountNamespacedName,
+			issued.DatabricksAccountNamespacedName, databricksAccountReconciler.DatabricksAccountNamespacedName,
 			databricksServiceAccountReconciler.DatabricksAccountNamespacedName, wanted)
 	}
-	if issued.Databricks != want.AccountInUse || account.AccountInUse != want.AccountInUse {
+	if issued.Databricks != want.AccountInUse || databricksAccountReconciler.AccountInUse != want.AccountInUse {
 		t.Error("the two controllers were not given the same AccountInUse; the account controller " +
 			"is the only writer and the record controller reads what it wrote")
 	}
-	if account.OwnToken != want.OwnToken {
+	if databricksAccountReconciler.OwnToken != want.OwnToken {
 		t.Errorf("OwnToken is %+v, want %+v -- the operator would look for its token somewhere "+
-			"other than where the Deployment mounts it", account.OwnToken, want.OwnToken)
+			"other than where the Deployment mounts it", databricksAccountReconciler.OwnToken, want.OwnToken)
 	}
 	if issued.TokenPath != want.OwnToken.OIDCTokenFilepath {
 		t.Errorf("TokenPath is %q, want %q -- the issuer every federation policy names and the "+

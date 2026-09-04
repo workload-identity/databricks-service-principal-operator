@@ -121,7 +121,7 @@ func (r *DatabricksServiceAccountReconciler) Reconcile(ctx context.Context, req 
 	// here would freeze this copy at the last thing that was true, so the team
 	// whose workloads have just stopped reaching Databricks would read Ready on
 	// the one object in their own namespace that is supposed to tell them.
-	declared, served, err := accountServes(ctx, r.Client, r.DatabricksAccountNamespacedName, serviceAccount.Namespace)
+	declared, served, err := databricksAccountServes(ctx, r.Client, r.DatabricksAccountNamespacedName, serviceAccount.Namespace)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -299,8 +299,8 @@ func (r *DatabricksServiceAccountReconciler) owner() client.FieldOwner {
 // each undid the other forever -- and it is also what makes one label key on a
 // Namespace an exclusive claim, since the second operator to send it is
 // refused.
-func fieldOwnerFor(account types.NamespacedName) client.FieldOwner {
-	return client.FieldOwner("databricks.workload-identity.io/" + account.String())
+func fieldOwnerFor(databricksAccountNamespacedName types.NamespacedName) client.FieldOwner {
+	return client.FieldOwner("databricks.workload-identity.io/" + databricksAccountNamespacedName.String())
 }
 
 // apply writes this operator's entry and nothing else.
@@ -870,8 +870,8 @@ func namespaceMints(ctx context.Context, reader client.Reader, name string) (boo
 // directly and a namespace label is not an event on anything this watched.
 func (r *DatabricksServiceAccountReconciler) identitiesInNamespace(ctx context.Context,
 	object client.Object) []reconcile.Request {
-	var accounts corev1.ServiceAccountList
-	if err := r.List(ctx, &accounts, client.InNamespace(object.GetName())); err != nil {
+	var serviceAccounts corev1.ServiceAccountList
+	if err := r.List(ctx, &serviceAccounts, client.InNamespace(object.GetName())); err != nil {
 		// Dropping the wake-up costs a wait, not correctness: each identity
 		// comes back on its own interval, and an annotation written after this
 		// wakes it directly.
@@ -879,19 +879,19 @@ func (r *DatabricksServiceAccountReconciler) identitiesInNamespace(ctx context.C
 			"tenantNamespace", object.GetName())
 		return nil
 	}
-	requests := make([]reconcile.Request, 0, len(accounts.Items))
-	for i := range accounts.Items {
+	requests := make([]reconcile.Request, 0, len(serviceAccounts.Items))
+	for i := range serviceAccounts.Items {
 		// Anything this operator owes something for: an identity it is asked for,
 		// or a key it could not read and has to say so about. Reading one value
 		// no longer answers that -- a ServiceAccount asking only through named
 		// keys carries nothing at all under the bare one -- so the annotations
 		// are read the way every other caller reads them.
-		requested := dbxv1alpha1.RequestsFor(accounts.Items[i].Annotations, r.DatabricksAccountNamespacedName)
+		requested := dbxv1alpha1.RequestsFor(serviceAccounts.Items[i].Annotations, r.DatabricksAccountNamespacedName)
 		if len(requested.Understood) == 0 && len(requested.Refused) == 0 {
 			continue
 		}
 		requests = append(requests, reconcile.Request{
-			NamespacedName: client.ObjectKeyFromObject(&accounts.Items[i]),
+			NamespacedName: client.ObjectKeyFromObject(&serviceAccounts.Items[i]),
 		})
 	}
 	return requests

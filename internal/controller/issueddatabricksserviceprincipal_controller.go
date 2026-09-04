@@ -337,7 +337,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 	// This pass re-asserts it on every record that already exists, so a removal
 	// made anywhere else would be undone on the next interval, for ever. The
 	// removal is in the same place as the decision.
-	switch declared, served, err := accountServes(ctx, r.Client, r.DatabricksAccountNamespacedName,
+	switch declared, served, err := databricksAccountServes(ctx, r.Client, r.DatabricksAccountNamespacedName,
 		issued.Spec.ServiceAccount.Namespace); {
 	case err != nil:
 		return ctrl.Result{}, err
@@ -816,7 +816,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) SetupWithManager(mgr ctrl.M
 		// answerable, and one that has stopped serving a namespace makes the
 		// records in it ones to remove the policies from. Nothing on a record
 		// reports either.
-		Watches(enqueueOnAccountChange(mgr, r.DatabricksAccountNamespacedName,
+		Watches(enqueueOnDatabricksAccountChange(mgr, r.DatabricksAccountNamespacedName,
 			&dbxv1alpha1.IssuedDatabricksServicePrincipalList{}, issuedRequests)).
 		Named("issueddatabricksserviceprincipal").
 		Complete(r)

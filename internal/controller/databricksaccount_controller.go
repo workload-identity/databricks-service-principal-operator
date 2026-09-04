@@ -50,23 +50,23 @@ import (
 const EnvPodNamespace = "POD_NAMESPACE"
 
 const (
-	// accountRetryAfterAwaited is how long an unusable account waits before
-	// trying again. What fixes it -- the operator's service principal, its
-	// federation policy, what it is allowed to do -- is done in Databricks,
+	// databricksAccountRetryAfterAwaited is how long an unusable account waits
+	// before trying again. What fixes it -- the operator's service principal,
+	// its federation policy, what it is allowed to do -- is done in Databricks,
 	// which raises no event here.
-	accountRetryAfterAwaited = time.Minute
+	databricksAccountRetryAfterAwaited = time.Minute
 
-	// accountRetryAfterSettled is the interval on a working account. It is a
-	// liveness check on one account-level call: a federation policy removed in
-	// Databricks would otherwise show up as every identity failing at once,
-	// with nothing saying why.
-	accountRetryAfterSettled = 10 * time.Minute
+	// databricksAccountRetryAfterSettled is the interval on a working account.
+	// It is a liveness check on one account-level call: a federation policy
+	// removed in Databricks would otherwise show up as every identity failing at
+	// once, with nothing saying why.
+	databricksAccountRetryAfterSettled = 10 * time.Minute
 
 	// policyRemovalClaimStale is how long a namespace may go without its holder
 	// saying it is still there before another operator may take it. Five
-	// accountRetryAfterAwaited intervals: the holder rewrites the timestamp on
-	// every pass, so one missed pass is a slow one and five is an operator that
-	// is not coming back.
+	// databricksAccountRetryAfterAwaited intervals: the holder rewrites the
+	// timestamp on every pass, so one missed pass is a slow one and five is an
+	// operator that is not coming back.
 	//
 	// It does not have to dodge the SDK's own five-minute retry budget, which is
 	// the obvious objection to a threshold this short. For a misjudgement to cost
@@ -273,7 +273,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// on it, and what would finish it -- a namespace this operator could not
 		// claim, a record whose trust is still in place -- raises no event here
 		// either.
-		result.RequeueAfter = accountRetryAfterAwaited
+		result.RequeueAfter = databricksAccountRetryAfterAwaited
 	}
 	return result, err
 }
@@ -321,15 +321,15 @@ func (r *DatabricksAccountReconciler) reportAgreement(databricksAccount *dbxv1al
 		return
 	}
 
-	accounts := make([]string, 0, len(elsewhere))
+	accountIDs := make([]string, 0, len(elsewhere))
 	for made := range elsewhere {
-		accounts = append(accounts, made)
+		accountIDs = append(accountIDs, made)
 	}
-	slices.Sort(accounts)
+	slices.Sort(accountIDs)
 
 	var total int
-	parts := make([]string, 0, len(accounts))
-	for _, made := range accounts {
+	parts := make([]string, 0, len(accountIDs))
+	for _, made := range accountIDs {
 		total += elsewhere[made]
 		parts = append(parts, fmt.Sprintf("%d in %s", elsewhere[made], made))
 	}
@@ -343,8 +343,8 @@ func (r *DatabricksAccountReconciler) reportAgreement(databricksAccount *dbxv1al
 			total, strings.Join(parts, ", ")))
 }
 
-// accountServes reports whether one namespace is this operator's to act in, and
-// whether this operator has been told anything at all.
+// databricksAccountServes reports whether one namespace is this operator's to
+// act in, and whether this operator has been told anything at all.
 //
 // Read from this operator's own DatabricksAccount, which lives in its own
 // namespace and which only the team holding that account admin credential can
@@ -368,10 +368,11 @@ func (r *DatabricksAccountReconciler) reportAgreement(databricksAccount *dbxv1al
 // a namespace as served that the other does not -- which is an identity minted
 // on one side and stripped of its trust on the other, at the same time, for
 // ever.
-func accountServes(ctx context.Context, reader client.Reader,
-	name types.NamespacedName, namespace string) (declared, served bool, err error) {
+func databricksAccountServes(ctx context.Context, reader client.Reader,
+	databricksAccountNamespacedName types.NamespacedName, namespace string) (
+	declared, served bool, err error) {
 	var databricksAccount dbxv1alpha1.DatabricksAccount
-	switch err := reader.Get(ctx, name, &databricksAccount); {
+	switch err := reader.Get(ctx, databricksAccountNamespacedName, &databricksAccount); {
 	case apierrors.IsNotFound(err):
 		return false, false, nil
 	case err != nil:
@@ -656,10 +657,12 @@ func policyRemovalHeldBy(ctx context.Context, reader client.Reader, name string)
 
 // removingPoliciesBy is the claim as this operator sends it: the key, its own
 // name, and the time it is saying so.
-func removingPoliciesBy(name string, account types.NamespacedName,
+func removingPoliciesBy(namespace string, databricksAccountNamespacedName types.NamespacedName,
 	at time.Time) *corev1ac.NamespaceApplyConfiguration {
-	return corev1ac.Namespace(name).
-		WithLabels(map[string]string{dbxv1alpha1.RemovingPoliciesLabel: removedPoliciesBy(account)}).
+	return corev1ac.Namespace(namespace).
+		WithLabels(map[string]string{
+			dbxv1alpha1.RemovingPoliciesLabel: removedPoliciesBy(databricksAccountNamespacedName),
+		}).
 		WithAnnotations(map[string]string{
 			dbxv1alpha1.RemovingPoliciesSinceAnnotation: at.UTC().Format(time.RFC3339),
 		})
@@ -671,8 +674,8 @@ func removingPoliciesBy(name string, account types.NamespacedName,
 // A "." where every other reference to an operator in this API uses a "/",
 // because a label value may not hold one. Both halves are read back by people,
 // not parsed: what a loser does with the name is print it.
-func removedPoliciesBy(account types.NamespacedName) string {
-	return account.Namespace + "." + account.Name
+func removedPoliciesBy(databricksAccountNamespacedName types.NamespacedName) string {
+	return databricksAccountNamespacedName.Namespace + "." + databricksAccountNamespacedName.Name
 }
 
 func (r *DatabricksAccountReconciler) owner() client.FieldOwner {
@@ -685,9 +688,10 @@ func (r *DatabricksAccountReconciler) owner() client.FieldOwner {
 // object and sees no status has no way to tell it from an operator that is not
 // running, and the object that is in use is named here so the difference is one
 // kubectl away.
-func (r *DatabricksAccountReconciler) setNotSelected(ctx context.Context, name types.NamespacedName) error {
+func (r *DatabricksAccountReconciler) setNotSelected(ctx context.Context,
+	databricksAccountNamespacedName types.NamespacedName) error {
 	var databricksAccount dbxv1alpha1.DatabricksAccount
-	if err := r.Get(ctx, name, &databricksAccount); err != nil {
+	if err := r.Get(ctx, databricksAccountNamespacedName, &databricksAccount); err != nil {
 		return client.IgnoreNotFound(err)
 	}
 	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionReady,
@@ -709,7 +713,7 @@ func (r *DatabricksAccountReconciler) reportReady(ctx context.Context,
 	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionReady,
 		status, reason, message)
 	return ctrl.Result{
-		RequeueAfter: retryAfterFor(status, accountRetryAfterAwaited, accountRetryAfterSettled),
+		RequeueAfter: retryAfterFor(status, databricksAccountRetryAfterAwaited, databricksAccountRetryAfterSettled),
 	}, client.IgnoreNotFound(r.Status().Update(ctx, databricksAccount))
 }
 
@@ -745,7 +749,7 @@ func verifyAccount(ctx context.Context, clients databricks.Clients) error {
 	return nil
 }
 
-// accountChangedForRecords selects the writes on this object worth waking every
+// databricksAccountChanged selects the writes on this object worth waking every
 // record for.
 //
 // Two things on it decide what a record's pass does, and a record can see
@@ -768,10 +772,10 @@ func verifyAccount(ctx context.Context, clients databricks.Clients) error {
 // every reconcile of an account writes its status, and waking every record on
 // each of those would put the whole catalogue back in the queue once a minute
 // for no reason.
-func accountChangedForRecords(selected types.NamespacedName) predicate.Predicate {
+func databricksAccountChanged(databricksAccountNamespacedName types.NamespacedName) predicate.Predicate {
 	ready := func(o client.Object) bool {
 		databricksAccount, ok := o.(*dbxv1alpha1.DatabricksAccount)
-		if !ok || client.ObjectKeyFromObject(databricksAccount) != selected {
+		if !ok || client.ObjectKeyFromObject(databricksAccount) != databricksAccountNamespacedName {
 			return false
 		}
 		for _, c := range databricksAccount.Status.Conditions {
@@ -787,14 +791,16 @@ func accountChangedForRecords(selected types.NamespacedName) predicate.Predicate
 	// it does compares as a change here.
 	served := func(o client.Object) []string {
 		databricksAccount, ok := o.(*dbxv1alpha1.DatabricksAccount)
-		if !ok || client.ObjectKeyFromObject(databricksAccount) != selected {
+		if !ok || client.ObjectKeyFromObject(databricksAccount) != databricksAccountNamespacedName {
 			return nil
 		}
 		return slices.Sorted(slices.Values(databricksAccount.Spec.Namespaces))
 	}
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool { return ready(e.Object) },
-		DeleteFunc: func(e event.DeleteEvent) bool { return client.ObjectKeyFromObject(e.Object) == selected },
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return client.ObjectKeyFromObject(e.Object) == databricksAccountNamespacedName
+		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			return ready(e.ObjectOld) != ready(e.ObjectNew) ||
 				!slices.Equal(served(e.ObjectOld), served(e.ObjectNew))
@@ -803,9 +809,9 @@ func accountChangedForRecords(selected types.NamespacedName) predicate.Predicate
 	}
 }
 
-// enqueueOnAccountChange wakes every recorded identity when the selected
-// DatabricksAccount says something new about them: that it can be acted in, or
-// that it no longer serves the namespace one of them is in.
+// enqueueOnDatabricksAccountChange wakes every recorded identity when the
+// selected DatabricksAccount says something new about them: that it can be
+// acted in, or that it no longer serves the namespace one of them is in.
 //
 // Without it, an operator whose account was just fixed stays visibly broken, and
 // a namespace taken out of scope keeps its trust, for as long as each object's
@@ -817,8 +823,10 @@ func accountChangedForRecords(selected types.NamespacedName) predicate.Predicate
 // are cannot be worked out from the event: the list before the edit is not
 // available here, and a record whose namespace was just removed is exactly the
 // one the new list does not name.
-func enqueueOnAccountChange(mgr ctrl.Manager, account types.NamespacedName, list client.ObjectList,
-	keys func(client.ObjectList) []reconcile.Request) (client.Object, handler.EventHandler, builder.WatchesOption) {
+func enqueueOnDatabricksAccountChange(mgr ctrl.Manager,
+	databricksAccountNamespacedName types.NamespacedName, list client.ObjectList,
+	keys func(client.ObjectList) []reconcile.Request) (
+	client.Object, handler.EventHandler, builder.WatchesOption) {
 	mapFunc := func(ctx context.Context, _ client.Object) []reconcile.Request {
 		items := list.DeepCopyObject().(client.ObjectList)
 		if err := mgr.GetClient().List(ctx, items); err != nil {
@@ -831,7 +839,7 @@ func enqueueOnAccountChange(mgr ctrl.Manager, account types.NamespacedName, list
 	}
 	return &dbxv1alpha1.DatabricksAccount{},
 		handler.EnqueueRequestsFromMapFunc(mapFunc),
-		builder.WithPredicates(accountChangedForRecords(account))
+		builder.WithPredicates(databricksAccountChanged(databricksAccountNamespacedName))
 }
 
 // issuedRequests turns a listing of records into requests. It exists because

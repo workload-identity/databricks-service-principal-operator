@@ -11,7 +11,7 @@ import (
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 )
 
-func accountWith(name string, ready metav1.ConditionStatus) *dbxv1alpha1.DatabricksAccount {
+func databricksAccountWith(name string, ready metav1.ConditionStatus) *dbxv1alpha1.DatabricksAccount {
 	object := databricksAccountNamed(name)
 	setCondition(&object.Status.Conditions, 0, conditionReady, ready, reasonAccountReady, "checked")
 	return object
@@ -26,11 +26,11 @@ func accountWith(name string, ready metav1.ConditionStatus) *dbxv1alpha1.Databri
 // forever, for no reason.
 func TestOnlyAChangeARecordDependsOnWakesTheIdentities(t *testing.T) {
 	t.Parallel()
-	selected := types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
-	p := accountChangedForRecords(selected)
+	selected := types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName}
+	p := databricksAccountChanged(selected)
 
-	notReady := accountWith(accountObject, metav1.ConditionFalse)
-	ready := accountWith(accountObject, metav1.ConditionTrue)
+	notReady := databricksAccountWith(databricksAccountName, metav1.ConditionFalse)
+	ready := databricksAccountWith(databricksAccountName, metav1.ConditionTrue)
 
 	if !p.Update(event.UpdateEvent{ObjectOld: notReady, ObjectNew: ready}) {
 		t.Error("becoming usable did not wake anything; every identity would wait out its own interval")
@@ -38,7 +38,7 @@ func TestOnlyAChangeARecordDependsOnWakesTheIdentities(t *testing.T) {
 	if !p.Update(event.UpdateEvent{ObjectOld: ready, ObjectNew: notReady}) {
 		t.Error("ceasing to be usable did not wake anything")
 	}
-	if p.Update(event.UpdateEvent{ObjectOld: ready, ObjectNew: accountWith(accountObject, metav1.ConditionTrue)}) {
+	if p.Update(event.UpdateEvent{ObjectOld: ready, ObjectNew: databricksAccountWith(databricksAccountName, metav1.ConditionTrue)}) {
 		t.Error("a status write that changed nothing woke every identity in the cluster; " +
 			"that happens once a minute and never stops")
 	}
@@ -50,10 +50,10 @@ func TestOnlyAChangeARecordDependsOnWakesTheIdentities(t *testing.T) {
 	}
 }
 
-// accountServingWith is a usable account naming some namespaces, which is the
+// databricksAccountServingWith is a usable account naming some namespaces, which is the
 // pair of facts the predicate reads.
-func accountServingWith(name string, namespaces ...string) *dbxv1alpha1.DatabricksAccount {
-	object := accountWith(name, metav1.ConditionTrue)
+func databricksAccountServingWith(name string, namespaces ...string) *dbxv1alpha1.DatabricksAccount {
+	object := databricksAccountWith(name, metav1.ConditionTrue)
 	object.Spec.Namespaces = namespaces
 	return object
 }
@@ -68,11 +68,11 @@ func accountServingWith(name string, namespaces ...string) *dbxv1alpha1.Databric
 // Putting the namespace back has the same shape and the same wait.
 func TestChangingWhichNamespacesAreServedWakesEveryRecord(t *testing.T) {
 	t.Parallel()
-	selected := types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
-	p := accountChangedForRecords(selected)
+	selected := types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName}
+	p := databricksAccountChanged(selected)
 
-	both := accountServingWith(accountObject, "team-a", "team-b")
-	one := accountServingWith(accountObject, "team-a")
+	both := databricksAccountServingWith(databricksAccountName, "team-a", "team-b")
+	one := databricksAccountServingWith(databricksAccountName, "team-a")
 
 	if !p.Update(event.UpdateEvent{ObjectOld: both, ObjectNew: one}) {
 		t.Error("a namespace taken out of scope woke no record; the trust it was supposed to " +
@@ -84,14 +84,14 @@ func TestChangingWhichNamespacesAreServedWakesEveryRecord(t *testing.T) {
 	}
 	if p.Update(event.UpdateEvent{
 		ObjectOld: both,
-		ObjectNew: accountServingWith(accountObject, "team-b", "team-a"),
+		ObjectNew: databricksAccountServingWith(databricksAccountName, "team-b", "team-a"),
 	}) {
 		t.Error("reordering the list woke every record in the cluster; it is a set, and the two " +
 			"spellings are one declaration")
 	}
 	if p.Update(event.UpdateEvent{
-		ObjectOld: accountServingWith("someone-elses", "team-a"),
-		ObjectNew: accountServingWith("someone-elses"),
+		ObjectOld: databricksAccountServingWith("someone-elses", "team-a"),
+		ObjectNew: databricksAccountServingWith("someone-elses"),
 	}) {
 		t.Error("another operator's account changing what it serves woke this operator's records")
 	}
@@ -102,15 +102,15 @@ func TestChangingWhichNamespacesAreServedWakesEveryRecord(t *testing.T) {
 // condition says nothing about whether this operator can act.
 func TestAnotherAccountWakesNothing(t *testing.T) {
 	t.Parallel()
-	selected := types.NamespacedName{Namespace: operatorNamespace, Name: accountObject}
-	p := accountChangedForRecords(selected)
+	selected := types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName}
+	p := databricksAccountChanged(selected)
 
-	other := accountWith("someone-elses", metav1.ConditionTrue)
+	other := databricksAccountWith("someone-elses", metav1.ConditionTrue)
 	if p.Create(event.CreateEvent{Object: other}) {
 		t.Error("an account this operator was not told to use woke everything")
 	}
 	if p.Update(event.UpdateEvent{
-		ObjectOld: accountWith("someone-elses", metav1.ConditionFalse),
+		ObjectOld: databricksAccountWith("someone-elses", metav1.ConditionFalse),
 		ObjectNew: other,
 	}) {
 		t.Error("an account this operator was not told to use woke everything on its transition")
@@ -118,7 +118,7 @@ func TestAnotherAccountWakesNothing(t *testing.T) {
 
 	// Deletion is the exception, and only for the selected one: the clients it
 	// installed are about to be withdrawn, and every identity has to hear that.
-	if !p.Delete(event.DeleteEvent{Object: accountWith(accountObject, metav1.ConditionTrue)}) {
+	if !p.Delete(event.DeleteEvent{Object: databricksAccountWith(databricksAccountName, metav1.ConditionTrue)}) {
 		t.Error("the selected account being deleted woke nothing")
 	}
 	if p.Delete(event.DeleteEvent{Object: other}) {

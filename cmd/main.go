@@ -111,7 +111,7 @@ func main() {
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
-	var accountName string
+	var databricksAccountName string
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
@@ -120,7 +120,7 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.StringVar(&accountName, "databricks-account", "databricks-account",
+	flag.StringVar(&databricksAccountName, "databricks-account", "databricks-account",
 		"The name of the DatabricksAccount, in the operator's own namespace, that says which Databricks "+
 			"account to act in. Others are reported as not selected rather than acted on.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -253,7 +253,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	account := types.NamespacedName{Namespace: namespace, Name: accountName}
+	databricksAccountNamespacedName := types.NamespacedName{Namespace: namespace, Name: databricksAccountName}
 
 	runtimeCfg := databricks.RuntimeFromEnv()
 	if !runtimeCfg.UsesWorkloadIdentity() {
@@ -269,16 +269,16 @@ func main() {
 	// account controller has clients that work, so an operator with no
 	// DatabricksAccount runs and says so on every object, rather than
 	// crashlooping with the reason only in its log.
-	dbClients := databricks.NewAccountInUse(namespace, accountName)
+	dbClients := databricks.NewAccountInUse(namespace, databricksAccountName)
 
-	decided.DatabricksAccountNamespacedName = account
+	decided.DatabricksAccountNamespacedName = databricksAccountNamespacedName
 	decided.AccountInUse = dbClients
 	decided.OwnToken = runtimeCfg
 
-	accountReconciler, databricksServiceAccountReconciler, issuedReconciler := reconcilers(
+	databricksAccountReconciler, databricksServiceAccountReconciler, issuedReconciler := reconcilers(
 		decided, mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme())
 
-	if err := accountReconciler.SetupWithManager(mgr); err != nil {
+	if err := databricksAccountReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "databricksaccount")
 		os.Exit(1)
 	}
