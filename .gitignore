@@ -50,6 +50,10 @@ review.md
 # The state machine walk. Same reason as the others.
 paths.md
 
+# The list waiting to become GitHub issues. Same reason as the others: it is a
+# thinking record, it goes stale against the code, and a clone does not have it.
+issues.md
+
 # This machine's own session state, and under it whole checkouts of this
 # repository: .claude/worktrees/ holds one per agent. Untracked rather than
 # ignored, a single `git add -A` commits every worktree into the tree it was
