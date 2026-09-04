@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -142,9 +143,13 @@ type DatabricksAccountReconciler struct {
 // Only the object being deleted clears them, because then there is nothing left
 // to act as.
 func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
 	if req.NamespacedName != r.DatabricksAccountNamespacedName {
 		// Not the one this operator was told to use. Its own status says so;
 		// see setNotSelected below.
+		logger.V(1).Info("Not the DatabricksAccount this operator was told to use",
+			"inUse", r.DatabricksAccountNamespacedName)
 		return ctrl.Result{}, r.setNotSelected(ctx, req.NamespacedName)
 	}
 
@@ -156,6 +161,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// Deleted. There is no account to act in, and saying so is better than
 		// acting in one nobody has declared.
 		r.AccountInUse.Clear(fmt.Sprintf("DatabricksAccount %s was deleted", r.DatabricksAccountNamespacedName))
+		logger.Info("Cleared the Databricks clients: the DatabricksAccount was deleted")
 		return ctrl.Result{}, nil
 	}
 
@@ -171,6 +177,9 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if len(claims.Audience) > 0 {
 			databricksAccount.Status.Audience = claims.Audience[0]
 		}
+	} else {
+		logger.Error(claimsErr, "Could not read the operator's own projected token, so no identity can be "+
+			"issued or converged", "tokenPath", r.OwnToken.OIDCTokenFilepath)
 	}
 	r.reportPrepared(&databricksAccount, claims, claimsErr)
 
@@ -209,18 +218,30 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Only when the declaration itself changed. The same declaration failing is
 	// one bad call, and withdrawing over that would take every workload's
 	// identity out of reach until Databricks answered again.
-	if installed, ok := r.AccountInUse.BuiltFrom(); ok && installed != cfg {
+	//
+	// Read once and asked again at the install, because both are the same
+	// question: whether this pass is the one that changes what the operator acts
+	// as. Set runs on every pass, whether or not anything moved.
+	installed, holding := r.AccountInUse.BuiltFrom()
+	installing := !holding || installed != cfg
+
+	if holding && installed != cfg {
 		r.AccountInUse.Clear(fmt.Sprintf(
 			"DatabricksAccount %s was changed to name Databricks account %s, and that has not "+
 				"been verified yet; read its status", r.DatabricksAccountNamespacedName, databricksAccount.Spec.AccountID))
+		logger.Info("Cleared the Databricks clients: the DatabricksAccount now names another Databricks "+
+			"account, which has not been verified yet", "accountId", databricksAccount.Spec.AccountID)
 	}
 
 	clients, err := r.build(cfg)
 	if err != nil {
+		logger.Error(err, "Could not build the Databricks clients", "accountId", databricksAccount.Spec.AccountID)
 		return r.reportReady(ctx, &databricksAccount, metav1.ConditionFalse, reasonInvalidSpec, err.Error())
 	}
 
 	if err := r.verify(ctx, clients); err != nil {
+		logger.Error(err, "Could not verify the Databricks account",
+			"accountId", databricksAccount.Spec.AccountID, "host", databricksAccount.Spec.Host)
 		// The operator's own claims being unreadable is worth saying here rather
 		// than on their own: a refusal whose cause is a missing token file reads
 		// as a policy problem otherwise.
@@ -233,6 +254,10 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	r.AccountInUse.Set(cfg, clients)
+	if installing {
+		logger.Info("Installed the Databricks clients",
+			"accountId", databricksAccount.Spec.AccountID, "host", databricksAccount.Spec.Host)
+	}
 
 	// The subject as the status holds it, not as this pass read it. Verification
 	// goes on passing for about an hour after the token file becomes unreadable
@@ -514,20 +539,34 @@ func policiesRemovedFromDatabricks(issued *dbxv1alpha1.IssuedDatabricksServicePr
 // -- so an unchanging annotation would say when the claim was made and never
 // that its holder is still running.
 func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, name string) error {
+	logger := log.FromContext(ctx)
+
 	// Read before the apply because this operator holds no create on Namespaces:
 	// an apply naming one that is not there is a create, and a namespace that is
 	// gone is one nothing can be minted into and so one with nothing to claim.
 	// Its records stay, and their trust is taken back on their own controller's
 	// pass.
-	switch _, exists, err := policyRemovalHeldBy(ctx, r.Client, name); {
+	holder, exists, err := policyRemovalHeldBy(ctx, r.Client, name)
+	switch {
 	case err != nil:
 		return err
 	case !exists:
 		return nil
 	}
 
-	err := r.Apply(ctx, removingPoliciesBy(name, r.DatabricksAccountNamespacedName, time.Now()), r.owner())
+	// Whether this pass is taking the claim or saying again that it still wants
+	// one it already holds. The apply is the same either way, so without this the
+	// line below would repeat for as long as the removal takes.
+	taking := holder != removedPoliciesBy(r.DatabricksAccountNamespacedName)
+
+	err = r.Apply(ctx, removingPoliciesBy(name, r.DatabricksAccountNamespacedName, time.Now()), r.owner())
 	if !apierrors.IsConflict(err) {
+		switch {
+		case err != nil:
+			logger.Error(err, "Could not claim a namespace for federation policy removal", "tenantNamespace", name)
+		case taking:
+			logger.Info("Claimed a namespace for federation policy removal", "tenantNamespace", name)
+		}
 		return err
 	}
 
@@ -539,8 +578,10 @@ func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, 
 	if err := r.Get(ctx, types.NamespacedName{Name: name}, &namespace); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	holder := namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel]
+	holder = namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel]
 	said := namespace.Annotations[dbxv1alpha1.RemovingPoliciesSinceAnnotation]
+	logger.V(1).Info("Another operator holds the federation policy removal claim",
+		"tenantNamespace", name, "holder", holder, "since", said)
 
 	since, unreadable := time.Parse(time.RFC3339, said)
 	if unreadable != nil {
@@ -550,7 +591,8 @@ func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, 
 		// puts it in front of somebody.
 		return fmt.Errorf("held by %s, which has not said when: %q", holder, said)
 	}
-	if age := time.Since(since); age < policyRemovalClaimStale {
+	age := time.Since(since)
+	if age < policyRemovalClaimStale {
 		return fmt.Errorf("held by %s, last seen %s ago", holder, age.Truncate(time.Second))
 	}
 
@@ -558,6 +600,8 @@ func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, 
 	// ago that waiting for it is waiting for nothing, and the operator it is
 	// taken from finds out the same way anybody else does: its next apply is
 	// refused, because the field is no longer its own.
+	logger.Info("Taking the federation policy removal claim from an operator that stopped refreshing it",
+		"tenantNamespace", name, "holder", holder, "lastSeen", age.Truncate(time.Second))
 	return r.Apply(ctx, removingPoliciesBy(name, r.DatabricksAccountNamespacedName, time.Now()),
 		r.owner(), client.ForceOwnership)
 }
@@ -579,7 +623,15 @@ func (r *DatabricksAccountReconciler) releasePolicyRemoval(ctx context.Context, 
 	if namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel] != removedPoliciesBy(r.DatabricksAccountNamespacedName) {
 		return nil
 	}
-	return r.Apply(ctx, corev1ac.Namespace(name), r.owner())
+
+	logger := log.FromContext(ctx)
+	if err := r.Apply(ctx, corev1ac.Namespace(name), r.owner()); err != nil {
+		logger.Error(err, "Could not release the claim on a namespace whose federation policies are all removed",
+			"tenantNamespace", name)
+		return err
+	}
+	logger.Info("Released the claim on a namespace: nothing is left to remove there", "tenantNamespace", name)
+	return nil
 }
 
 // policyRemovalHeldBy is the operator that has suspended minting in this
@@ -772,6 +824,7 @@ func enqueueOnAccountChange(mgr ctrl.Manager, account types.NamespacedName, list
 		if err := mgr.GetClient().List(ctx, items); err != nil {
 			// Dropping the wake-up costs a wait, not correctness: every object
 			// comes back on its own interval regardless.
+			log.FromContext(ctx).Error(err, "Could not wake the records this DatabricksAccount changed the answer for")
 			return nil
 		}
 		return keys(items)

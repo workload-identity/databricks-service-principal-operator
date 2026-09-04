@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
@@ -386,6 +387,8 @@ func projectedIdentityFor(entry dbxv1alpha1.ProjectedIdentity) *acv1alpha1.Proje
 // all, so it goes.
 func (r *DatabricksServiceAccountReconciler) removeIdentities(ctx context.Context,
 	serviceAccount *corev1.ServiceAccount) error {
+	logger := log.FromContext(ctx)
+
 	var databricksServiceAccount dbxv1alpha1.DatabricksServiceAccount
 	switch err := r.Get(ctx, client.ObjectKeyFromObject(serviceAccount), &databricksServiceAccount); {
 	case apierrors.IsNotFound(err):
@@ -429,7 +432,11 @@ func (r *DatabricksServiceAccountReconciler) removeIdentities(ctx context.Contex
 		// Two operators releasing their entries at once both see none left and
 		// both delete.
 		// The second is told it is already gone, which is the answer it wanted.
-		return client.IgnoreNotFound(r.Delete(ctx, &databricksServiceAccount))
+		if err := client.IgnoreNotFound(r.Delete(ctx, &databricksServiceAccount)); err != nil {
+			return err
+		}
+		logger.Info("Deleted the DatabricksServiceAccount: this ServiceAccount is issued nothing")
+		return nil
 	}
 	if mine == 0 {
 		return nil
@@ -437,7 +444,12 @@ func (r *DatabricksServiceAccountReconciler) removeIdentities(ctx context.Contex
 
 	// Somebody else's entries remain, so releasing this operator's leaves an
 	// object with something in it and the merge has fields to write.
-	return r.apply(ctx, serviceAccount)
+	if err := r.apply(ctx, serviceAccount); err != nil {
+		return err
+	}
+	logger.Info("Took this operator's identities off the DatabricksServiceAccount, and left the rest",
+		"removed", mine, "kept", others)
+	return nil
 }
 
 // issued reads the record for one identity of this ServiceAccount, or nil when
@@ -862,6 +874,8 @@ func (r *DatabricksServiceAccountReconciler) identitiesInNamespace(ctx context.C
 		// Dropping the wake-up costs a wait, not correctness: each identity
 		// comes back on its own interval, and an annotation written after this
 		// wakes it directly.
+		log.FromContext(ctx).Error(err, "Could not wake the identities in a namespace whose answer changed",
+			"tenantNamespace", object.GetName())
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(accounts.Items))

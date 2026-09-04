@@ -35,6 +35,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
@@ -153,6 +154,12 @@ func (i *PodTokenInjector) Handle(ctx context.Context, req admission.Request) ad
 		return admission.Allowed("no Databricks identity for this ServiceAccount")
 	case err != nil:
 		// Admitted, not refused. See the note on Handle.
+		//
+		// Said here because nothing else keeps it: the reason goes into an
+		// admission response, which nothing stores, and the pod starts looking
+		// entirely normal without a token it will never be given.
+		log.FromContext(ctx).Error(err, "Could not read the Databricks identity, so this pod is admitted "+
+			"without one", "serviceAccount", serviceAccount)
 		return admission.Allowed(fmt.Sprintf("could not read the Databricks identity: %v", err))
 	}
 

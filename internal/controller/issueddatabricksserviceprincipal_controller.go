@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
@@ -173,6 +174,10 @@ func (r *IssuedDatabricksServicePrincipalReconciler) Reconcile(ctx context.Conte
 	case !wanted:
 		// Deleting this record is how the identity is destroyed. The finalizer
 		// does the destroying, so this is the whole of it here.
+		log.FromContext(ctx).Info("The ServiceAccount no longer asks for this identity, so the record is "+
+			"deleted and its service principal with it",
+			"tenantNamespace", issued.Spec.ServiceAccount.Namespace,
+			"serviceAccount", issued.Spec.ServiceAccount.Name)
 		return ctrl.Result{}, client.IgnoreNotFound(r.Delete(ctx, &issued))
 	}
 
@@ -279,16 +284,21 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 		}
 	}
 
+	logger := log.FromContext(ctx)
 	if id != "" {
 		if err := clients.DeleteServicePrincipal(ctx, id); err != nil {
+			logger.Error(err, "Could not delete the service principal in Databricks, so this record is held",
+				"servicePrincipalId", id)
 			result := outcomeFor(err)
 			return r.reportReady(ctx, issued, result.Status, reasonDeleteFailed,
 				fmt.Sprintf("%s; the service principal is still there, and this record is held until it is not",
 					result.Message))
 		}
+		logger.Info("Deleted the service principal in Databricks", "servicePrincipalId", id)
 	}
 
 	controllerutil.RemoveFinalizer(issued, dbxv1alpha1.ServicePrincipalFinalizer)
+	logger.Info("Releasing the record: nothing it names is left in Databricks")
 	return ctrl.Result{}, client.IgnoreNotFound(r.Update(ctx, issued))
 }
 
@@ -297,6 +307,8 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Context,
 	clients databricks.Clients,
 	issued *dbxv1alpha1.IssuedDatabricksServicePrincipal) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
 	// Ahead of everything, because it is a decision rather than a state to
 	// converge towards. Once a service principal this operator created has been
 	// deleted in Databricks, nothing here builds another: that deletion was made
@@ -396,6 +408,8 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 			// when. A flag would say something is wrong; an id says whom to ask.
 			issued.Status.RemovedServicePrincipalID = id
 			issued.Status.ServicePrincipalID = ""
+			logger.Info("Latching the service principal as removed in Databricks: nothing here builds "+
+				"another", "removedServicePrincipalId", id)
 			// Cleared so that no pod is equipped with a client id resolving to
 			// nothing: the DatabricksServiceAccount carries no client id, so the webhook
 			// injects none.
@@ -423,9 +437,13 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 		}
 		if !found {
-			id, clientID, err = clients.CreateServicePrincipal(ctx, issuing)
+			if id, clientID, err = clients.CreateServicePrincipal(ctx, issuing); err == nil {
+				logger.Info("Created a service principal in Databricks",
+					"servicePrincipalId", id, "clientId", clientID)
+			}
 		}
 		if err != nil {
+			logger.Error(err, "Could not create the service principal in Databricks")
 			result := outcomeFor(err)
 			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 		}
@@ -456,11 +474,28 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 
 	issued.Status.Issuer = issuer
 	issued.Status.Audience = audience
+
+	// Read before reportReady writes it again. The policy is written on every
+	// pass, so a record already reporting the exchange as working is one this
+	// pass changed nothing about -- and a line for each of those would be one per
+	// identity per interval, for ever.
+	exchangeable := meta.IsStatusConditionTrue(issued.Status.Conditions, conditionReady)
 	if err := clients.EnsureFederationPolicy(ctx,
 		issued.Status.ServicePrincipalID, issuer,
 		issued.Spec.Subject, issued.Status.Audience); err != nil {
+		logger.Error(err, "Could not write the federation policy, so no token from this cluster can be "+
+			"exchanged for this identity", "servicePrincipalId", issued.Status.ServicePrincipalID,
+			"subject", issued.Spec.Subject)
 		result := outcomeFor(err)
 		return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
+	}
+	if exchangeable {
+		logger.V(1).Info("The federation policy is still in place",
+			"servicePrincipalId", issued.Status.ServicePrincipalID)
+	} else {
+		logger.Info("Wrote the federation policy: this subject's tokens can be exchanged",
+			"servicePrincipalId", issued.Status.ServicePrincipalID, "subject", issued.Spec.Subject,
+			"issuer", issuer)
 	}
 
 	return r.reportReady(ctx, issued, metav1.ConditionTrue, reasonExchangeable,
@@ -482,6 +517,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ctx context.Context,
 	clients databricks.Clients,
 	issued *dbxv1alpha1.IssuedDatabricksServicePrincipal) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 	namespace := issued.Spec.ServiceAccount.Namespace
 
 	if issued.Status.ServicePrincipalID == "" {
@@ -546,6 +582,8 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 				"removal follows.",
 				namespace, r.DatabricksAccountNamespacedName, dbxv1alpha1.RemovingPoliciesLabel))
 	case exists && holder != removedPoliciesBy(r.DatabricksAccountNamespacedName):
+		logger.V(1).Info("Waiting for another operator to finish its federation policy removal",
+			"tenantNamespace", namespace, "holder", holder)
 		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAnotherRemoval,
 			fmt.Sprintf("namespace %s carries %s=%s, so operator %s is removing its federation "+
 				"policies there and this one waits: one removal at a time is what keeps either "+
@@ -577,6 +615,9 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 
 	if err := clients.RemoveFederationPolicies(ctx,
 		issued.Status.ServicePrincipalID, issuer, issued.Spec.Subject); err != nil {
+		logger.Error(err, "Could not remove the federation policies, so this cluster can still be exchanged "+
+			"for an identity in a namespace this account no longer serves",
+			"servicePrincipalId", issued.Status.ServicePrincipalID, "tenantNamespace", namespace)
 		result := outcomeFor(err)
 		return r.reportReady(ctx, issued, result.Status, reasonRemovePoliciesFailed,
 			fmt.Sprintf("%s; namespace %s is no longer served and this cluster can still be "+
@@ -584,6 +625,9 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 				result.Message, namespace, issued.Status.ServicePrincipalID))
 	}
 
+	logger.Info("Removed the federation policies: no token from this cluster can be exchanged for this "+
+		"identity any more", "servicePrincipalId", issued.Status.ServicePrincipalID,
+		"tenantNamespace", namespace, "subject", issued.Spec.Subject)
 	return r.settled(ctx, issued, fmt.Sprintf(
 		"namespace %s is not one DatabricksAccount %s names, so no token from this cluster can "+
 			"be exchanged for service principal %s any more. It still exists and everything "+
