@@ -484,10 +484,10 @@ func operatorOf(team, account, profile string) string {
 }
 
 // conditionOn is the reason one identity gives for the state it is in.
-func conditionOn(team, account, request, condition string) string {
+func conditionOn(team, account, profile, condition string) string {
 	return kubectlOut("-n", team, "get", "databricksserviceaccount", account, "-o",
-		fmt.Sprintf("jsonpath={.status.identities[?(@.request==%q)].conditions[?(@.type==%q)].reason}",
-			request, condition))
+		fmt.Sprintf("jsonpath={.status.identities[?(@.profile==%q)].conditions[?(@.type==%q)].reason}",
+			profile, condition))
 }
 
 // clientIDOf is what the workload presents, and what a grant to this identity

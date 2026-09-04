@@ -1011,7 +1011,7 @@ func withdraw(team, account, identity string) {
 // profile name each is keyed under.
 func requestsOn(team, serviceAccount string) []string {
 	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", serviceAccount, "-n", team,
-		"-o", "jsonpath={.status.identities[*].request}")
+		"-o", "jsonpath={.status.identities[*].profile}")
 	out, err := utils.Run(cmd)
 	if err != nil {
 		return nil
