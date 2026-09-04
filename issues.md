@@ -63,3 +63,103 @@ has no federation-policy delete. It has only `EnsureFederationPolicy`, which
 lists and creates (`internal/databricks/client.go:65`,
 `internal/databricks/servicePrincipals.go:295-332`). Closing the gate needs a
 new method on that interface and a live test for it.
+
+## No reconcile in this operator has a deadline
+
+`controller-runtime` v0.24.1, the version in `go.mod`, offers
+`ReconciliationTimeout` on a controller's `Options` and on the manager's
+`config.Controller` as a default every controller inherits.
+`pkg/controller/controller.go:114-116` documents it as "used as the timeout
+passed to the context of each Reconcile call. By default, there is no timeout."
+This repository sets it in neither place -- nothing constructs a
+`config.Controller`, and no builder chain calls `WithOptions` -- so there is no
+timeout. A `Reconcile` that does not return holds its worker, and nothing here
+bounds how long one may take.
+
+What the option does when set is narrow, and worth knowing before anyone
+reaches for it. From `pkg/internal/controller/controller.go:214-219`, it wraps
+the call in `context.WithTimeoutCause(ctx, c.ReconciliationTimeout, ...)` with
+`errReconciliationTimeout` as the cause. It cancels a context, and Go cannot
+interrupt a goroutine, so it reaches only code that reads the context. That is
+what an HTTP call or an API server read does, and it is the case that actually
+happens here -- but it is not every case.
+
+What decides the value is the whole of the decision, so it belongs in the issue
+rather than in the work. The Databricks SDK's own `defaultRetryTimeout` is five
+minutes and its `defaultHTTPTimeout` sixty seconds
+(`httpclient/api_client.go:107-119` in `databricks-sdk-go` v0.176.0), and
+`Config.SDKConfig` (`internal/databricks/config.go:102`) sets neither
+`HTTPTimeoutSeconds` nor `RetryTimeout`, so both defaults apply untouched. What
+bounds a reconcile today is therefore a decision the SDK made, not one made
+here. A reconcile timeout shorter than the SDK's retry budget cancels work the
+SDK was going to finish; one longer than it is never reached in the case it was
+written for.
+
+## One wedged object stops every other object of its kind
+
+`MaxConcurrentReconciles` is set on none of the three controllers, and
+controller-runtime defaults it to one (`pkg/controller/controller.go:244-246`).
+Each controller therefore has a single worker, and one `Reconcile` that is slow
+or stuck holds it while every other object of that kind waits in the queue
+behind it. The three have separate workers and separate queues, so this does
+not spread between them: `IssuedDatabricksServicePrincipalReconciler` stalling
+leaves `DatabricksServicePrincipalReconciler` and `DatabricksAccountReconciler`
+running.
+
+The concrete shape is `IssuedDatabricksServicePrincipalReconciler`. It owns
+every `IssuedDatabricksServicePrincipal` in the cluster and makes the
+per-identity Databricks calls -- `FindServicePrincipal`,
+`CreateServicePrincipal`, `ServicePrincipalExists`, `EnsureFederationPolicy`.
+One identity whose call is retrying against the SDK's five-minute budget holds
+every other identity in the cluster behind it for as long as that takes.
+`DatabricksAccountReconciler` calls Databricks too -- `verifyAccount` lists the
+account's workspaces on every pass -- but it reconciles the one selected
+`DatabricksAccount`, so its single worker has nothing queued behind it. It
+stalls in the same way and costs something different: while it is stalled the
+`Holder` is not updated, so a spec that has been repointed is neither installed
+nor withdrawn.
+
+What the decision turns on is not whether a second worker would help but what
+it would be doing at the same time, because these reconcilers write to
+Databricks. Read `internal/databricks/holder.go`'s `Snapshot` and the reasoning
+it carries first: a pass takes one view of the account at the top precisely
+because asking "which account am I in" and then calling into another is
+unrecoverable and silent -- a lookup in the wrong account returns the same 404
+as a deleted identity, and a create in one account stamped with the other's id
+is an identity nothing can find. `Snapshot` settles that for one pass against a
+changing declaration. It says nothing about two passes running at once against
+the same identity, and that is the question a second worker asks.
+
+## Nothing restarts an operator that has stopped reconciling
+
+`cmd/main.go:313` registers `mgr.AddHealthzCheck("healthz", healthz.Ping)`, and
+`healthz.Ping` is `func(_ *http.Request) error { return nil }`. The Deployment
+does wire a liveness probe at `/healthz`
+(`config/manager/manager.yaml:104-109`), so the shape is there -- it just
+cannot fail, and the kubelet never restarts this pod. Readiness is
+`CacheSynced.Check` (`internal/controller/readiness.go`), registered at
+`cmd/main.go:326`, which reports whether the cache finished filling and stays
+true afterwards. Neither probe has anything to do with whether reconciles are
+still happening.
+
+Two things make a stall invisible rather than merely unrecovered. Leader
+election renews its lease from its own goroutine
+(`client-go/tools/leaderelection/leaderelection.go:279`), so a wedged process
+keeps the lease and no other replica takes over -- `--leader-elect` is passed in
+`config/manager/manager.yaml:64`, and `replicas` is 1, so today there is no
+other replica in any case. And there is no logging anywhere in `internal/`:
+grep for `FromContext`, `logf.`, `ctrl.Log` or `logr.` across the non-test files
+and nothing comes back. So nothing is printed either. The only place a stall
+shows is that conditions on the objects stop being updated, which somebody has
+to go and look at.
+
+A timeout does not answer this one, which is why it is a separate issue and not
+the same one. Cancelling a context reaches only code that reads it; a goroutine
+that does not is unreachable, and the sole remaining lever is ending the process
+and letting the kubelet start it again. That is what a liveness check that can
+fail is for, and this operator does not have one. Note what `readiness.go`
+already settled and what it did not: it argues deliberately that liveness must
+not be gated on cache sync, because a cache that is slow to fill is not a
+process to kill and restarting would only start the filling again. That
+reasoning is about startup. It leaves untouched the question of a process that
+finished starting and then stopped working.
