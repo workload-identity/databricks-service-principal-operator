@@ -177,9 +177,10 @@ const (
 	// ServicePrincipalFinalizer holds an IssuedDatabricksServicePrincipal until
 	// the service principal it records has been deleted in Databricks.
 	//
-	// It is on the record and not on the projection, which is the difference
-	// between an identity that is destroyed when its record says so and one
-	// destroyed by whichever kind a namespace teardown happened to delete first.
+	// It is on the record and not on the DatabricksServiceAccount, which is the
+	// difference between an identity that is destroyed when its record says so and
+	// one destroyed by whichever kind a namespace teardown happened to delete
+	// first.
 	//
 	// It is never dropped on a timeout. Removing it while the service principal
 	// is still there would be the operator deciding that an identity outliving

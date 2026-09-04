@@ -117,7 +117,7 @@ func (r *stubAccount) clients() *clients {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	return &clients{cfg: Config{AccountID: testAccountID}, account: ac}
+	return &clients{cfg: Config{AccountID: testAccountID}, accountClient: ac}
 }
 
 // Account paths, spelled once. Each was taken from what the SDK actually

@@ -139,16 +139,16 @@ func (i *PodTokenInjector) Handle(ctx context.Context, req admission.Request) ad
 		namespace = pod.Namespace
 	}
 
-	account := pod.Spec.ServiceAccountName
-	if account == "" {
-		account = "default"
+	serviceAccount := pod.Spec.ServiceAccountName
+	if serviceAccount == "" {
+		serviceAccount = "default"
 	}
 
 	// The identity is what says this pod's ServiceAccount asked and was allowed.
 	// Reading it rather than re-deriving the answer means the webhook and the
 	// controller cannot disagree about who gets a token.
 	var principal dbxv1alpha1.DatabricksServiceAccount
-	switch err := i.Get(ctx, types.NamespacedName{Namespace: namespace, Name: account}, &principal); {
+	switch err := i.Get(ctx, types.NamespacedName{Namespace: namespace, Name: serviceAccount}, &principal); {
 	case apierrors.IsNotFound(err):
 		return admission.Allowed("no Databricks identity for this ServiceAccount")
 	case err != nil:

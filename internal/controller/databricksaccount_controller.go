@@ -83,11 +83,11 @@ type DatabricksAccountReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	// Account is the object this operator was told to use, by the
+	// The DatabricksAccount this operator was told to use, by the
 	// --databricks-account flag and its own namespace. Anything else is left
 	// alone rather than adopted: which account the operator acts in is a
 	// decision made when it is deployed, not by whoever can create an object.
-	Account types.NamespacedName
+	DatabricksAccountNamespacedName types.NamespacedName
 
 	// Holder is what the other controllers hold. This controller is the only
 	// writer.
@@ -112,12 +112,13 @@ type DatabricksAccountReconciler struct {
 // writes none of them.
 // +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksserviceaccounts,verbs=get;list;watch
 
-// The only object this operator writes that it does not own -- the projections
-// beside it are its own kind, which it makes and deletes. What it writes is one
-// label key of its own, saying it is withdrawing from a namespace this account
-// has stopped naming, and it takes that key off again when it has finished.
-// MintLabel and InjectLabel are the cluster's, given to every operator serving
-// the namespace at once, and nothing here reads or moves them.
+// The only object this operator writes that it does not own -- the
+// DatabricksServiceAccounts beside it are its own kind, which it makes and
+// deletes. What it writes is one label key of its own, saying it is withdrawing
+// from a namespace this account has stopped naming, and it takes that key off
+// again when it has finished. MintLabel and InjectLabel are the cluster's,
+// given to every operator serving the namespace at once, and nothing here reads
+// or moves them.
 //
 // patch and not update, which is what confines the write to that one key: an
 // update sends a whole Namespace, including a quota controller's annotations and
@@ -138,20 +139,20 @@ type DatabricksAccountReconciler struct {
 // Only the object being deleted clears them, because then there is nothing left
 // to act as.
 func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	if req.NamespacedName != r.Account {
+	if req.NamespacedName != r.DatabricksAccountNamespacedName {
 		// Not the one this operator was told to use. Its own status says so;
 		// see setNotSelected below.
 		return ctrl.Result{}, r.setNotSelected(ctx, req.NamespacedName)
 	}
 
-	var account dbxv1alpha1.DatabricksAccount
-	if err := r.Get(ctx, req.NamespacedName, &account); err != nil {
+	var databricksAccount dbxv1alpha1.DatabricksAccount
+	if err := r.Get(ctx, req.NamespacedName, &databricksAccount); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
 		}
 		// Deleted. There is no account to act in, and saying so is better than
 		// acting in one nobody has declared.
-		r.Holder.Clear(fmt.Sprintf("DatabricksAccount %s was deleted", r.Account))
+		r.Holder.Clear(fmt.Sprintf("DatabricksAccount %s was deleted", r.DatabricksAccountNamespacedName))
 		return ctrl.Result{}, nil
 	}
 
@@ -163,12 +164,12 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// other half went missing, for the same one failure.
 	claims, claimsErr := databricks.ReadTokenClaims(r.Runtime.OIDCTokenFilepath)
 	if claimsErr == nil {
-		account.Status.Subject = claims.Subject
+		databricksAccount.Status.Subject = claims.Subject
 		if len(claims.Audience) > 0 {
-			account.Status.Audience = claims.Audience[0]
+			databricksAccount.Status.Audience = claims.Audience[0]
 		}
 	}
-	r.reportPrepared(&account, claims, claimsErr)
+	r.reportPrepared(&databricksAccount, claims, claimsErr)
 
 	records, err := r.records(ctx)
 	if err != nil {
@@ -181,15 +182,16 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// switch left the previous pass's "every identity was made in this account"
 	// standing under a spec naming another -- a present-tense claim, about the
 	// wrong account, on the object whose edit caused it.
-	r.reportAgreement(&account, records)
+	r.reportAgreement(&databricksAccount, records)
 
 	// Also before the account is contacted, and for a stronger reason than
 	// knowability: suspending minting needs nothing from Databricks, and a
 	// namespace this account has stopped naming must not go on minting into it
 	// for as long as Databricks happens to be unreachable.
-	withdrawn := r.withdraw(ctx, &account, records)
+	withdrawn := r.withdraw(ctx, &databricksAccount, records)
 
-	cfg := r.Runtime.ForAccount(account.Spec.Host, account.Spec.AccountID, account.Spec.ClientID)
+	cfg := r.Runtime.ForAccount(databricksAccount.Spec.Host,
+		databricksAccount.Spec.AccountID, databricksAccount.Spec.ClientID)
 
 	// Withdrawn before the new declaration is tried, not after it succeeds.
 	//
@@ -207,12 +209,12 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if installed, ok := r.Holder.BuiltFrom(); ok && installed != cfg {
 		r.Holder.Clear(fmt.Sprintf(
 			"DatabricksAccount %s was changed to name Databricks account %s, and that has not "+
-				"been verified yet; read its status", r.Account, account.Spec.AccountID))
+				"been verified yet; read its status", r.DatabricksAccountNamespacedName, databricksAccount.Spec.AccountID))
 	}
 
 	clients, err := r.build(cfg)
 	if err != nil {
-		return r.report(ctx, &account, metav1.ConditionFalse, reasonInvalidSpec, err.Error())
+		return r.report(ctx, &databricksAccount, metav1.ConditionFalse, reasonInvalidSpec, err.Error())
 	}
 
 	if err := r.verify(ctx, clients); err != nil {
@@ -224,7 +226,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			message = fmt.Sprintf("%s (and the operator's own token could not be read: %v)", message, claimsErr)
 		}
 		result := outcomeFor(err)
-		return r.report(ctx, &account, result.Status, result.Reason, message)
+		return r.report(ctx, &databricksAccount, result.Status, result.Reason, message)
 	}
 
 	r.Holder.Set(cfg, clients)
@@ -235,8 +237,8 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// reached with the claims at their zero value, and rendering from them puts
 	// "as " on a Ready account. The status keeps the last one read for the same
 	// reason it is not blanked above: the value is not wrong, it was not read.
-	result, err := r.report(ctx, &account, metav1.ConditionTrue, reasonAccountReady,
-		fmt.Sprintf("acting in account %s as %s", account.Spec.AccountID, account.Status.Subject))
+	result, err := r.report(ctx, &databricksAccount, metav1.ConditionTrue, reasonAccountReady,
+		fmt.Sprintf("acting in account %s as %s", databricksAccount.Spec.AccountID, databricksAccount.Status.Subject))
 	if !withdrawn {
 		// The settled interval is long because a working account has nobody
 		// waiting on it. A withdrawal that has not finished has somebody waiting
@@ -261,7 +263,7 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 func (r *DatabricksAccountReconciler) records(ctx context.Context) (
 	[]dbxv1alpha1.IssuedDatabricksServicePrincipal, error) {
 	var identities dbxv1alpha1.IssuedDatabricksServicePrincipalList
-	if err := r.List(ctx, &identities, client.InNamespace(r.Account.Namespace)); err != nil {
+	if err := r.List(ctx, &identities, client.InNamespace(r.DatabricksAccountNamespacedName.Namespace)); err != nil {
 		return nil, err
 	}
 	return identities.Items, nil
@@ -273,19 +275,19 @@ func (r *DatabricksAccountReconciler) records(ctx context.Context) (
 // Read from what this operator recorded rather than from Databricks, and the
 // count is only a report -- a failure to produce it makes the line wrong, never
 // the operator unusable.
-func (r *DatabricksAccountReconciler) reportAgreement(account *dbxv1alpha1.DatabricksAccount,
+func (r *DatabricksAccountReconciler) reportAgreement(databricksAccount *dbxv1alpha1.DatabricksAccount,
 	records []dbxv1alpha1.IssuedDatabricksServicePrincipal) {
 	elsewhere := map[string]int{}
 	for i := range records {
 		made := records[i].Status.AccountID
-		if made == "" || made == account.Spec.AccountID {
+		if made == "" || made == databricksAccount.Spec.AccountID {
 			continue
 		}
 		elsewhere[made]++
 	}
 
 	if len(elsewhere) == 0 {
-		setCondition(&account.Status.Conditions, account.Generation, conditionAccountsAgree,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionAccountsAgree,
 			metav1.ConditionTrue, reasonHere,
 			"every identity this operator issued was made in this account")
 		return
@@ -304,7 +306,7 @@ func (r *DatabricksAccountReconciler) reportAgreement(account *dbxv1alpha1.Datab
 		parts = append(parts, fmt.Sprintf("%d in %s", elsewhere[made], made))
 	}
 
-	setCondition(&account.Status.Conditions, account.Generation, conditionAccountsAgree,
+	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionAccountsAgree,
 		metav1.ConditionFalse, reasonElsewhere,
 		fmt.Sprintf("%d identit(ies) this operator issued were made in another Databricks account "+
 			"(%s). Nothing is done for them and nothing about them is known from here; their "+
@@ -339,14 +341,14 @@ func (r *DatabricksAccountReconciler) reportAgreement(account *dbxv1alpha1.Datab
 // withdrawn on the other, at the same time, for ever.
 func accountServes(ctx context.Context, reader client.Reader,
 	name types.NamespacedName, namespace string) (declared, served bool, err error) {
-	var account dbxv1alpha1.DatabricksAccount
-	switch err := reader.Get(ctx, name, &account); {
+	var databricksAccount dbxv1alpha1.DatabricksAccount
+	switch err := reader.Get(ctx, name, &databricksAccount); {
 	case apierrors.IsNotFound(err):
 		return false, false, nil
 	case err != nil:
 		return false, false, err
 	}
-	return true, account.Spec.Serves(namespace), nil
+	return true, databricksAccount.Spec.Serves(namespace), nil
 }
 
 // withdraw suspends minting in every namespace this operator issued something in
@@ -372,7 +374,7 @@ func accountServes(ctx context.Context, reader client.Reader,
 // and holding it any longer would leave every other operator serving that
 // namespace unable to mint for a withdrawal that had finished.
 func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
-	account *dbxv1alpha1.DatabricksAccount,
+	databricksAccount *dbxv1alpha1.DatabricksAccount,
 	records []dbxv1alpha1.IssuedDatabricksServicePrincipal) bool {
 	// Every namespace out of scope, and how many identities in it this cluster
 	// can still be exchanged for. The namespace is entered whether or not any of
@@ -382,7 +384,7 @@ func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
 	holding := map[string]int{}
 	for i := range records {
 		namespace := records[i].Spec.ServiceAccount.Namespace
-		if account.Spec.Serves(namespace) {
+		if databricksAccount.Spec.Serves(namespace) {
 			continue
 		}
 		if _, seen := holding[namespace]; !seen {
@@ -394,7 +396,7 @@ func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
 	}
 
 	if len(holding) == 0 {
-		setCondition(&account.Status.Conditions, account.Generation, conditionNamespacesWithdrawn,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionNamespacesWithdrawn,
 			metav1.ConditionTrue, reasonWithdrawn,
 			"every namespace this operator issued an identity in is one this account names")
 		return true
@@ -425,7 +427,7 @@ func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
 	}
 
 	if len(unclaimed) == 0 && len(stillHeld) == 0 && len(trusted) == 0 {
-		setCondition(&account.Status.Conditions, account.Generation, conditionNamespacesWithdrawn,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionNamespacesWithdrawn,
 			metav1.ConditionTrue, reasonWithdrawn,
 			fmt.Sprintf("this account no longer serves %s: no token from this cluster can be "+
 				"exchanged for the identities it issued there, and minting is no longer "+
@@ -461,9 +463,9 @@ func (r *DatabricksAccountReconciler) withdraw(ctx context.Context,
 		said = append(said, fmt.Sprintf(
 			"identities in %s can still be exchanged for from this cluster; their records say "+
 				"why under Ready, in namespace %s",
-			strings.Join(trusted, ", "), r.Account.Namespace))
+			strings.Join(trusted, ", "), r.DatabricksAccountNamespacedName.Namespace))
 	}
-	setCondition(&account.Status.Conditions, account.Generation, conditionNamespacesWithdrawn,
+	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionNamespacesWithdrawn,
 		metav1.ConditionFalse, reasonWithdrawing,
 		fmt.Sprintf("%s. Nothing has been destroyed by this and nothing is destroyed by its not "+
 			"finishing: every service principal and every grant on it is where it was.",
@@ -520,7 +522,7 @@ func (r *DatabricksAccountReconciler) acquireWithdrawal(ctx context.Context, nam
 		return nil
 	}
 
-	err := r.Apply(ctx, withdrawingBy(name, r.Account, time.Now()), r.owner())
+	err := r.Apply(ctx, withdrawingBy(name, r.DatabricksAccountNamespacedName, time.Now()), r.owner())
 	if !apierrors.IsConflict(err) {
 		return err
 	}
@@ -552,7 +554,8 @@ func (r *DatabricksAccountReconciler) acquireWithdrawal(ctx context.Context, nam
 	// ago that waiting for it is waiting for nothing, and the operator it is
 	// taken from finds out the same way anybody else does: its next apply is
 	// refused, because the field is no longer its own.
-	return r.Apply(ctx, withdrawingBy(name, r.Account, time.Now()), r.owner(), client.ForceOwnership)
+	return r.Apply(ctx, withdrawingBy(name, r.DatabricksAccountNamespacedName, time.Now()),
+		r.owner(), client.ForceOwnership)
 }
 
 // releaseWithdrawal gives a namespace back, by applying the same object without
@@ -569,7 +572,7 @@ func (r *DatabricksAccountReconciler) releaseWithdrawal(ctx context.Context, nam
 	case err != nil:
 		return err
 	}
-	if namespace.Labels[dbxv1alpha1.WithdrawingLabel] != withdrawnBy(r.Account) {
+	if namespace.Labels[dbxv1alpha1.WithdrawingLabel] != withdrawnBy(r.DatabricksAccountNamespacedName) {
 		return nil
 	}
 	return r.Apply(ctx, corev1ac.Namespace(name), r.owner())
@@ -616,7 +619,7 @@ func withdrawnBy(account types.NamespacedName) string {
 }
 
 func (r *DatabricksAccountReconciler) owner() client.FieldOwner {
-	return fieldOwnerFor(r.Account)
+	return fieldOwnerFor(r.DatabricksAccountNamespacedName)
 }
 
 // setNotSelected marks an account this operator was not told to use.
@@ -626,22 +629,24 @@ func (r *DatabricksAccountReconciler) owner() client.FieldOwner {
 // running, and the object that is in use is named here so the difference is one
 // kubectl away.
 func (r *DatabricksAccountReconciler) setNotSelected(ctx context.Context, name types.NamespacedName) error {
-	var account dbxv1alpha1.DatabricksAccount
-	if err := r.Get(ctx, name, &account); err != nil {
+	var databricksAccount dbxv1alpha1.DatabricksAccount
+	if err := r.Get(ctx, name, &databricksAccount); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	setCondition(&account.Status.Conditions, account.Generation, conditionReady,
+	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionReady,
 		metav1.ConditionFalse, reasonNotSelected,
-		fmt.Sprintf("this operator uses %s; change --databricks-account to select this one instead", r.Account))
-	return client.IgnoreNotFound(r.Status().Update(ctx, &account))
+		fmt.Sprintf("this operator uses %s; change --databricks-account to select this one instead",
+			r.DatabricksAccountNamespacedName))
+	return client.IgnoreNotFound(r.Status().Update(ctx, &databricksAccount))
 }
 
-func (r *DatabricksAccountReconciler) report(ctx context.Context, account *dbxv1alpha1.DatabricksAccount,
+func (r *DatabricksAccountReconciler) report(ctx context.Context, databricksAccount *dbxv1alpha1.DatabricksAccount,
 	status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
-	setCondition(&account.Status.Conditions, account.Generation, conditionReady, status, reason, message)
+	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionReady,
+		status, reason, message)
 	return ctrl.Result{
 		RequeueAfter: retryAfterFor(status, accountRetryAfterAwaited, accountRetryAfterSettled),
-	}, client.IgnoreNotFound(r.Status().Update(ctx, account))
+	}, client.IgnoreNotFound(r.Status().Update(ctx, databricksAccount))
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -666,11 +671,11 @@ func (r *DatabricksAccountReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // projected token was accepted, the federation policy matched, the account id is
 // right, and the service principal can read something.
 func verifyAccount(ctx context.Context, clients databricks.Clients) error {
-	account := clients.Account()
-	if account == nil {
+	accountClient := clients.AccountClient()
+	if accountClient == nil {
 		return fmt.Errorf("no account client was built")
 	}
-	if _, err := account.Workspaces.List(ctx); err != nil {
+	if _, err := accountClient.Workspaces.List(ctx); err != nil {
 		return fmt.Errorf("listing the account's workspaces: %w", err)
 	}
 	return nil
@@ -700,11 +705,11 @@ func verifyAccount(ctx context.Context, clients databricks.Clients) error {
 // for no reason.
 func accountChangedForRecords(selected types.NamespacedName) predicate.Predicate {
 	ready := func(o client.Object) bool {
-		account, ok := o.(*dbxv1alpha1.DatabricksAccount)
-		if !ok || client.ObjectKeyFromObject(account) != selected {
+		databricksAccount, ok := o.(*dbxv1alpha1.DatabricksAccount)
+		if !ok || client.ObjectKeyFromObject(databricksAccount) != selected {
 			return false
 		}
-		for _, c := range account.Status.Conditions {
+		for _, c := range databricksAccount.Status.Conditions {
 			if c.Type == conditionReady {
 				return c.Status == metav1.ConditionTrue
 			}
@@ -716,11 +721,11 @@ func accountChangedForRecords(selected types.NamespacedName) predicate.Predicate
 	// in the cluster. Another account's answer is nil on both sides, so nothing
 	// it does compares as a change here.
 	served := func(o client.Object) []string {
-		account, ok := o.(*dbxv1alpha1.DatabricksAccount)
-		if !ok || client.ObjectKeyFromObject(account) != selected {
+		databricksAccount, ok := o.(*dbxv1alpha1.DatabricksAccount)
+		if !ok || client.ObjectKeyFromObject(databricksAccount) != selected {
 			return nil
 		}
-		return slices.Sorted(slices.Values(account.Spec.Namespaces))
+		return slices.Sorted(slices.Values(databricksAccount.Spec.Namespaces))
 	}
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool { return ready(e.Object) },
@@ -783,11 +788,11 @@ func issuedRequests(list client.ObjectList) []reconcile.Request {
 // it reports fails independently: the account can be reached and read while this
 // is false, and it stays that way for as long as the SDK holds the access token
 // it already exchanged.
-func (r *DatabricksAccountReconciler) reportPrepared(account *dbxv1alpha1.DatabricksAccount,
+func (r *DatabricksAccountReconciler) reportPrepared(databricksAccount *dbxv1alpha1.DatabricksAccount,
 	claims databricks.TokenClaims, err error) {
 	switch {
 	case err != nil:
-		setCondition(&account.Status.Conditions, account.Generation, conditionPrepared,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionPrepared,
 			metav1.ConditionFalse, reasonUnprepared,
 			fmt.Sprintf("the operator's own projected token could not be read (%v), so the "+
 				"issuer every federation policy names and the audience every pod is given are "+
@@ -795,18 +800,18 @@ func (r *DatabricksAccountReconciler) reportPrepared(account *dbxv1alpha1.Databr
 				"workloads are unaffected: exchanging a token does not go through this operator.",
 				err))
 	case strings.TrimSpace(claims.Issuer) == "":
-		setCondition(&account.Status.Conditions, account.Generation, conditionPrepared,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionPrepared,
 			metav1.ConditionFalse, reasonUnprepared,
 			"the operator's own projected token carries no iss claim, so the issuer every "+
 				"federation policy names is unknown. No identity can be issued or converged.")
 	case len(claims.Audience) == 0 || claims.Audience[0] == "":
-		setCondition(&account.Status.Conditions, account.Generation, conditionPrepared,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionPrepared,
 			metav1.ConditionFalse, reasonUnprepared,
 			"the operator's own projected token carries no aud claim, so the audience every "+
 				"pod is given is unknown. A federation policy naming none is one no token can "+
 				"satisfy, so nothing is written.")
 	default:
-		setCondition(&account.Status.Conditions, account.Generation, conditionPrepared,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionPrepared,
 			metav1.ConditionTrue, reasonPrepared,
 			fmt.Sprintf("writing %s into every federation policy and giving %s to every pod",
 				claims.Issuer, claims.Audience[0]))

@@ -189,10 +189,10 @@ func operatorRef() string { return operatorNamespace + "/" + accountName }
 // operator's only identity, which is what nearly every ServiceAccount wants.
 const unnamed = ""
 
-// unnamedProfile is what that identity is called everywhere afterwards -- on the
-// projection, in the pod's configuration, and in the path its token is at.
-// Having no name of its own it is named by what its key held, so this is
-// operatorRef by rule rather than by coincidence.
+// unnamedProfile is what that identity is called everywhere afterwards -- on
+// the DatabricksServiceAccount, in the pod's configuration, and in the path its
+// token is at. Having no name of its own it is named by what its key held, so
+// this is operatorRef by rule rather than by coincidence.
 func unnamedProfile() string { return operatorRef() }
 
 // kubectl runs one command against the cluster this run was given.
@@ -240,10 +240,10 @@ func databricksAccountID() string { return accountID }
 
 // exists asks Databricks whether a service principal is there.
 func exists(id string) bool {
-	// Named rather than assumed. Every caller here got this id from a projection
-	// that may not carry one yet, and "is it there" asked of nothing is a
-	// question with no true answer -- so a spec that asked it would pass or fail
-	// on something it never checked.
+	// Named rather than assumed. Every caller here got this id from a
+	// DatabricksServiceAccount that may not carry one yet, and "is it there" asked
+	// of nothing is a question with no true answer -- so a spec that asked it
+	// would pass or fail on something it never checked.
 	ExpectWithOffset(1, id).NotTo(BeEmpty(),
 		"asked whether a service principal is in Databricks without having one to ask about")
 	there, err := clients.ServicePrincipalExists(context.Background(), id)
@@ -419,9 +419,9 @@ spec:
 `, name, team, account))
 }
 
-// projection is enough of a DatabricksServiceAccount to answer what the
-// operator says it issued.
-type projection struct {
+// Enough of the object to answer what the operator says it issued. The suite
+// reads it back as JSON, so a field nothing here asserts on is left out.
+type databricksServiceAccount struct {
 	Status struct {
 		Identities []struct {
 			Profile                   string `json:"profile"`
@@ -433,17 +433,17 @@ type projection struct {
 	} `json:"status"`
 }
 
-func read(team, account string) projection {
+func read(team, account string) databricksServiceAccount {
 	out := kubectlOut("-n", team, "get", "databricksserviceaccount", account, "-o", "json")
-	var p projection
+	var p databricksServiceAccount
 	if out == "" || json.Unmarshal([]byte(out), &p) != nil {
-		return projection{}
+		return databricksServiceAccount{}
 	}
 	return p
 }
 
-// requestsOn lists the identities the projection carries, by the profile name
-// each is keyed under.
+// requestsOn lists the identities the DatabricksServiceAccount carries, by the
+// profile name each is keyed under.
 //
 // Not "as the asker wrote them": a named identity is keyed by the name in its
 // key, but the unnamed one is keyed by the operator's reference, which nobody

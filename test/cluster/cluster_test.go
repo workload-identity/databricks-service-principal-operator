@@ -430,10 +430,11 @@ var _ = Describe("Identities", Ordered, func() {
 	})
 
 	It("stops wanting the record too, which is the half nothing collects", func() {
-		// The projection is owned by the ServiceAccount and is collected by the
-		// control plane. The record is owned by nothing -- deliberately, so that
-		// a namespace teardown cannot take it -- so its going is this operator's
-		// own work, and nothing else in the cluster would notice if it stopped.
+		// The DatabricksServiceAccount is owned by the ServiceAccount and is
+		// collected by the control plane. The record is owned by nothing --
+		// deliberately, so that a namespace teardown cannot take it -- so its going
+		// is this operator's own work, and nothing else in the cluster would notice
+		// if it stopped.
 		Eventually(func() []string {
 			return recordsStillWanted()
 		}, time.Minute, time.Second).ShouldNot(ContainElement(ContainSubstring(team+"."+account)),
@@ -492,7 +493,7 @@ var _ = Describe("Several identities", Ordered, func() {
 		Eventually(func() []string {
 			return requestsOn(team, account)
 		}, time.Minute, time.Second).Should(ConsistOf("reader", "writer"),
-			"the projection does not carry both identities under the names they were asked by, "+
+			"the DatabricksServiceAccount does not carry both identities under the names they were asked by, "+
 				"which are the names a workload will pass to the SDK")
 	})
 
@@ -525,18 +526,18 @@ var _ = Describe("Several identities", Ordered, func() {
 			"deleting one identity's key took the one still asked for")
 	})
 
-	It("takes the projection with the last of them", func() {
-		// Withdrawing the last entry is an apply that removes the only field
-		// this status has, and what a real API server does with that is the
-		// thing a fake client cannot show: the merge writes null and the write
-		// is refused, leaving a projection that reports Ready for identities
-		// that no longer exist.
+	It("takes the DatabricksServiceAccount with the last of them", func() {
+		// Withdrawing the last entry is an apply that removes the only field this
+		// status has, and what a real API server does with that is the thing a fake
+		// client cannot show: the merge writes null and the write is refused, leaving
+		// a DatabricksServiceAccount that reports Ready for identities that no longer
+		// exist.
 		withdraw(team, account, "writer")
 
 		Eventually(func() string {
 			return identityNames(team)
 		}, time.Minute, time.Second).Should(BeEmpty(),
-			"the projection outlived the request that made it")
+			"the DatabricksServiceAccount outlived the request that made it")
 		Eventually(func() []string {
 			return recordsStillWanted()
 		}, time.Minute, time.Second).ShouldNot(ContainElement(ContainSubstring(team+"."+account+".writer")),
@@ -689,8 +690,9 @@ var _ = Describe("A key this operator will not act on", Ordered, func() {
 //
 // The identities are put in by hand because nothing here can mint them, and
 // what is being tested starts after minting. Every other Describe leaves the
-// projection to the operator; this one owns it, so the namespace is enabled for
-// injection and for nothing else, and this operator is never told to serve it.
+// DatabricksServiceAccount to the operator; this one owns it, so the namespace
+// is enabled for injection and for nothing else, and this operator is never
+// told to serve it.
 var _ = Describe("What a pod is equipped with", Ordered, func() {
 	const (
 		team    = "cluster-pod"
@@ -784,11 +786,11 @@ var _ = Describe("What a pod is equipped with", Ordered, func() {
 // equipTeam builds a namespace whose pods are equipped but whose identities are
 // nobody's work but this test's.
 //
-// The projection is written whole, status included, because the operator is
-// never told to serve this namespace and so never writes one. A client id is
-// what the webhook waits for -- an identity without one cannot be exchanged for
-// anything -- so these carry one, and it stands for a minted identity in the
-// only way this cluster allows.
+// The DatabricksServiceAccount is written whole, status included, because the
+// operator is never told to serve this namespace and so never writes one. A
+// client id is what the webhook waits for -- an identity without one cannot be
+// exchanged for anything -- so these carry one, and it stands for a minted
+// identity in the only way this cluster allows.
 //
 // The identities are profile names, which is what the webhook reads and what the
 // entries are keyed by. Each is written as this operator's because an entry has
@@ -1005,8 +1007,8 @@ func withdraw(team, account, identity string) {
 	Expect(err).NotTo(HaveOccurred(), "Failed to withdraw identity %q", identity)
 }
 
-// requestsOn lists the identities the projection carries, by the profile name
-// each is keyed under.
+// requestsOn lists the identities the DatabricksServiceAccount carries, by the
+// profile name each is keyed under.
 func requestsOn(team, account string) []string {
 	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", account, "-n", team,
 		"-o", "jsonpath={.status.identities[*].request}")

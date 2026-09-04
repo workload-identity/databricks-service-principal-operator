@@ -40,9 +40,9 @@ import (
 // ways, and the second is the quiet one:
 //
 //   - the conversion sends a field that was not set -- the ownership bug above;
-//   - the conversion drops a field that was set -- the projection silently stops
-//     reporting it, and nothing else notices, because every reader of this
-//     object is a person.
+//   - the conversion drops a field that was set -- the DatabricksServiceAccount
+//     silently stops reporting it, and nothing else notices, because every
+//     reader of this object is a person.
 func TestTheProjectionSendsOnlyWhatIsSet(t *testing.T) {
 	t.Parallel()
 
@@ -92,7 +92,7 @@ func TestTheProjectionSendsOnlyWhatIsSet(t *testing.T) {
 				return
 			}
 			if _, carried := sent[name]; !carried {
-				t.Errorf("%s was set and is not sent; the projection stops reporting it and "+
+				t.Errorf("%s was set and is not sent; the DatabricksServiceAccount stops reporting it and "+
 					"nothing fails -- everything that reads this object is a person", name)
 			}
 			delete(sent, name)

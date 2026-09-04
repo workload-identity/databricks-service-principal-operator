@@ -178,9 +178,10 @@ func TestManagerStartsWithWhatTheManifestSupplies(t *testing.T) {
 //
 // The cluster-wide half is bounded a second way, by verb. Everything the
 // operator reaches outside its own namespace it reads, apart from the
-// projections it owns and one label of its own on a Namespace its account has
-// stopped naming -- and that one is patch, so the grant is a single label key
-// rather than the standing ability to rewrite every namespace in the cluster.
+// DatabricksServiceAccounts it owns and one label of its own on a Namespace its
+// account has stopped naming -- and that one is patch, so the grant is a single
+// label key rather than the standing ability to rewrite every namespace in the
+// cluster.
 func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join("..", "..", "config", "rbac", "role.yaml")
@@ -237,9 +238,10 @@ func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 		}
 	}
 
-	// What this operator may write outside its own namespace: the projections it
-	// owns, and one label of its own on a Namespace its account has stopped
-	// naming. Everything else it reaches out there, it only reads.
+	// What this operator may write outside its own namespace: the
+	// DatabricksServiceAccounts it owns, and one label of its own on a Namespace
+	// its account has stopped naming. Everything else it reaches out there, it
+	// only reads.
 	//
 	// patch and not update on a Namespace, and the difference is the whole
 	// justification for the grant. patch sends one label key and one annotation;
@@ -262,7 +264,7 @@ func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 					"standing power to rewrite every namespace in the cluster", verb)
 			default:
 				t.Errorf("the ClusterRole grants %s on %s; what this operator writes outside its "+
-					"own namespace is the projections it owns and one label of its own on a "+
+					"own namespace is the DatabricksServiceAccounts it owns and one label of its own on a "+
 					"namespace it no longer serves", verb, resource)
 			}
 		}

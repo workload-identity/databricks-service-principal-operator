@@ -30,7 +30,10 @@ type namingClients struct {
 
 func (n *namingClients) name(what string, given ...any) { n.called, n.given = what, given }
 
-func (n *namingClients) Account() *databricks.AccountClient { n.name("Account"); return nil }
+func (n *namingClients) AccountClient() *databricks.AccountClient {
+	n.name("AccountClient")
+	return nil
+}
 
 func (n *namingClients) Snapshot() Clients { n.name("Snapshot"); return n }
 
@@ -142,16 +145,16 @@ func delegates(t *testing.T) map[string]delegate {
 		},
 	}
 
-	// Account and AccountID return no error, so neither can be driven by a table
-	// keyed on one. Snapshot is not a call that is passed on at all: it answers
-	// about the Holder itself, and with nothing installed it returns a stand-in
-	// rather than an error, which is the whole of what makes a caller able to
-	// hold one thing. All three are covered separately below; everything else
-	// has to be here.
+	// AccountClient and AccountID return no error, so neither can be driven by a
+	// table keyed on one. Snapshot is not a call that is passed on at all: it
+	// answers about the Holder itself, and with nothing installed it returns a
+	// stand-in rather than an error, which is the whole of what makes a caller
+	// able to hold one thing. All three are covered separately below; everything
+	// else has to be here.
 	iface := reflect.TypeFor[Clients]()
 	for method := range iface.Methods() {
 		name := method.Name
-		if name == "Account" || name == "AccountID" || name == "Snapshot" {
+		if name == "AccountClient" || name == "AccountID" || name == "Snapshot" {
 			continue
 		}
 		if _, ok := table[name]; !ok {
@@ -202,7 +205,7 @@ func TestNothingConfiguredIsSaidRatherThanCrashed(t *testing.T) {
 	if holder.Configured() {
 		t.Error("reports configured while holding nothing")
 	}
-	if holder.Account() != nil {
+	if holder.AccountClient() != nil {
 		t.Error("handed out an account client while holding nothing")
 	}
 

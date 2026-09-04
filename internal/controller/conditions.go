@@ -236,10 +236,10 @@ const (
 	reasonWithdrawn   = "Withdrawn"
 	reasonWithdrawing = "Withdrawing"
 
-	// reasonAwaitingRecord is a projection whose record exists and has not been
-	// acted on yet. It is the ordinary first moment of an identity's life, and
-	// it is reported rather than left blank so that a workload starting into it
-	// sees something other than silence.
+	// reasonAwaitingRecord is a DatabricksServiceAccount whose record exists and
+	// has not been acted on yet. It is the ordinary first moment of an identity's
+	// life, and it is reported rather than left blank so that a workload starting
+	// into it sees something other than silence.
 	reasonAwaitingRecord = "AwaitingRecord"
 )
 

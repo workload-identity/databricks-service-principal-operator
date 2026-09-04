@@ -299,7 +299,7 @@ func TestOneOperatorAnswersSeveralNames(t *testing.T) {
 			len(asked.Understood), asked.Understood)
 	}
 	if asked.Understood[0].String() == asked.Understood[1].String() {
-		t.Fatalf("both identities are keyed %q; one entry overwrites the other in the projection "+
+		t.Fatalf("both identities are keyed %q; one entry overwrites the other in the DatabricksServiceAccount "+
 			"and the workload ends up holding one", asked.Understood[0])
 	}
 }

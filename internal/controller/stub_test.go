@@ -77,7 +77,7 @@ type stubClients struct {
 	newClientID           string
 }
 
-func (s *stubClients) Account() *databricks.AccountClient { panic("not used") }
+func (s *stubClients) AccountClient() *databricks.AccountClient { panic("not used") }
 
 // Snapshot returns this stub. What the Holder does here is the thing being
 // stood in for.
@@ -258,8 +258,8 @@ func mintingWithoutInjecting(name string) *corev1.Namespace {
 	return namespace
 }
 
-// serviceAccount is one that has not asked for anything.
-func serviceAccount(namespace, name string) *corev1.ServiceAccount {
+// serviceAccountNamed is one that has not asked for anything.
+func serviceAccountNamed(namespace, name string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: namespace,
@@ -283,9 +283,9 @@ func asking(namespace, name string) *corev1.ServiceAccount {
 // askingOf is the same with the bare key's value written out, for tests about
 // what it says rather than about what follows from it.
 func askingOf(namespace, name, value string) *corev1.ServiceAccount {
-	account := serviceAccount(namespace, name)
-	account.Annotations = map[string]string{dbxv1alpha1.ServicePrincipalAnnotation: value}
-	return account
+	serviceAccount := serviceAccountNamed(namespace, name)
+	serviceAccount.Annotations = map[string]string{dbxv1alpha1.ServicePrincipalAnnotation: value}
+	return serviceAccount
 }
 
 // testRecords is the operator's own namespace, where the records of what it
@@ -319,7 +319,7 @@ type harness struct {
 // nothing does nothing, so without a default every test in this package would be
 // asserting about a closed door.
 func accountServing(namespaces ...string) *dbxv1alpha1.DatabricksAccount {
-	served := account(accountObject)
+	served := databricksAccountNamed(accountObject)
 	served.Spec.Namespaces = namespaces
 	return served
 }
@@ -345,15 +345,15 @@ func newHarnessWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
 	token := writeTokenAs(t, testIssuer, "system:serviceaccount:operators:controller-manager", testAudience)
 	return &harness{
 		Projection: &DatabricksServiceAccountReconciler{
-			Client:  c,
-			Scheme:  scheme,
-			Records: testRecords,
-			Account: testOperator,
+			Client:                          c,
+			Scheme:                          scheme,
+			Records:                         testRecords,
+			DatabricksAccountNamespacedName: testOperator,
 		},
 		Issued: &IssuedDatabricksServicePrincipalReconciler{
-			Client:  c,
-			Scheme:  scheme,
-			Account: testOperator,
+			Client:                          c,
+			Scheme:                          scheme,
+			DatabricksAccountNamespacedName: testOperator,
 			// The fake client is both, because it has no cache to be behind.
 			// What the live reader is for is asserted where it matters, not
 			// here.
@@ -407,12 +407,13 @@ func (h *harness) records(t *testing.T) {
 }
 
 // issuedOf returns the record for one ServiceAccount, or nil if there is none.
-func (h *harness) issuedOf(t *testing.T, account *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
+func (h *harness) issuedOf(t *testing.T,
+	serviceAccount *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
 	t.Helper()
 	var issued dbxv1alpha1.IssuedDatabricksServicePrincipal
 	err := h.Client.Get(context.Background(), types.NamespacedName{
 		Namespace: testRecords,
-		Name:      dbxv1alpha1.IssuedNameFor(account.Namespace, account.Name, "", account.UID),
+		Name:      dbxv1alpha1.IssuedNameFor(serviceAccount.Namespace, serviceAccount.Name, "", serviceAccount.UID),
 	}, &issued)
 	if apierrors.IsNotFound(err) {
 		return nil
@@ -425,29 +426,29 @@ func (h *harness) issuedOf(t *testing.T, account *corev1.ServiceAccount) *dbxv1a
 
 // recordFor is a record as the operator would have written it, for tests that
 // start from an identity that already exists.
-func recordFor(account *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
+func recordFor(serviceAccount *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
 	return &dbxv1alpha1.IssuedDatabricksServicePrincipal{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:  testRecords,
-			Name:       dbxv1alpha1.IssuedNameFor(account.Namespace, account.Name, "", account.UID),
+			Name:       dbxv1alpha1.IssuedNameFor(serviceAccount.Namespace, serviceAccount.Name, "", serviceAccount.UID),
 			Finalizers: []string{dbxv1alpha1.ServicePrincipalFinalizer},
 		},
 		Spec: dbxv1alpha1.IssuedDatabricksServicePrincipalSpec{
-			Subject: dbx.SubjectFor(account.Namespace, account.Name),
+			Subject: dbx.SubjectFor(serviceAccount.Namespace, serviceAccount.Name),
 			ServiceAccount: dbxv1alpha1.IssuedServiceAccount{
-				Namespace: account.Namespace,
-				Name:      account.Name,
-				UID:       account.UID,
+				Namespace: serviceAccount.Namespace,
+				Name:      serviceAccount.Name,
+				UID:       serviceAccount.UID,
 			},
 		},
 	}
 }
 
-// identityIn is the first entry of a projection.
+// identityIn is the first entry of a DatabricksServiceAccount.
 //
-// Tests written when a projection held one identity read its fields off the
-// object. They now read them off an entry, and reading the first is what those
-// tests always meant: they ask through one key and get one entry.
+// Tests written when a DatabricksServiceAccount held one identity read its
+// fields off the object. They now read them off an entry, and reading the first
+// is what those tests always meant: they ask through one key and get one entry.
 //
 // Not "the identity its owner named first" -- there is no such thing any more,
 // the request being a set of annotation keys. With one entry there is nothing
@@ -455,7 +456,7 @@ func recordFor(account *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServ
 func identityIn(t *testing.T, principal *dbxv1alpha1.DatabricksServiceAccount) dbxv1alpha1.ProjectedIdentity {
 	t.Helper()
 	if principal == nil {
-		t.Fatal("no projection to read an identity from")
+		t.Fatal("no DatabricksServiceAccount to read an identity from")
 	}
 	identity, issued := principal.Status.First()
 	if !issued {

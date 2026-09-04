@@ -148,7 +148,7 @@ func removeByDisplayName(t *testing.T, clients Clients, displayName string) {
 		if attempt > 0 {
 			time.Sleep(500 * time.Millisecond)
 		}
-		all, err = clients.Account().ServicePrincipalsV2.ListAll(ctx, iam.ListAccountServicePrincipalsRequest{})
+		all, err = clients.AccountClient().ServicePrincipalsV2.ListAll(ctx, iam.ListAccountServicePrincipalsRequest{})
 		if err != nil {
 			t.Errorf("listing service principals to clean up %q: %v -- "+
 				"anything this test created is still in the account", displayName, err)
@@ -436,7 +436,7 @@ func policiesOn(t *testing.T, clients Clients, id string) []oauth2.FederationPol
 	if err != nil {
 		t.Fatalf("the id Databricks returned is not numeric: %q", id)
 	}
-	stored, err := clients.Account().ServicePrincipalFederationPolicy.ListByServicePrincipalId(
+	stored, err := clients.AccountClient().ServicePrincipalFederationPolicy.ListByServicePrincipalId(
 		context.Background(), numeric)
 	if err != nil {
 		t.Fatalf("listing the federation policies on service principal %s: %v", id, err)
@@ -605,7 +605,7 @@ func TestLiveDeletingAServicePrincipalTakesItsPoliciesWithIt(t *testing.T) {
 		if attempt > 0 {
 			time.Sleep(500 * time.Millisecond)
 		}
-		stored, err := clients.Account().ServicePrincipalFederationPolicy.ListByServicePrincipalId(ctx, numeric)
+		stored, err := clients.AccountClient().ServicePrincipalFederationPolicy.ListByServicePrincipalId(ctx, numeric)
 		if err != nil {
 			t.Logf("listing the policies of a deleted service principal fails after %s, "+
 				"which is the answer: %v", time.Since(began).Round(time.Millisecond), err)

@@ -20,11 +20,10 @@ import (
 // workspace resolution, because nothing this operator does happens inside a
 // workspace.
 type Clients interface {
-	// Account is the underlying account client. It exists for the controller
-	// that has just built the clients and wants to say whether they work; every
-	// other caller goes through the methods below, which report their own
-	// failures.
-	Account() *databricks.AccountClient
+	// AccountClient exists for the controller that has just built the clients
+	// and wants to say whether they work; every other caller goes through the
+	// methods below, which report their own failures.
+	AccountClient() *databricks.AccountClient
 
 	// AccountID is the Databricks account these clients act in.
 	//
@@ -89,8 +88,8 @@ type Clients interface {
 }
 
 type clients struct {
-	cfg     Config
-	account *databricks.AccountClient
+	cfg           Config
+	accountClient *databricks.AccountClient
 }
 
 var _ Clients = (*clients)(nil)
@@ -110,10 +109,10 @@ func New(cfg Config) (Clients, error) {
 	if err != nil {
 		return nil, fmt.Errorf("building the Databricks account client: %w", err)
 	}
-	return &clients{cfg: cfg, account: ac}, nil
+	return &clients{cfg: cfg, accountClient: ac}, nil
 }
 
-func (c *clients) Account() *databricks.AccountClient { return c.account }
+func (c *clients) AccountClient() *databricks.AccountClient { return c.accountClient }
 
 // Snapshot returns these clients: they were built from one account's
 // configuration and nothing replaces them.

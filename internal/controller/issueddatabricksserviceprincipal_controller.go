@@ -81,14 +81,14 @@ type IssuedDatabricksServicePrincipalReconciler struct {
 	// a pass late is free; being wrong is not.
 	Live client.Reader
 
-	// Account is the DatabricksAccount this operator acts in. Records here are
-	// answerable only once it is usable, and nothing on a record reports that --
-	// so this controller watches it and wakes on the crossing.
+	// The DatabricksAccount this operator acts in. Records here are answerable
+	// only once it is usable, and nothing on a record reports that -- so this
+	// controller watches it and wakes on the crossing.
 	//
 	// It is also how this operator is named: a ServiceAccount asks one operator
 	// rather than another by naming its account's namespace and name, which two
 	// operators cannot share.
-	Account types.NamespacedName
+	DatabricksAccountNamespacedName types.NamespacedName
 
 	// TokenPath is where the operator's own projected token is mounted.
 	//
@@ -192,11 +192,11 @@ func (r *IssuedDatabricksServicePrincipalReconciler) Reconcile(ctx context.Conte
 // Read live rather than from the cache. This is the read that destroys things.
 func (r *IssuedDatabricksServicePrincipalReconciler) stillWanted(ctx context.Context,
 	issued *dbxv1alpha1.IssuedDatabricksServicePrincipal) (bool, error) {
-	var account corev1.ServiceAccount
+	var serviceAccount corev1.ServiceAccount
 	switch err := r.Live.Get(ctx, types.NamespacedName{
 		Namespace: issued.Spec.ServiceAccount.Namespace,
 		Name:      issued.Spec.ServiceAccount.Name,
-	}, &account); {
+	}, &serviceAccount); {
 	case apierrors.IsNotFound(err):
 		return false, nil
 	case err != nil:
@@ -212,10 +212,11 @@ func (r *IssuedDatabricksServicePrincipalReconciler) stillWanted(ctx context.Con
 	// nothing and it withdraws nothing, and reading the second as the first is
 	// what deleted a service principal over a missing "/". This is the read that
 	// destroys, so it is the one place where uncertainty must not.
-	if dbxv1alpha1.RequestsFor(account.Annotations, r.Account).Withdrawn(issued.Spec.Identity) {
+	requested := dbxv1alpha1.RequestsFor(serviceAccount.Annotations, r.DatabricksAccountNamespacedName)
+	if requested.Withdrawn(issued.Spec.Identity) {
 		return false, nil
 	}
-	return account.UID == issued.Spec.ServiceAccount.UID, nil
+	return serviceAccount.UID == issued.Spec.ServiceAccount.UID, nil
 }
 
 // destroy deletes the service principal, and holds the record until it has.
@@ -323,7 +324,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 	// This pass re-asserts it on every record that already exists, so a removal
 	// made anywhere else would be undone on the next interval, for ever. The
 	// removal is in the same place as the decision.
-	switch declared, served, err := accountServes(ctx, r.Client, r.Account,
+	switch declared, served, err := accountServes(ctx, r.Client, r.DatabricksAccountNamespacedName,
 		issued.Spec.ServiceAccount.Namespace); {
 	case err != nil:
 		return ctrl.Result{}, err
@@ -395,7 +396,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 			issued.Status.RemovedServicePrincipalID = id
 			issued.Status.ServicePrincipalID = ""
 			// Cleared so that no pod is equipped with a client id resolving to
-			// nothing: the projection carries no client id, so the webhook
+			// nothing: the DatabricksServiceAccount carries no client id, so the webhook
 			// injects none.
 			issued.Status.ClientID = ""
 			return r.report(ctx, issued, metav1.ConditionFalse, reasonRemovedInDatabricks,
@@ -492,7 +493,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 		return r.settled(ctx, issued, fmt.Sprintf(
 			"namespace %s is not one DatabricksAccount %s names, so nothing was created in "+
 				"Databricks for this identity and nothing will be. Naming %s there again is "+
-				"what starts it.", namespace, r.Account, namespace))
+				"what starts it.", namespace, r.DatabricksAccountNamespacedName, namespace))
 	}
 
 	// Asked before the namespace is claimed, because a record already let go of
@@ -510,7 +511,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 			"namespace %s is not one DatabricksAccount %s names, and no token from this cluster "+
 				"can be exchanged for service principal %s. It still exists and everything "+
 				"granted to it is untouched; naming %s there again restores the exchange on the "+
-				"same client id.", namespace, r.Account, issued.Status.ServicePrincipalID,
+				"same client id.", namespace, r.DatabricksAccountNamespacedName, issued.Status.ServicePrincipalID,
 			namespace))
 	}
 
@@ -541,8 +542,8 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 				"begun while identities can still be made here would leave behind the ones made "+
 				"after it. This operator writes that label on its account's own pass, and the "+
 				"withdrawal follows.",
-				namespace, r.Account, dbxv1alpha1.WithdrawingLabel))
-	case exists && holder != withdrawnBy(r.Account):
+				namespace, r.DatabricksAccountNamespacedName, dbxv1alpha1.WithdrawingLabel))
+	case exists && holder != withdrawnBy(r.DatabricksAccountNamespacedName):
 		return r.report(ctx, issued, metav1.ConditionUnknown, reasonAnotherWithdrawal,
 			fmt.Sprintf("namespace %s carries %s=%s, so operator %s is withdrawing from it and "+
 				"this one waits: one withdrawal at a time is what keeps either from working "+
@@ -585,7 +586,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 		"namespace %s is not one DatabricksAccount %s names, so no token from this cluster can "+
 			"be exchanged for service principal %s any more. It still exists and everything "+
 			"granted to it is untouched; naming %s there again restores the exchange on the "+
-			"same client id.", namespace, r.Account, issued.Status.ServicePrincipalID, namespace))
+			"same client id.", namespace, r.DatabricksAccountNamespacedName, issued.Status.ServicePrincipalID, namespace))
 }
 
 // settled reports a withdrawal that has finished, and asks to be looked at on
@@ -633,7 +634,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) issuing(
 		Namespace:         issued.Spec.ServiceAccount.Namespace,
 		Name:              issued.Spec.ServiceAccount.Name,
 		ServiceAccountUID: string(issued.Spec.ServiceAccount.UID),
-		Operator:          r.Account.String(),
+		Operator:          r.DatabricksAccountNamespacedName.String(),
 		Identity:          issued.Spec.Identity,
 	}
 }
@@ -759,7 +760,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) SetupWithManager(mgr ctrl.M
 		// An account that has just become usable makes every record here
 		// answerable, and one that has stopped serving a namespace makes the
 		// records in it withdrawable. Nothing on a record reports either.
-		Watches(enqueueOnAccountChange(mgr, r.Account,
+		Watches(enqueueOnAccountChange(mgr, r.DatabricksAccountNamespacedName,
 			&dbxv1alpha1.IssuedDatabricksServicePrincipalList{}, issuedRequests)).
 		Named("issueddatabricksserviceprincipal").
 		Complete(r)

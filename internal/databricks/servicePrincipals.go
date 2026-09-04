@@ -184,7 +184,7 @@ func (c *clients) CreateServicePrincipal(ctx context.Context, issuing Issuing) (
 	if strings.TrimSpace(issuing.Issuer) == "" {
 		return "", "", fmt.Errorf("%w for %s", ErrNoIssuer, issuing.Subject())
 	}
-	created, err := c.account.ServicePrincipalsV2.Create(ctx, iam.CreateAccountServicePrincipalRequest{
+	created, err := c.accountClient.ServicePrincipalsV2.Create(ctx, iam.CreateAccountServicePrincipalRequest{
 		DisplayName: DisplayNameFor(issuing.Namespace, issuing.Name, issuing.Identity),
 		ExternalId:  MarkerFor(issuing),
 		Active:      true,
@@ -216,7 +216,7 @@ func (c *clients) FindServicePrincipal(ctx context.Context, issuing Issuing) (
 	}
 
 	display := DisplayNameFor(issuing.Namespace, issuing.Name, issuing.Identity)
-	matches, err := c.account.ServicePrincipalsV2.ListAll(ctx, iam.ListAccountServicePrincipalsRequest{
+	matches, err := c.accountClient.ServicePrincipalsV2.ListAll(ctx, iam.ListAccountServicePrincipalsRequest{
 		Filter: fmt.Sprintf("displayName eq %q", display),
 	})
 	if err != nil {
@@ -266,7 +266,8 @@ func (c *clients) ServicePrincipalExists(ctx context.Context, id string) (bool, 
 		return false, fmt.Errorf("no service principal id to look up: an empty one asks Databricks "+
 			"for the whole collection, which answers %s", "200")
 	}
-	if _, err := c.account.ServicePrincipalsV2.Get(ctx, iam.GetAccountServicePrincipalRequest{Id: id}); err != nil {
+	if _, err := c.accountClient.ServicePrincipalsV2.Get(ctx,
+		iam.GetAccountServicePrincipalRequest{Id: id}); err != nil {
 		if KindOf(err) == NotFound {
 			return false, nil
 		}
@@ -283,7 +284,8 @@ func (c *clients) ServicePrincipalExists(ctx context.Context, id string) (bool, 
 // with it, measured against a live account, so no token can be exchanged for it
 // again.
 func (c *clients) DeleteServicePrincipal(ctx context.Context, id string) error {
-	if err := c.account.ServicePrincipalsV2.Delete(ctx, iam.DeleteAccountServicePrincipalRequest{Id: id}); err != nil {
+	if err := c.accountClient.ServicePrincipalsV2.Delete(ctx,
+		iam.DeleteAccountServicePrincipalRequest{Id: id}); err != nil {
 		if KindOf(err) == NotFound {
 			return nil
 		}
@@ -304,7 +306,7 @@ func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID
 		return &ErrMalformedCoordinate{Field: "servicePrincipalId", Value: servicePrincipalID, Cause: err}
 	}
 
-	existing, err := c.account.ServicePrincipalFederationPolicy.ListByServicePrincipalId(ctx, numeric)
+	existing, err := c.accountClient.ServicePrincipalFederationPolicy.ListByServicePrincipalId(ctx, numeric)
 	if err != nil {
 		return fmt.Errorf("listing the federation policies on service principal %s: %w", servicePrincipalID, err)
 	}
@@ -314,17 +316,18 @@ func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID
 		}
 	}
 
-	_, err = c.account.ServicePrincipalFederationPolicy.Create(ctx, oauth2.CreateServicePrincipalFederationPolicyRequest{
-		ServicePrincipalId: numeric,
-		Policy: oauth2.FederationPolicy{
-			Description: "Kubernetes workload " + subject,
-			OidcPolicy: &oauth2.OidcFederationPolicy{
-				Issuer:    issuer,
-				Subject:   subject,
-				Audiences: []string{audience},
+	_, err = c.accountClient.ServicePrincipalFederationPolicy.Create(ctx,
+		oauth2.CreateServicePrincipalFederationPolicyRequest{
+			ServicePrincipalId: numeric,
+			Policy: oauth2.FederationPolicy{
+				Description: "Kubernetes workload " + subject,
+				OidcPolicy: &oauth2.OidcFederationPolicy{
+					Issuer:    issuer,
+					Subject:   subject,
+					Audiences: []string{audience},
+				},
 			},
-		},
-	})
+		})
 	if err != nil {
 		return fmt.Errorf("trusting %s on service principal %s: %w", subject, servicePrincipalID, err)
 	}
@@ -359,7 +362,7 @@ func (c *clients) RemoveFederationPolicies(ctx context.Context, servicePrincipal
 		return &ErrMalformedCoordinate{Field: "servicePrincipalId", Value: servicePrincipalID, Cause: err}
 	}
 
-	existing, err := c.account.ServicePrincipalFederationPolicy.ListAll(ctx,
+	existing, err := c.accountClient.ServicePrincipalFederationPolicy.ListAll(ctx,
 		oauth2.ListServicePrincipalFederationPoliciesRequest{ServicePrincipalId: numeric})
 	if err != nil {
 		return fmt.Errorf("listing the federation policies on service principal %s: %w",
@@ -371,7 +374,7 @@ func (c *clients) RemoveFederationPolicies(ctx context.Context, servicePrincipal
 			policy.OidcPolicy.Issuer != issuer || policy.OidcPolicy.Subject != subject {
 			continue
 		}
-		err := c.account.ServicePrincipalFederationPolicy.Delete(ctx,
+		err := c.accountClient.ServicePrincipalFederationPolicy.Delete(ctx,
 			oauth2.DeleteServicePrincipalFederationPolicyRequest{
 				ServicePrincipalId: numeric,
 				PolicyId:           policy.PolicyId,

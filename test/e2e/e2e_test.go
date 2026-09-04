@@ -42,9 +42,9 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 		runner  = "runner"
 
 		// The names the asker gave, which are the annotation key suffixes, the
-		// profile names a workload passes to the SDK and the keys of the entries
-		// on the projection. One string throughout, which is the promise the
-		// naming rule makes.
+		// profile names a workload passes to the SDK and the keys of the entries on
+		// the DatabricksServiceAccount. One string throughout, which is the promise
+		// the naming rule makes.
 		reader = "reader"
 		writer = "writer"
 	)
@@ -88,7 +88,7 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 		Eventually(func() []string {
 			return requestsOn(team, account)
 		}, 3*time.Minute, 5*time.Second).Should(ConsistOf(reader, writer),
-			"the projection does not carry both identities under the names they were asked by")
+			"the DatabricksServiceAccount does not carry both identities under the names they were asked by")
 
 		Eventually(func() bool {
 			for _, identity := range []string{reader, writer} {
@@ -173,7 +173,7 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 		Consistently(func() string {
 			return clientIDOf(team, account, reader)
 		}, 90*time.Second, 10*time.Second).Should(Equal(client),
-			"a value that could not be read took %q off the projection. A pod admitted now "+
+			"a value that could not be read took %q off the DatabricksServiceAccount. A pod admitted now "+
 				"would be equipped for an identity the operator has stopped standing behind",
 			reader)
 
@@ -249,12 +249,12 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 // Tearing the namespace down is the case the record was moved out of it for.
 //
 // Everything a tenant holds goes at once and in an order nothing specifies: the
-// ServiceAccount, the projection, the namespace itself. What must survive that
-// is the operator's own record, because it is the only thing that knows a
-// service principal exists -- and what must not survive it is the service
-// principal. Neither half can be checked anywhere else: on kind there is nothing
-// in Databricks to look for, and against an account alone there is no namespace
-// to tear down.
+// ServiceAccount, the DatabricksServiceAccount, the namespace itself. What must
+// survive that is the operator's own record, because it is the only thing that
+// knows a service principal exists -- and what must not survive it is the
+// service principal. Neither half can be checked anywhere else: on kind there
+// is nothing in Databricks to look for, and against an account alone there is
+// no namespace to tear down.
 var _ = Describe("A namespace torn down with an identity in it", Ordered, func() {
 	const (
 		team    = "e2e-teardown"
@@ -425,7 +425,7 @@ var _ = Describe("An identity deleted in Databricks", Ordered, func() {
 		Eventually(func() string {
 			return removedIDOf(team, account, profile)
 		}, 5*time.Minute, 5*time.Second).Should(Equal(deletedID),
-			"nothing on the projection names the service principal that was deleted, so the only "+
+			"nothing on the DatabricksServiceAccount names the service principal that was deleted, so the only "+
 				"way to find out which one it was is to read the operator's logs")
 
 		Expect(conditionOn(team, account, profile, "Ready")).To(Equal("RemovedInDatabricks"),
@@ -434,17 +434,17 @@ var _ = Describe("An identity deleted in Databricks", Ordered, func() {
 
 	It("stops naming a client id, so no pod is equipped with one that resolves to nothing", func() {
 		Expect(clientIDOf(team, account, profile)).To(BeEmpty(),
-			"the projection still carries a client id for a service principal that is gone. A pod "+
+			"the DatabricksServiceAccount still carries a client id for a service principal that is gone. A pod "+
 				"admitted now would be given it, exchange for nothing, and fail at the far end")
 	})
 
 	It("does not build another while the annotation still stands", func() {
 		// Waited for before anything is held, and waited for on the right thing.
 		//
-		// Straight after the deletion the projection still carries the client id
-		// from before it, so holding "no client id" from there reports a
-		// replacement that has not happened -- a failure that is untrue, and one
-		// that only the specs above happening to run first would hide.
+		// Straight after the deletion the DatabricksServiceAccount still carries the
+		// client id from before it, so holding "no client id" from there reports a
+		// replacement that has not happened -- a failure that is untrue, and one that
+		// only the specs above happening to run first would hide.
 		//
 		// And the wait is for the removal being recorded, not for the client id
 		// going: an operator that noticed and then replaced also has a client
@@ -539,8 +539,9 @@ var _ = Describe("A ServiceAccount taking a name an orphaned identity still trus
 	})
 
 	It("hands the pod the new identity, which is what a workload actually reads", func() {
-		// The projection is the operator's claim; this is what a workload gets.
-		// They are written by different code and the one that decides is this.
+		// The DatabricksServiceAccount is the operator's claim; this is what a
+		// workload gets. They are written by different code and the one that decides
+		// is this.
 		runPod(team, runner, account)
 		Eventually(func() string {
 			return kubectlOut("-n", team, "get", "pod", runner, "-o", "jsonpath={.status.phase}")

@@ -68,10 +68,10 @@ func init() {
 type settings struct {
 	// Namespace is the operator's own, which is where the DatabricksAccount is
 	// read from and where the records of what was issued are kept.
-	Namespace string
-	Account   types.NamespacedName
-	Holder    *databricks.Holder
-	Runtime   databricks.Config
+	Namespace                       string
+	DatabricksAccountNamespacedName types.NamespacedName
+	Holder                          *databricks.Holder
+	Runtime                         databricks.Config
 }
 
 // reconcilers builds all three controllers from what was decided. It starts
@@ -85,22 +85,22 @@ func reconcilers(s settings, c client.Client, live client.Reader, scheme *runtim
 	*controller.DatabricksServiceAccountReconciler,
 	*controller.IssuedDatabricksServicePrincipalReconciler) {
 	return &controller.DatabricksAccountReconciler{
-			Client:  c,
-			Scheme:  scheme,
-			Account: s.Account,
-			Holder:  s.Holder,
-			Runtime: s.Runtime,
+			Client:                          c,
+			Scheme:                          scheme,
+			DatabricksAccountNamespacedName: s.DatabricksAccountNamespacedName,
+			Holder:                          s.Holder,
+			Runtime:                         s.Runtime,
 		}, &controller.DatabricksServiceAccountReconciler{
-			Client:  c,
-			Scheme:  scheme,
-			Records: s.Namespace,
-			Account: s.Account,
+			Client:                          c,
+			Scheme:                          scheme,
+			Records:                         s.Namespace,
+			DatabricksAccountNamespacedName: s.DatabricksAccountNamespacedName,
 		}, &controller.IssuedDatabricksServicePrincipalReconciler{
-			Client:     c,
-			Scheme:     scheme,
-			Databricks: s.Holder,
-			Live:       live,
-			Account:    s.Account,
+			Client:                          c,
+			Scheme:                          scheme,
+			Databricks:                      s.Holder,
+			Live:                            live,
+			DatabricksAccountNamespacedName: s.DatabricksAccountNamespacedName,
 			// The path, not what was read from it once. See TokenPath.
 			TokenPath: s.Runtime.OIDCTokenFilepath,
 		}
@@ -276,7 +276,7 @@ func main() {
 	dbClients := databricks.NewHolder(namespace, accountName)
 
 	decided.Namespace = namespace
-	decided.Account = account
+	decided.DatabricksAccountNamespacedName = account
 	decided.Holder = dbClients
 	decided.Runtime = runtimeCfg
 

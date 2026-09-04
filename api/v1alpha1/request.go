@@ -60,7 +60,7 @@ type Request struct {
 }
 
 // String is the profile name: what a workload passes to the Databricks SDK to
-// use this identity, and the key of the entry in the projection.
+// use this identity, and the key of the entry in the DatabricksServiceAccount.
 //
 // A named identity is its name, verbatim, so the string a person wrote in an
 // annotation key is the string their code names -- "reader" in the annotation is
@@ -96,10 +96,10 @@ type Refusal struct {
 	// instead.
 	//
 	// Nothing surfaces it, and there is nowhere for it to go. A refused key gets
-	// no entry in the projection, so there is no condition to carry it, and the
-	// object as a whole has none to offer: a value that does not parse names
-	// nobody, so every operator serving the cluster refuses that key, while every
-	// entry of the object is owned by one.
+	// no entry in the DatabricksServiceAccount, so there is no condition to carry
+	// it, and the object as a whole has none to offer: a value that does not parse
+	// names nobody, so every operator serving the cluster refuses that key, while
+	// every entry of the object is owned by one.
 	//
 	// An Event on the ServiceAccount is not that place either. The spam filter
 	// keys on source and involvedObject and holds neither reason nor message

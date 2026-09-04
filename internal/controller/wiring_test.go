@@ -93,10 +93,10 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		Expect(os.WriteFile(tokenFile, []byte(token), 0o600)).To(Succeed())
 
 		projection := &DatabricksServiceAccountReconciler{
-			Client:  manager.GetClient(),
-			Scheme:  manager.GetScheme(),
-			Records: wiredRecords,
-			Account: types.NamespacedName{Namespace: wiredRecords, Name: "databricks-account"},
+			Client:                          manager.GetClient(),
+			Scheme:                          manager.GetScheme(),
+			Records:                         wiredRecords,
+			DatabricksAccountNamespacedName: types.NamespacedName{Namespace: wiredRecords, Name: "databricks-account"},
 		}
 		Expect(projection.SetupWithManager(manager)).To(Succeed())
 
@@ -104,12 +104,12 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		// nothing here reaches Databricks. What these specs are about is what
 		// wakes a controller, which does not depend on the far side answering.
 		issued := &IssuedDatabricksServicePrincipalReconciler{
-			Client:     manager.GetClient(),
-			Scheme:     manager.GetScheme(),
-			Live:       manager.GetAPIReader(),
-			Databricks: dbx.NewHolder(wiredRecords, "databricks-account"),
-			Account:    types.NamespacedName{Namespace: wiredRecords, Name: "databricks-account"},
-			TokenPath:  tokenFile,
+			Client:                          manager.GetClient(),
+			Scheme:                          manager.GetScheme(),
+			Live:                            manager.GetAPIReader(),
+			Databricks:                      dbx.NewHolder(wiredRecords, "databricks-account"),
+			DatabricksAccountNamespacedName: types.NamespacedName{Namespace: wiredRecords, Name: "databricks-account"},
+			TokenPath:                       tokenFile,
 		}
 		Expect(issued.SetupWithManager(manager, wiredRecords)).To(Succeed())
 
@@ -191,12 +191,12 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		// The last of the three answers, given by the team that owns the
 		// Databricks account, on their own object. It is an event on no
 		// ServiceAccount and on no Namespace.
-		account := &dbxv1alpha1.DatabricksAccount{}
+		databricksAccount := &dbxv1alpha1.DatabricksAccount{}
 		Expect(k8sClient.Get(ctx,
 			types.NamespacedName{Namespace: wiredRecords, Name: "databricks-account"},
-			account)).To(Succeed())
-		account.Spec.Namespaces = []string{wiredNamespace}
-		Expect(k8sClient.Update(ctx, account)).To(Succeed())
+			databricksAccount)).To(Succeed())
+		databricksAccount.Spec.Namespaces = []string{wiredNamespace}
+		Expect(k8sClient.Update(ctx, databricksAccount)).To(Succeed())
 
 		Eventually(func() *dbxv1alpha1.DatabricksServiceAccount {
 			return recordedIdentity(wiredNamespace, wiredAccount)
@@ -217,12 +217,12 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 			ObjectMeta: metav1.ObjectMeta{Name: named},
 		})).To(Succeed())
 
-		account := &dbxv1alpha1.DatabricksAccount{}
+		databricksAccount := &dbxv1alpha1.DatabricksAccount{}
 		Expect(k8sClient.Get(ctx,
 			types.NamespacedName{Namespace: wiredRecords, Name: "databricks-account"},
-			account)).To(Succeed())
-		account.Spec.Namespaces = append(account.Spec.Namespaces, named)
-		Expect(k8sClient.Update(ctx, account)).To(Succeed())
+			databricksAccount)).To(Succeed())
+		databricksAccount.Spec.Namespaces = append(databricksAccount.Spec.Namespaces, named)
+		Expect(k8sClient.Update(ctx, databricksAccount)).To(Succeed())
 
 		Expect(k8sClient.Create(ctx, &corev1.ServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{
@@ -251,7 +251,7 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 				"something unrelated happens to touch it, and nothing says so")
 	})
 
-	It("owns the projection by the ServiceAccount and holds nothing with it", func() {
+	It("owns the DatabricksServiceAccount by the ServiceAccount and holds nothing with it", func() {
 		var recorded *dbxv1alpha1.DatabricksServiceAccount
 		Eventually(func() *dbxv1alpha1.DatabricksServiceAccount {
 			recorded = recordedIdentity(wiredNamespace, wiredAccount)
@@ -271,21 +271,21 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 	})
 
 	It("writes the record in the operator's own namespace, and holds that", func() {
-		account := &corev1.ServiceAccount{}
+		serviceAccount := &corev1.ServiceAccount{}
 		Expect(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: wiredNamespace, Name: wiredAccount}, account)).To(Succeed())
+			types.NamespacedName{Namespace: wiredNamespace, Name: wiredAccount}, serviceAccount)).To(Succeed())
 
 		var issued dbxv1alpha1.IssuedDatabricksServicePrincipal
 		Eventually(func() error {
 			return k8sClient.Get(ctx, types.NamespacedName{
 				Namespace: wiredRecords,
-				Name:      dbxv1alpha1.IssuedNameFor(wiredNamespace, wiredAccount, "", account.UID),
+				Name:      dbxv1alpha1.IssuedNameFor(wiredNamespace, wiredAccount, "", serviceAccount.UID),
 			}, &issued)
 		}, 20*time.Second, 250*time.Millisecond).Should(Succeed(),
 			"nothing recorded what was issued; the record is what outlives this namespace")
 
 		Expect(issued.Finalizers).To(ContainElement(dbxv1alpha1.ServicePrincipalFinalizer))
-		Expect(issued.Spec.ServiceAccount.UID).To(Equal(account.UID))
+		Expect(issued.Spec.ServiceAccount.UID).To(Equal(serviceAccount.UID))
 		Expect(issued.OwnerReferences).To(BeEmpty(),
 			"the record is owned by nothing; being collected with the ServiceAccount is what it exists not to do")
 	})
@@ -313,10 +313,10 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 	// This is the whole of the several-operators design, and the only place it can
 	// be shown: the merge is the API server's, and a fake client's is not it.
 	//
-	// Two operators write one projection. Neither reads what the other wrote and
-	// neither can be made to wait for it, so the only thing keeping one from
-	// undoing the other is that each owns its own entry and sends only that.
-	// Read, change, write passes every test that looks at one operator.
+	// Two operators write one DatabricksServiceAccount. Neither reads what the
+	// other wrote and neither can be made to wait for it, so the only thing
+	// keeping one from undoing the other is that each owns its own entry and sends
+	// only that. Read, change, write passes every test that looks at one operator.
 	It("leaves another operator's entry alone while writing its own", func() {
 		const stranger = "ops-b/databricks-account"
 
@@ -354,12 +354,12 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		// Make this operator write again, and write something observably new, so
 		// that seeing the new value is proof its write landed after theirs. A
 		// bare "both are present" would pass by looking too early.
-		account := &corev1.ServiceAccount{}
+		serviceAccount := &corev1.ServiceAccount{}
 		Expect(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: wiredNamespace, Name: "shared"}, account)).To(Succeed())
-		account.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("later")] =
+			types.NamespacedName{Namespace: wiredNamespace, Name: "shared"}, serviceAccount)).To(Succeed())
+		serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("later")] =
 			wiredRecords + "/databricks-account"
-		Expect(k8sClient.Update(ctx, account)).To(Succeed())
+		Expect(k8sClient.Update(ctx, serviceAccount)).To(Succeed())
 
 		Eventually(func() bool {
 			projected := recordedIdentity(wiredNamespace, "shared")
@@ -388,10 +388,10 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 	// null, and is refused -- `status: Invalid value: "null": in body must be of
 	// type object`. A fake client validates nothing and reports success.
 	//
-	// The apply then fails on every pass and the projection stays exactly as it
-	// was: reporting Ready, for identities whose records are deleted and whose
-	// service principals are destroyed.
-	It("withdraws named identities without leaving the projection behind", func() {
+	// The apply then fails on every pass and the DatabricksServiceAccount stays
+	// exactly as it was: reporting Ready, for identities whose records are deleted
+	// and whose service principals are destroyed.
+	It("withdraws named identities without leaving the DatabricksServiceAccount behind", func() {
 		Expect(k8sClient.Create(ctx, &corev1.ServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "named", Namespace: wiredNamespace,
@@ -413,26 +413,26 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		}, 20*time.Second, 250*time.Millisecond).Should(Equal(2),
 			"nothing was projected, so there is nothing to withdraw")
 
-		account := &corev1.ServiceAccount{}
+		serviceAccount := &corev1.ServiceAccount{}
 		Expect(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: wiredNamespace, Name: "named"}, account)).To(Succeed())
-		account.Annotations = nil
-		Expect(k8sClient.Update(ctx, account)).To(Succeed())
+			types.NamespacedName{Namespace: wiredNamespace, Name: "named"}, serviceAccount)).To(Succeed())
+		serviceAccount.Annotations = nil
+		Expect(k8sClient.Update(ctx, serviceAccount)).To(Succeed())
 
 		Eventually(func() bool {
 			return recordedIdentity(wiredNamespace, "named") == nil
 		}, 20*time.Second, 250*time.Millisecond).Should(BeTrue(),
-			"the projection outlived the request. Its records are gone and its service "+
+			"the DatabricksServiceAccount outlived the request. Its records are gone and its service "+
 				"principals are destroyed, so every word of it is false -- and it still reports "+
 				"Ready")
 	})
 
 	It("wakes when the annotation is withdrawn, and takes the identity back", func() {
-		account := &corev1.ServiceAccount{}
+		serviceAccount := &corev1.ServiceAccount{}
 		Expect(k8sClient.Get(ctx,
-			types.NamespacedName{Namespace: wiredNamespace, Name: wiredAccount}, account)).To(Succeed())
-		account.Annotations = nil
-		Expect(k8sClient.Update(ctx, account)).To(Succeed())
+			types.NamespacedName{Namespace: wiredNamespace, Name: wiredAccount}, serviceAccount)).To(Succeed())
+		serviceAccount.Annotations = nil
+		Expect(k8sClient.Update(ctx, serviceAccount)).To(Succeed())
 
 		Eventually(func() bool {
 			return recordedIdentity(wiredNamespace, wiredAccount) == nil
@@ -541,11 +541,11 @@ var _ = Describe("what the webhook produces", func() {
 	It("makes a pod the API server accepts, carrying every identity", func() {
 		const reader, writer = "reader", "writer"
 
-		projection := &dbxv1alpha1.DatabricksServiceAccount{
+		databricksServiceAccount := &dbxv1alpha1.DatabricksServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{Namespace: admitting, Name: "etl"},
 		}
-		Expect(k8sClient.Create(ctx, projection)).To(Succeed())
-		projection.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
+		Expect(k8sClient.Create(ctx, databricksServiceAccount)).To(Succeed())
+		databricksServiceAccount.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
 			{
 				Profile: reader, Operator: "ops-a/databricks-account",
 				ClientID: "reader-client", Audience: "databricks",
@@ -555,7 +555,7 @@ var _ = Describe("what the webhook produces", func() {
 				ClientID: "writer-client", Audience: "some-other-aud",
 			},
 		}
-		Expect(k8sClient.Status().Update(ctx, projection)).To(Succeed())
+		Expect(k8sClient.Status().Update(ctx, databricksServiceAccount)).To(Succeed())
 
 		pod := &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: admitting},

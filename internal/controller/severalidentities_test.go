@@ -36,13 +36,13 @@ import (
 // annotation key each, which is what makes withdrawing one and mistyping one
 // different edits.
 func askingFor(namespace, name string, identities ...string) *corev1.ServiceAccount {
-	account := serviceAccount(namespace, name)
-	account.Annotations = make(map[string]string, len(identities))
+	serviceAccount := serviceAccountNamed(namespace, name)
+	serviceAccount.Annotations = make(map[string]string, len(identities))
 	for _, identity := range identities {
-		account.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor(identity)] =
+		serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor(identity)] =
 			testOperator.String()
 	}
-	return account
+	return serviceAccount
 }
 
 // recordsOf is every record this operator holds for one ServiceAccount.
@@ -101,13 +101,13 @@ func TestOneServiceAccountGetsTwoIdentitiesFromOneOperator(t *testing.T) {
 		t.Fatal("nothing was projected")
 	}
 	if len(projected.Status.Identities) != 2 {
-		t.Fatalf("the projection carries %d entries, want both: %+v",
+		t.Fatalf("the DatabricksServiceAccount carries %d entries, want both: %+v",
 			len(projected.Status.Identities), projected.Status.Identities)
 	}
 	for _, want := range []string{"reader", "writer"} {
 		entry, carried := projected.Status.Identity(want)
 		if !carried {
-			t.Fatalf("the projection has no entry for %q; the workload cannot name a profile "+
+			t.Fatalf("the DatabricksServiceAccount has no entry for %q; the workload cannot name a profile "+
 				"it cannot see", want)
 		}
 		if entry.ClientID == "" {
@@ -146,13 +146,13 @@ func TestDroppingOneIdentityKeepsTheOther(t *testing.T) {
 	}
 
 	// The annotations are the request and nothing else is: one key leaves them.
-	account := &corev1.ServiceAccount{}
+	serviceAccount := &corev1.ServiceAccount{}
 	if err := h.Client.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, account); err != nil {
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	delete(account.Annotations, dbxv1alpha1.ServicePrincipalAnnotationFor("reader"))
-	if err := h.Client.Update(context.Background(), account); err != nil {
+	delete(serviceAccount.Annotations, dbxv1alpha1.ServicePrincipalAnnotationFor("reader"))
+	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,14 +178,14 @@ func TestDroppingOneIdentityKeepsTheOther(t *testing.T) {
 
 	projected := principalOf(t, h.Client)
 	if projected == nil {
-		t.Fatal("the projection is gone; one identity remains")
+		t.Fatal("the DatabricksServiceAccount is gone; one identity remains")
 	}
 	if _, still := projected.Status.Identity("reader"); still {
-		t.Error("the projection still shows the dropped identity, so a pod would go on being " +
+		t.Error("the DatabricksServiceAccount still shows the dropped identity, so a pod would go on being " +
 			"equipped for one that no longer exists")
 	}
 	if _, kept := projected.Status.Identity("writer"); !kept {
-		t.Error("the projection lost the identity that is still asked for")
+		t.Error("the DatabricksServiceAccount lost the identity that is still asked for")
 	}
 }
 
@@ -206,14 +206,14 @@ func TestAddingASecondIdentityLeavesTheFirstAlone(t *testing.T) {
 	}
 	was := first[0].Status.ServicePrincipalID
 
-	account := &corev1.ServiceAccount{}
+	serviceAccount := &corev1.ServiceAccount{}
 	if err := h.Client.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, account); err != nil {
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	account.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("writer")] =
+	serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("writer")] =
 		testOperator.String()
-	if err := h.Client.Update(context.Background(), account); err != nil {
+	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,10 +247,10 @@ func TestAddingASecondIdentityLeavesTheFirstAlone(t *testing.T) {
 // nothing is withdrawn and the object is not deleted either, because entries
 // remain.
 //
-// What that leaves is a projection reporting Ready for identities whose records
-// are deleted and whose service principals are destroyed. It is the one state
-// this object is supposed to be incapable of: it decides nothing, so the only
-// thing it can be is wrong.
+// What that leaves is a DatabricksServiceAccount reporting Ready for identities
+// whose records are deleted and whose service principals are destroyed. It is
+// the one state this object is supposed to be incapable of: it decides nothing,
+// so the only thing it can be is wrong.
 func TestWithdrawingNamedIdentitiesTakesTheProjectionWithThem(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
@@ -263,13 +263,13 @@ func TestWithdrawingNamedIdentitiesTakesTheProjectionWithThem(t *testing.T) {
 		t.Fatalf("this test is about withdrawing two named identities; there are %v", projected)
 	}
 
-	account := &corev1.ServiceAccount{}
+	serviceAccount := &corev1.ServiceAccount{}
 	if err := h.Client.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, account); err != nil {
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	account.Annotations = nil
-	if err := h.Client.Update(context.Background(), account); err != nil {
+	serviceAccount.Annotations = nil
+	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,7 +282,7 @@ func TestWithdrawingNamedIdentitiesTakesTheProjectionWithThem(t *testing.T) {
 		t.Errorf("deleted %v in Databricks, want both identities", stub.deleted)
 	}
 	if projected := principalOf(t, h.Client); projected != nil {
-		t.Errorf("the projection is still there, carrying %+v. Its records are gone and its "+
+		t.Errorf("the DatabricksServiceAccount is still there, carrying %+v. Its records are gone and its "+
 			"service principals are destroyed, so every word of it is false -- and it reports "+
 			"Ready, which is the one thing a projection cannot be trusted to be wrong about",
 			projected.Status.Identities)
@@ -392,13 +392,13 @@ func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
 	// The edit that did the damage: the "/" between the operator's namespace and
 	// its DatabricksAccount, gone.
 	mistyped := dbxv1alpha1.ServicePrincipalAnnotationFor("reader")
-	account := &corev1.ServiceAccount{}
+	serviceAccount := &corev1.ServiceAccount{}
 	if err := h.Client.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, account); err != nil {
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	account.Annotations[mistyped] = strings.ReplaceAll(testOperator.String(), "/", "")
-	if err := h.Client.Update(context.Background(), account); err != nil {
+	serviceAccount.Annotations[mistyped] = strings.ReplaceAll(testOperator.String(), "/", "")
+	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
@@ -415,11 +415,11 @@ func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
 
 	projected := principalOf(t, h.Client)
 	if projected == nil {
-		t.Fatal("the projection is gone; both identities are still there")
+		t.Fatal("the DatabricksServiceAccount is gone; both identities are still there")
 	}
 	still, carried := projected.Status.Identity("reader")
 	if !carried {
-		t.Fatal("the projection dropped the mistyped identity. Its owner can no longer see the " +
+		t.Fatal("the DatabricksServiceAccount dropped the mistyped identity. Its owner can no longer see the " +
 			"identity they still hold, and the webhook equips no new pod for it")
 	}
 	if still.ClientID != was.ClientID || still.ServicePrincipalID != was.ServicePrincipalID {
@@ -458,14 +458,14 @@ func TestAServiceAccountWhoseOnlyKeyIsMistypedKeepsItsIdentity(t *testing.T) {
 		t.Fatal("the identity this test is about was never projected")
 	}
 
-	account := &corev1.ServiceAccount{}
+	serviceAccount := &corev1.ServiceAccount{}
 	if err := h.Client.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, account); err != nil {
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	account.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("")] =
+	serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("")] =
 		strings.ReplaceAll(testOperator.String(), "/", "")
-	if err := h.Client.Update(context.Background(), account); err != nil {
+	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
@@ -482,12 +482,12 @@ func TestAServiceAccountWhoseOnlyKeyIsMistypedKeepsItsIdentity(t *testing.T) {
 
 	projected := principalOf(t, h.Client)
 	if projected == nil {
-		t.Fatal("the projection is gone, so its owner cannot see the identity they still hold " +
+		t.Fatal("the DatabricksServiceAccount is gone, so its owner cannot see the identity they still hold " +
 			"and the webhook equips no new pod for it")
 	}
 	still, carried := projected.Status.Identity(testOperator.String())
 	if !carried {
-		t.Fatal("the projection dropped the only identity on it")
+		t.Fatal("the DatabricksServiceAccount dropped the only identity on it")
 	}
 	if still.ClientID != was.ClientID {
 		t.Errorf("the entry names client %s and named %s; nothing was asked for, so nothing "+
@@ -522,14 +522,14 @@ func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) 
 		}
 	}
 
-	account := &corev1.ServiceAccount{}
+	serviceAccount := &corev1.ServiceAccount{}
 	if err := h.Client.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, account); err != nil {
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	delete(account.Annotations, dbxv1alpha1.ServicePrincipalAnnotation)
-	account.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("reader")] = "ops-a"
-	if err := h.Client.Update(context.Background(), account); err != nil {
+	delete(serviceAccount.Annotations, dbxv1alpha1.ServicePrincipalAnnotation)
+	serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("reader")] = "ops-a"
+	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
@@ -553,13 +553,13 @@ func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) 
 
 	projected := principalOf(t, h.Client)
 	if projected == nil {
-		t.Fatal("the projection is gone; the mistyped identity is still there and still working")
+		t.Fatal("the DatabricksServiceAccount is gone; the mistyped identity is still there and still working")
 	}
 	if _, gone := projected.Status.Identity(testOperator.String()); gone {
-		t.Error("the projection still shows the withdrawn identity, so a pod would go on being " +
+		t.Error("the DatabricksServiceAccount still shows the withdrawn identity, so a pod would go on being " +
 			"equipped for one whose service principal is destroyed")
 	}
 	if _, held := projected.Status.Identity("reader"); !held {
-		t.Error("the projection dropped the mistyped identity, which nobody withdrew")
+		t.Error("the DatabricksServiceAccount dropped the mistyped identity, which nobody withdrew")
 	}
 }

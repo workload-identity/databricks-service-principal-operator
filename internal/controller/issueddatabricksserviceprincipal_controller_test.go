@@ -37,9 +37,9 @@ func TestANamespaceTeardownDestroysTheIdentityInEitherOrder(t *testing.T) {
 	t.Parallel()
 	for _, order := range []struct {
 		name  string
-		first func(t *testing.T, h *harness, account *corev1.ServiceAccount)
+		first func(t *testing.T, h *harness, serviceAccount *corev1.ServiceAccount)
 	}{
-		{"the projection is deleted first", func(t *testing.T, h *harness, _ *corev1.ServiceAccount) {
+		{"the DatabricksServiceAccount is deleted first", func(t *testing.T, h *harness, _ *corev1.ServiceAccount) {
 			principal := principalOf(t, h.Client)
 			if principal == nil {
 				t.Fatal("nothing was projected")
@@ -48,26 +48,26 @@ func TestANamespaceTeardownDestroysTheIdentityInEitherOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"the ServiceAccount is deleted first", func(t *testing.T, h *harness, account *corev1.ServiceAccount) {
-			if err := h.Client.Delete(context.Background(), account); err != nil {
+		{"the ServiceAccount is deleted first", func(t *testing.T, h *harness, serviceAccount *corev1.ServiceAccount) {
+			if err := h.Client.Delete(context.Background(), serviceAccount); err != nil {
 				t.Fatal(err)
 			}
 		}},
 	} {
 		t.Run(order.name, func(t *testing.T) {
-			account := asking(testNamespace, testName)
+			serviceAccount := asking(testNamespace, testName)
 			stub := &stubClients{}
-			h := newHarness(t, stub, mintingNamespace(testNamespace), account)
+			h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount)
 			h.settle(t)
 
-			created := h.issuedOf(t, account)
+			created := h.issuedOf(t, serviceAccount)
 			if created == nil || created.Status.ServicePrincipalID == "" {
 				t.Fatal("nothing was issued to tear down")
 			}
 
 			// Whichever went first, everything in the namespace is gone by the
 			// end of a teardown.
-			order.first(t, h, account)
+			order.first(t, h, serviceAccount)
 			deleteEverythingIn(t, h.Client, testNamespace)
 			h.settle(t)
 
@@ -76,7 +76,7 @@ func TestANamespaceTeardownDestroysTheIdentityInEitherOrder(t *testing.T) {
 					"is gone; what is left is a service principal nothing records, and the next "+
 					"namespace of this name inherits it", stub.deleted)
 			}
-			if h.issuedOf(t, account) != nil {
+			if h.issuedOf(t, serviceAccount) != nil {
 				t.Error("the record is still there after its service principal was deleted")
 			}
 		})
@@ -147,12 +147,12 @@ func TestARecreatedServiceAccountDoesNotInheritTheOldIdentity(t *testing.T) {
 // marker it was created carrying.
 func TestARecordWithNoIdStillDestroysWhatItMade(t *testing.T) {
 	t.Parallel()
-	account := asking(testNamespace, testName)
-	issued := recordFor(account)
+	serviceAccount := asking(testNamespace, testName)
+	issued := recordFor(serviceAccount)
 	// Nothing recorded, and something out there: what a crash between the two
 	// calls leaves behind.
 	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), account, issued)
+	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
 
 	stopsAsking(t, h.Client)
 	h.settle(t)
@@ -161,7 +161,7 @@ func TestARecordWithNoIdStillDestroysWhatItMade(t *testing.T) {
 		t.Errorf("deleted %v, want the service principal this record made and never named; "+
 			"nothing else in the cluster knows it exists", stub.deleted)
 	}
-	if h.issuedOf(t, account) != nil {
+	if h.issuedOf(t, serviceAccount) != nil {
 		t.Error("the record is still there after what it made was deleted")
 	}
 }
@@ -176,10 +176,10 @@ func TestARecordWithNoIdStillDestroysWhatItMade(t *testing.T) {
 // federation policies on the one path that writes none.
 func TestADeletionIsNotHeldOverAValueItDiscards(t *testing.T) {
 	t.Parallel()
-	account := asking(testNamespace, testName)
-	issued := recordFor(account)
+	serviceAccount := asking(testNamespace, testName)
+	issued := recordFor(serviceAccount)
 	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), account, issued)
+	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
 	// A token with an issuer and no aud claim. The issuer is what the search
 	// needs and it is there; the audience is what is missing and it is not.
 	h.Issued.TokenPath = writeTokenAs(t, testIssuer,
@@ -192,7 +192,7 @@ func TestADeletionIsNotHeldOverAValueItDiscards(t *testing.T) {
 		t.Errorf("deleted %v, want the service principal this record made; it is still there, "+
 			"and nothing outside this record knows it exists", stub.deleted)
 	}
-	if h.issuedOf(t, account) != nil {
+	if h.issuedOf(t, serviceAccount) != nil {
 		t.Error("the record is still held, over a claim its remaining work never reads")
 	}
 }
@@ -210,10 +210,10 @@ func TestASettledIdentityIsNotAskedAboutAsOftenAsAFailingOne(t *testing.T) {
 	t.Parallel()
 	comeBackIn := func(t *testing.T, stub *stubClients) (time.Duration, *metav1.Condition) {
 		t.Helper()
-		account := asking(testNamespace, testName)
-		h := newHarness(t, stub, mintingNamespace(testNamespace), account)
+		serviceAccount := asking(testNamespace, testName)
+		h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount)
 		h.settle(t)
-		record := h.issuedOf(t, account)
+		record := h.issuedOf(t, serviceAccount)
 		if record == nil {
 			t.Fatal("nothing was issued to ask about")
 		}
@@ -224,7 +224,7 @@ func TestASettledIdentityIsNotAskedAboutAsOftenAsAFailingOne(t *testing.T) {
 			t.Fatal(err)
 		}
 		return result.RequeueAfter, meta.FindStatusCondition(
-			h.issuedOf(t, account).Status.Conditions, conditionReady)
+			h.issuedOf(t, serviceAccount).Status.Conditions, conditionReady)
 	}
 
 	settled, ready := comeBackIn(t, &stubClients{})
@@ -255,15 +255,15 @@ func TestASettledIdentityIsNotAskedAboutAsOftenAsAFailingOne(t *testing.T) {
 // in its place.
 func TestTheDestroyingReadIsNotTakenFromTheCache(t *testing.T) {
 	t.Parallel()
-	account := asking(testNamespace, testName)
-	issued := recordFor(account)
+	serviceAccount := asking(testNamespace, testName)
+	issued := recordFor(serviceAccount)
 	issued.Status.ServicePrincipalID = "7788"
 	issued.Status.ClientID = "app-uuid"
 
 	// The cached client does not have the ServiceAccount; the live one does.
 	stub := &stubClients{}
 	h := newHarness(t, stub, mintingNamespace(testNamespace), issued)
-	live, _ := newFakeClient(t, mintingNamespace(testNamespace), account)
+	live, _ := newFakeClient(t, mintingNamespace(testNamespace), serviceAccount)
 	h.Issued.Live = live
 
 	h.records(t)
@@ -273,7 +273,7 @@ func TestTheDestroyingReadIsNotTakenFromTheCache(t *testing.T) {
 		t.Errorf("deleted %v on a cache that had not caught up; the ServiceAccount is there and "+
 			"still asking", stub.deleted)
 	}
-	held := h.issuedOf(t, account)
+	held := h.issuedOf(t, serviceAccount)
 	if held == nil {
 		t.Fatal("the record was dropped on a stale read")
 	}
@@ -295,8 +295,8 @@ func TestTheDestroyingReadIsNotTakenFromTheCache(t *testing.T) {
 // nothing anybody else owns is held up by it.
 func TestARecordIsHeldRatherThanActedOnInTheWrongAccount(t *testing.T) {
 	t.Parallel()
-	account := asking(testNamespace, testName)
-	issued := recordFor(account)
+	serviceAccount := asking(testNamespace, testName)
+	issued := recordFor(serviceAccount)
 	issued.Status.ServicePrincipalID = "7788"
 	issued.Status.AccountID = "the-account-it-was-made-in"
 
@@ -307,11 +307,11 @@ func TestARecordIsHeldRatherThanActedOnInTheWrongAccount(t *testing.T) {
 		accountID: "the-account-it-was-made-in",
 		deleteErr: errors.New("the service is temporarily unavailable"),
 	}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), account, issued)
+	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
 	stopsAsking(t, h.Client)
 	h.settle(t)
 
-	if h.issuedOf(t, account).DeletionTimestamp.IsZero() {
+	if h.issuedOf(t, serviceAccount).DeletionTimestamp.IsZero() {
 		t.Fatal("the record is not on its way out; this test is about one that is")
 	}
 
@@ -320,7 +320,7 @@ func TestARecordIsHeldRatherThanActedOnInTheWrongAccount(t *testing.T) {
 	stub.deleteErr = nil
 	h.settle(t)
 
-	held := h.issuedOf(t, account)
+	held := h.issuedOf(t, serviceAccount)
 	if held == nil {
 		t.Fatal("the record went while its service principal is alive in another account")
 	}
@@ -342,7 +342,7 @@ func TestARecordIsHeldRatherThanActedOnInTheWrongAccount(t *testing.T) {
 		t.Errorf("deleted %v after the operator came back to the account it was made in, "+
 			"want the identity it was holding", stub.deleted)
 	}
-	if h.issuedOf(t, account) != nil {
+	if h.issuedOf(t, serviceAccount) != nil {
 		t.Error("the record is still there after what it held was deleted")
 	}
 }
@@ -392,15 +392,15 @@ func deleteEverythingIn(t *testing.T, c client.Client, namespace string) {
 // operator's namespace from a manifest writes records without finalizers.
 func TestARecordWithNoFinalizerGetsOneBeforeAnythingIsCreated(t *testing.T) {
 	t.Parallel()
-	account := asking(testNamespace, testName)
-	bare := recordFor(account)
+	serviceAccount := asking(testNamespace, testName)
+	bare := recordFor(serviceAccount)
 	bare.Finalizers = nil
 
 	stub := &stubClients{}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), account, bare)
+	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, bare)
 	h.records(t)
 
-	issued := h.issuedOf(t, account)
+	issued := h.issuedOf(t, serviceAccount)
 	if issued == nil {
 		t.Fatal("the record is gone")
 	}
@@ -430,8 +430,8 @@ func TestARecordWithNoFinalizerGetsOneBeforeAnythingIsCreated(t *testing.T) {
 // never go.
 func TestRemovingTheFinalizerByHandIsNotArguedWith(t *testing.T) {
 	t.Parallel()
-	account := asking(testNamespace, testName)
-	held := recordFor(account)
+	serviceAccount := asking(testNamespace, testName)
+	held := recordFor(serviceAccount)
 	held.Status.ServicePrincipalID = "7788"
 	held.Status.AccountID = testAccountID
 
@@ -443,12 +443,12 @@ func TestRemovingTheFinalizerByHandIsNotArguedWith(t *testing.T) {
 	held.Finalizers = append(held.Finalizers, "example.com/held-by-something-else")
 
 	stub := &stubClients{deleteErr: errors.New("the service is temporarily unavailable")}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), account, held)
+	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, held)
 
 	stopsAsking(t, h.Client)
 	h.settle(t)
 
-	stuck := h.issuedOf(t, account)
+	stuck := h.issuedOf(t, serviceAccount)
 	if stuck == nil || stuck.DeletionTimestamp.IsZero() {
 		t.Fatal("the record is not being held on its way out; this test is about one that is")
 	}
@@ -460,7 +460,7 @@ func TestRemovingTheFinalizerByHandIsNotArguedWith(t *testing.T) {
 	}
 	h.settle(t)
 
-	got := h.issuedOf(t, account)
+	got := h.issuedOf(t, serviceAccount)
 	if got == nil {
 		t.Fatal("the record went; something else is still holding it")
 	}
@@ -484,17 +484,17 @@ func TestRemovingTheFinalizerByHandIsNotArguedWith(t *testing.T) {
 // above code that proceeded as though it were evidence of sameness.
 func TestAnIdRecordedWithNoAccountIsNotConcludedFrom(t *testing.T) {
 	t.Parallel()
-	account := asking(testNamespace, testName)
-	carried := recordFor(account)
+	serviceAccount := asking(testNamespace, testName)
+	carried := recordFor(serviceAccount)
 	carried.Status.ServicePrincipalID = "7788"
 	carried.Status.ClientID = "app-uuid"
 	// No account: a record written before this was kept, or edited by hand.
 
 	stub := &stubClients{gone: "7788"}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), account, carried)
+	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, carried)
 	h.settle(t)
 
-	issued := h.issuedOf(t, account)
+	issued := h.issuedOf(t, serviceAccount)
 	if issued == nil {
 		t.Fatal("the record is gone")
 	}
@@ -532,7 +532,7 @@ func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
 	t.Parallel()
 	for _, going := range []struct {
 		name string
-		run  func(t *testing.T, h *harness, account *corev1.ServiceAccount)
+		run  func(t *testing.T, h *harness, serviceAccount *corev1.ServiceAccount)
 	}{
 		{"converging", func(*testing.T, *harness, *corev1.ServiceAccount) {}},
 		{"on its way out", func(t *testing.T, h *harness, _ *corev1.ServiceAccount) {
@@ -540,20 +540,20 @@ func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
 		}},
 	} {
 		t.Run(going.name, func(t *testing.T) {
-			account := asking(testNamespace, testName)
-			existing := recordFor(account)
+			serviceAccount := asking(testNamespace, testName)
+			existing := recordFor(serviceAccount)
 			// No id recorded, which is what makes both directions need the
 			// token: converging reads it to write a policy, and destroying
 			// reads it to find what this record may have made and never named.
 			existing.Status.AccountID = testAccountID
 
 			stub := &stubClients{}
-			h := newHarness(t, stub, mintingNamespace(testNamespace), account, existing)
+			h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, existing)
 			h.Issued.TokenPath = filepath.Join(t.TempDir(), "not-there")
-			going.run(t, h, account)
+			going.run(t, h, serviceAccount)
 			h.settle(t)
 
-			issued := h.issuedOf(t, account)
+			issued := h.issuedOf(t, serviceAccount)
 			if issued == nil {
 				t.Fatal("the record is gone")
 			}

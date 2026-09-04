@@ -17,16 +17,16 @@ import (
 // the container's args, so it passes whatever the binary does with it. An
 // assignment dropped between the two is silent, and what it breaks is specific:
 // losing Records has the records of what was issued written to one namespace and
-// looked for in another, and losing Account makes the operator act in whichever
-// DatabricksAccount somebody created.
+// looked for in another, and losing DatabricksAccountNamespacedName makes the
+// operator act in whichever DatabricksAccount somebody created.
 //
 // So this asserts the one thing neither end can: that each value arrives.
 func TestEverySettingReachesAReconciler(t *testing.T) {
 	t.Parallel()
 	want := settings{
-		Namespace: "operators",
-		Account:   types.NamespacedName{Namespace: "operators", Name: "the-account"},
-		Holder:    databricks.NewHolder("operators", "the-account"),
+		Namespace:                       "operators",
+		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: "operators", Name: "the-account"},
+		Holder:                          databricks.NewHolder("operators", "the-account"),
 		Runtime: databricks.Config{
 			OIDCTokenFilepath: "/var/run/secrets/databricks/token",
 			TokenAudience:     "databricks",
@@ -39,9 +39,11 @@ func TestEverySettingReachesAReconciler(t *testing.T) {
 		t.Errorf("Records is %q, want %q -- the records of what was issued would be written "+
 			"to, and looked for in, different namespaces", projection.Records, want.Namespace)
 	}
-	if issued.Account != want.Account || account.Account != want.Account {
-		t.Errorf("Account is %v and %v, want %v -- the operator would act in whichever "+
-			"DatabricksAccount somebody created", issued.Account, account.Account, want.Account)
+	wanted := want.DatabricksAccountNamespacedName
+	if issued.DatabricksAccountNamespacedName != wanted || account.DatabricksAccountNamespacedName != wanted {
+		t.Errorf("DatabricksAccountNamespacedName is %v and %v, want %v -- the operator would "+
+			"act in whichever DatabricksAccount somebody created",
+			issued.DatabricksAccountNamespacedName, account.DatabricksAccountNamespacedName, wanted)
 	}
 	if issued.Databricks != want.Holder || account.Holder != want.Holder {
 		t.Error("the two controllers were not given the same Holder; the account controller " +

@@ -33,7 +33,7 @@ const (
 	testAudience  = "databricks"
 )
 
-// principalOf returns the projection, or nil if there is none.
+// principalOf returns the DatabricksServiceAccount, or nil if there is none.
 func principalOf(t *testing.T, c client.Client) *dbxv1alpha1.DatabricksServiceAccount {
 	t.Helper()
 	var got dbxv1alpha1.DatabricksServiceAccount
@@ -108,12 +108,12 @@ func TestAnAskingServiceAccountGetsAnIdentity(t *testing.T) {
 			issued.Finalizers)
 	}
 	if issued.Status.ServicePrincipalID != identityIn(t, principal).ServicePrincipalID {
-		t.Errorf("the projection says %q and the record says %q; the projection is a copy and "+
+		t.Errorf("the DatabricksServiceAccount says %q and the record says %q; it is a copy and "+
 			"there is nothing for it to disagree with the record about",
 			identityIn(t, principal).ServicePrincipalID, issued.Status.ServicePrincipalID)
 	}
 	if want := testRecords + "/" + issued.Name; identityIn(t, principal).Issued != want {
-		t.Errorf("the projection names record %q, want %q -- the record lives in a namespace the "+
+		t.Errorf("the DatabricksServiceAccount names record %q, want %q -- the record lives in a namespace the "+
 			"reader cannot list, so naming it without the namespace names nothing they can find",
 			identityIn(t, principal).Issued, want)
 	}
@@ -154,7 +154,7 @@ func TestAServiceAccountThatDidNotAskGetsNothing(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	h := newHarness(t, stub,
-		mintingNamespace(testNamespace), serviceAccount(testNamespace, testName))
+		mintingNamespace(testNamespace), serviceAccountNamed(testNamespace, testName))
 	h.settle(t)
 
 	if principalOf(t, h.Client) != nil {
@@ -181,13 +181,13 @@ func TestWithdrawingTheAnnotationTakesTheIdentityBack(t *testing.T) {
 		t.Fatal("nothing was built to withdraw")
 	}
 
-	var account = serviceAccount(testNamespace, testName)
+	var serviceAccount = serviceAccountNamed(testNamespace, testName)
 	if err := h.Client.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, account); err != nil {
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	account.Annotations = nil
-	if err := h.Client.Update(context.Background(), account); err != nil {
+	serviceAccount.Annotations = nil
+	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 
@@ -392,9 +392,9 @@ func TestOneDeletedInDatabricksIsNotReplaced(t *testing.T) {
 // applicationId and will not accept one, so everything granted to the old
 // identity has to be granted again by whoever governs that.
 //
-// Deleting the projection is not this. That object is a copy and deleting it
-// does nothing, which is the whole reason the recovery has to be an act on the
-// ServiceAccount.
+// Deleting the DatabricksServiceAccount is not this. That object is a copy and
+// deleting it does nothing, which is the whole reason the recovery has to be an
+// act on the ServiceAccount.
 func TestAskingAgainStartsAgain(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
@@ -413,15 +413,15 @@ func TestAskingAgainStartsAgain(t *testing.T) {
 
 	stub.gone = ""
 	stub.newServicePrincipalID, stub.newClientID = "9900", "app-uuid-2"
-	account := serviceAccount(testNamespace, testName)
+	serviceAccount := serviceAccountNamed(testNamespace, testName)
 	if err := h.Client.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, account); err != nil {
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	account.Annotations = map[string]string{
+	serviceAccount.Annotations = map[string]string{
 		dbxv1alpha1.ServicePrincipalAnnotation: testOperator.String(),
 	}
-	if err := h.Client.Update(context.Background(), account); err != nil {
+	if err := h.Client.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 	h.settle(t)
@@ -469,13 +469,13 @@ func TestOneThatIsThereIsNotBuiltAgain(t *testing.T) {
 // its request, which is a different act from the account withdrawing a namespace.
 func stopsAsking(t *testing.T, c client.Client) {
 	t.Helper()
-	account := serviceAccount(testNamespace, testName)
+	serviceAccount := serviceAccountNamed(testNamespace, testName)
 	if err := c.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, account); err != nil {
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
 		t.Fatal(err)
 	}
-	account.Annotations = nil
-	if err := c.Update(context.Background(), account); err != nil {
+	serviceAccount.Annotations = nil
+	if err := c.Update(context.Background(), serviceAccount); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -500,12 +500,12 @@ func TestAFailedDeleteHoldsTheRecord(t *testing.T) {
 		t.Errorf("Ready is %v, want it to say the service principal is still there", ready)
 	}
 
-	// The projection is gone either way, and that is right: nothing is asking
-	// any more, so there is nothing to show. What is owed is owed on the record,
-	// in the operator's own namespace, where waiting blocks nobody's namespace
-	// from being deleted.
+	// The DatabricksServiceAccount is gone either way, and that is right: nothing
+	// is asking any more, so there is nothing to show. What is owed is owed on the
+	// record, in the operator's own namespace, where waiting blocks nobody's
+	// namespace from being deleted.
 	if principalOf(t, h.Client) != nil {
-		t.Error("the projection outlived the request; it shows what is asked for and nothing asks")
+		t.Error("the DatabricksServiceAccount outlived the request; it shows what is asked for and nothing asks")
 	}
 
 	// And it is owed until it is paid.
@@ -893,7 +893,7 @@ func TestWithNoDatabricksAccountNothingBreaksAndEverythingSaysWhy(t *testing.T) 
 func TestEnablingANamespaceWakesTheServiceAccountsInIt(t *testing.T) {
 	t.Parallel()
 	asked := asking(testNamespace, testName)
-	silent := serviceAccount(testNamespace, "no-databricks")
+	silent := serviceAccountNamed(testNamespace, "no-databricks")
 	elsewhere := asking("team-b", "loader")
 
 	stub := &stubClients{}
@@ -919,8 +919,8 @@ func TestEnablingANamespaceWakesNothingElse(t *testing.T) {
 	stub := &stubClients{}
 	h := newHarness(t, stub,
 		namespaceNamed("team-b"),
-		serviceAccount("team-b", "one"),
-		serviceAccount("team-b", "two"))
+		serviceAccountNamed("team-b", "one"),
+		serviceAccountNamed("team-b", "two"))
 
 	if requests := h.Projection.identitiesInNamespace(context.Background(), namespaceNamed("team-b")); len(requests) != 0 {
 		t.Errorf("woke %+v; none of those ServiceAccounts asked for anything", requests)
@@ -939,14 +939,14 @@ func TestEnablingANamespaceWakesNothingElse(t *testing.T) {
 // waits on an identity that will never arrive and is told nothing about why.
 func TestEnablingANamespaceWakesAServiceAccountItCanOnlyRefuse(t *testing.T) {
 	t.Parallel()
-	mistyped := serviceAccount(testNamespace, "mistyped")
+	mistyped := serviceAccountNamed(testNamespace, "mistyped")
 	mistyped.Annotations = map[string]string{
 		dbxv1alpha1.ServicePrincipalAnnotationFor(""): strings.ReplaceAll(testOperator.String(), "/", ""),
 	}
 
 	stub := &stubClients{}
 	h := newHarness(t, stub,
-		mintingNamespace(testNamespace), mistyped, serviceAccount(testNamespace, "no-databricks"))
+		mintingNamespace(testNamespace), mistyped, serviceAccountNamed(testNamespace, "no-databricks"))
 
 	requests := h.Projection.identitiesInNamespace(context.Background(), mintingNamespace(testNamespace))
 
@@ -1105,19 +1105,19 @@ func TestNamingNoNamespacesServesNothing(t *testing.T) {
 // interval, with nothing anywhere reporting an error.
 func TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted(t *testing.T) {
 	t.Parallel()
-	account := asking(testNamespace, testName)
-	existing := recordFor(account)
+	serviceAccount := asking(testNamespace, testName)
+	existing := recordFor(serviceAccount)
 	existing.Status.ServicePrincipalID = "7788"
 	existing.Status.ClientID = "app-uuid"
 	existing.Status.AccountID = "the-account-it-was-made-in"
 
 	// Absent from this account, which is what a lookup in the wrong one answers.
 	stub := &stubClients{accountID: "somewhere-else", gone: "7788"}
-	h := newHarness(t, stub, mintingNamespace(testNamespace), account, existing)
+	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount, existing)
 
 	h.settle(t)
 
-	got := h.issuedOf(t, account)
+	got := h.issuedOf(t, serviceAccount)
 	if got == nil {
 		t.Fatal("the record is gone")
 	}
@@ -1145,7 +1145,7 @@ func TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted(t *testing.T) {
 	}
 	shown := meta.FindStatusCondition(identityIn(t, projected).Conditions, conditionReady)
 	if shown == nil || shown.Reason != reasonAccountMismatch {
-		t.Errorf("the projection says %v; it carries the record's words or it is no use", shown)
+		t.Errorf("the DatabricksServiceAccount says %v; it carries the record's words or it is no use", shown)
 	}
 }
 
@@ -1202,7 +1202,7 @@ func TestDeletingTheProjectionChangesNothing(t *testing.T) {
 	}
 	after := principalOf(t, h.Client)
 	if after == nil {
-		t.Fatal("the projection did not come back")
+		t.Fatal("the DatabricksServiceAccount did not come back")
 	}
 	if identityIn(t, after).ServicePrincipalID != identityIn(t, before).ServicePrincipalID {
 		t.Errorf("it came back naming %q, want the same identity %q",
@@ -1380,10 +1380,10 @@ func TestAnAnnotationNamingAnotherOperatorIsNotThisOnesRequest(t *testing.T) {
 func TestAServiceAccountAskingSeveralOperatorsIsAskingThisOne(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
-	account := asking(testNamespace, testName)
-	account.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("elsewhere")] =
+	serviceAccount := asking(testNamespace, testName)
+	serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor("elsewhere")] =
 		"somebody-else/databricks-account"
-	h := newHarness(t, stub, mintingNamespace(testNamespace), account)
+	h := newHarness(t, stub, mintingNamespace(testNamespace), serviceAccount)
 	h.settle(t)
 
 	principal := principalOf(t, h.Client)
@@ -1391,7 +1391,7 @@ func TestAServiceAccountAskingSeveralOperatorsIsAskingThisOne(t *testing.T) {
 		t.Fatal("an operator named in the annotations did not answer")
 	}
 	if len(principal.Status.Identities) != 1 {
-		t.Fatalf("the projection carries %+v; this operator was asked for one identity and the "+
+		t.Fatalf("the DatabricksServiceAccount carries %+v; this operator was asked for one identity and the "+
 			"other key is another operator's to answer", principal.Status.Identities)
 	}
 	if identityIn(t, principal).Profile != testOperator.String() {
@@ -1462,10 +1462,10 @@ func TestARecordThatHasNotReachedTheCacheIsNotDereferenced(t *testing.T) {
 		Build()
 
 	reconciler := &DatabricksServiceAccountReconciler{
-		Client:  lagging,
-		Scheme:  scheme,
-		Records: operatorNamespace,
-		Account: types.NamespacedName{Namespace: operatorNamespace, Name: "databricks-account"},
+		Client:                          lagging,
+		Scheme:                          scheme,
+		Records:                         operatorNamespace,
+		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: "databricks-account"},
 	}
 
 	// The assertion is that this returns at all. Before the fix it panicked, and
@@ -1473,7 +1473,7 @@ func TestARecordThatHasNotReachedTheCacheIsNotDereferenced(t *testing.T) {
 	// controller's worker going down.
 	_, _, err := reconciler.entryFor(context.Background(),
 		asking(testNamespace, testName),
-		dbxv1alpha1.Request{Operator: reconciler.Account}, true)
+		dbxv1alpha1.Request{Operator: reconciler.DatabricksAccountNamespacedName}, true)
 	if err == nil {
 		t.Fatal("a record that could not be read back produced no error; the pass built an entry " +
 			"from a record it never saw")

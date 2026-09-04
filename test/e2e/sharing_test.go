@@ -49,12 +49,12 @@ import (
 // namespaces would not show that: their uids differ, so they would stay apart
 // however either operator behaved.
 //
-// The key asking the other operator is a named one, which is what makes this the
-// case an operator gets wrong. Its entry on the projection is keyed "other" and
-// names no operator anywhere in that key, so an operator looking for its own
-// reference inside the key finds nothing of its own -- and what it does with the
-// entries it does not recognise is either destroying a neighbour's identity or
-// leaving its own behind.
+// The key asking the other operator is a named one, which is what makes this
+// the case an operator gets wrong. Its entry on the DatabricksServiceAccount is
+// keyed "other" and names no operator anywhere in that key, so an operator
+// looking for its own reference inside the key finds nothing of its own -- and
+// what it does with the entries it does not recognise is either destroying a
+// neighbour's identity or leaving its own behind.
 var _ = Describe("One ServiceAccount asking two operators", Ordered, Serial, func() {
 	const (
 		team = "e2e-sharing"
@@ -120,7 +120,7 @@ var _ = Describe("One ServiceAccount asking two operators", Ordered, Serial, fun
 	})
 
 	It("says which operator issued each entry, since the key no longer does", func() {
-		// The projection is one object two operators write, and a named
+		// The DatabricksServiceAccount is one object two operators write, and a named
 		// identity's key is its name alone. So "whose is this entry" is answered
 		// by this field or by nothing: an operator answering it from the key
 		// would find its own reference in its unnamed entries and in none of its
@@ -152,7 +152,7 @@ var _ = Describe("One ServiceAccount asking two operators", Ordered, Serial, fun
 		Eventually(func() []string {
 			return requestsOn(team, name)
 		}, 2*time.Minute, 5*time.Second).Should(ConsistOf(theirIdentity),
-			"the projection does not carry exactly the entry that is still asked for: an "+
+			"the DatabricksServiceAccount does not carry exactly the entry that is still asked for: an "+
 				"operator either took the other's entry off it, or left its own on it after "+
 				"destroying what the entry describes")
 	})
@@ -317,7 +317,7 @@ func grantAccountAdmin(servicePrincipalID string) {
 	// the operator. A bearer token read from the environment was a second
 	// credential to get right, and unset it sends "Bearer " and the account
 	// answers 401 -- a message about credentials, in a suite about two operators.
-	Expect(clients.Account().Config.Authenticate(request)).To(Succeed(),
+	Expect(clients.AccountClient().Config.Authenticate(request)).To(Succeed(),
 		"signing the request as the operator")
 	request.Header.Set("Content-Type", "application/json")
 
@@ -344,7 +344,7 @@ func markerOf(servicePrincipalID string) string {
 	// the operator. A bearer token read from the environment was a second
 	// credential to get right, and unset it sends "Bearer " and the account
 	// answers 401 -- a message about credentials, in a suite about two operators.
-	Expect(clients.Account().Config.Authenticate(request)).To(Succeed(),
+	Expect(clients.AccountClient().Config.Authenticate(request)).To(Succeed(),
 		"signing the request as the operator")
 
 	response, err := http.DefaultClient.Do(request)

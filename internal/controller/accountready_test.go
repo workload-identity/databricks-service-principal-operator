@@ -12,7 +12,7 @@ import (
 )
 
 func accountWith(name string, ready metav1.ConditionStatus) *dbxv1alpha1.DatabricksAccount {
-	object := account(name)
+	object := databricksAccountNamed(name)
 	setCondition(&object.Status.Conditions, 0, conditionReady, ready, reasonAccountReady, "checked")
 	return object
 }

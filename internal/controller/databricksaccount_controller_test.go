@@ -64,7 +64,7 @@ func writeTokenAs(t *testing.T, issuer, subject, audience string) string {
 	return path
 }
 
-func account(name string) *dbxv1alpha1.DatabricksAccount {
+func databricksAccountNamed(name string) *dbxv1alpha1.DatabricksAccount {
 	return &dbxv1alpha1.DatabricksAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: operatorNamespace},
 		Spec: dbxv1alpha1.DatabricksAccountSpec{
@@ -84,13 +84,13 @@ func newAccountReconciler(t *testing.T, tokenPath string, verify func() error,
 	holder := dbx.NewHolder(operatorNamespace, accountObject)
 	built := &stubClients{}
 	return &DatabricksAccountReconciler{
-		Client:  c,
-		Scheme:  scheme,
-		Account: types.NamespacedName{Namespace: operatorNamespace, Name: accountObject},
-		Holder:  holder,
-		Runtime: dbx.Config{OIDCTokenFilepath: tokenPath, TokenAudience: "databricks"},
-		build:   func(dbx.Config) (dbx.Clients, error) { return built, nil },
-		verify:  func(context.Context, dbx.Clients) error { return verify() },
+		Client:                          c,
+		Scheme:                          scheme,
+		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: accountObject},
+		Holder:                          holder,
+		Runtime:                         dbx.Config{OIDCTokenFilepath: tokenPath, TokenAudience: "databricks"},
+		build:                           func(dbx.Config) (dbx.Clients, error) { return built, nil },
+		verify:                          func(context.Context, dbx.Clients) error { return verify() },
 	}, c, holder
 }
 
@@ -141,7 +141,7 @@ func TestAccountReportsTheSubjectItPresents(t *testing.T) {
 	r, c, holder := newAccountReconciler(t,
 		writeToken(t, testSubject, "databricks"),
 		func() error { return nil },
-		account(accountObject))
+		databricksAccountNamed(accountObject))
 	reconcileAccount(t, r, accountObject)
 
 	status := accountStatus(t, c, accountObject)
@@ -174,7 +174,7 @@ func TestAccountReportsTheSubjectEvenWhenRefused(t *testing.T) {
 	r, c, holder := newAccountReconciler(t,
 		writeToken(t, testSubject, "databricks"),
 		func() error { return refused },
-		account(accountObject))
+		databricksAccountNamed(accountObject))
 	reconcileAccount(t, r, accountObject)
 
 	status := accountStatus(t, c, accountObject)
@@ -214,7 +214,7 @@ func TestAccountFailureKeepsWorkingClients(t *testing.T) {
 			}
 			return nil
 		},
-		account(accountObject))
+		databricksAccountNamed(accountObject))
 
 	reconcileAccount(t, r, accountObject)
 	if !holder.Configured() {
@@ -240,7 +240,7 @@ func TestAccountDeletionClearsTheClients(t *testing.T) {
 	r, c, holder := newAccountReconciler(t,
 		writeToken(t, testSubject, "databricks"),
 		func() error { return nil },
-		account(accountObject))
+		databricksAccountNamed(accountObject))
 	reconcileAccount(t, r, accountObject)
 	if !holder.Configured() {
 		t.Fatal("the first reconcile installed no clients")
@@ -275,7 +275,7 @@ func TestAccountNotSelectedSaysSo(t *testing.T) {
 	r, c, holder := newAccountReconciler(t,
 		writeToken(t, testSubject, "databricks"),
 		func() error { return nil },
-		account(other))
+		databricksAccountNamed(other))
 	reconcileAccount(t, r, other)
 
 	ready := accountCondition(t, c, other)
@@ -373,7 +373,7 @@ func TestIdentitiesMadeElsewhereAreCountedHere(t *testing.T) {
 	t.Parallel()
 	r, c, _ := newAccountReconciler(t, writeToken(t, testIssuer, testAudience),
 		func() error { return nil },
-		account(accountObject),
+		databricksAccountNamed(accountObject),
 		identityMadeIn("etl", "an-older-account"),
 		identityMadeIn("loader", "an-older-account"),
 		identityMadeIn("current", testAccountID))
@@ -417,7 +417,7 @@ func TestAnotherOperatorsIdentitiesAreNotCounted(t *testing.T) {
 	t.Parallel()
 	r, c, _ := newAccountReconciler(t, writeToken(t, testIssuer, testAudience),
 		func() error { return nil },
-		account(accountObject),
+		databricksAccountNamed(accountObject),
 		identityMadeIn("current", testAccountID),
 		identityOfAnotherOperator("theirs", "an-account-this-operator-never-saw"))
 	reconcileAccount(t, r, accountObject)
@@ -447,7 +447,7 @@ func TestAllIdentitiesHereIsSaidRatherThanLeftBlank(t *testing.T) {
 	t.Parallel()
 	r, c, _ := newAccountReconciler(t, writeToken(t, testIssuer, testAudience),
 		func() error { return nil },
-		account(accountObject),
+		databricksAccountNamed(accountObject),
 		identityMadeIn("etl", testAccountID))
 	reconcileAccount(t, r, accountObject)
 
@@ -484,7 +484,7 @@ func TestRepointingAtAnAccountThatFailsWithdrawsTheOldOne(t *testing.T) {
 	var verifies error
 	r, c, holder := newAccountReconciler(t, writeToken(t, testIssuer, testAudience),
 		func() error { return verifies },
-		account(accountObject))
+		databricksAccountNamed(accountObject))
 
 	reconcileAccount(t, r, accountObject)
 	if !holder.Configured() {
@@ -536,7 +536,7 @@ func TestOneBadCallDoesNotWithdrawAWorkingAccount(t *testing.T) {
 	var verifies error
 	r, _, holder := newAccountReconciler(t, writeToken(t, testIssuer, testAudience),
 		func() error { return verifies },
-		account(accountObject))
+		databricksAccountNamed(accountObject))
 
 	reconcileAccount(t, r, accountObject)
 	if !holder.Configured() {
@@ -564,7 +564,7 @@ func TestAnOperatorThatCannotReadItsOwnTokenSaysSo(t *testing.T) {
 	t.Parallel()
 	r, c, _ := newAccountReconciler(t, filepath.Join(t.TempDir(), "not-there"),
 		func() error { return nil },
-		account(accountObject))
+		databricksAccountNamed(accountObject))
 	reconcileAccount(t, r, accountObject)
 
 	var got dbxv1alpha1.DatabricksAccount
@@ -601,7 +601,7 @@ func TestNothingIsBlankedByAReadThatFailed(t *testing.T) {
 	t.Parallel()
 	r, c, _ := newAccountReconciler(t, writeToken(t, testSubject, testAudience),
 		func() error { return nil },
-		account(accountObject))
+		databricksAccountNamed(accountObject))
 	reconcileAccount(t, r, accountObject)
 
 	var reported dbxv1alpha1.DatabricksAccount

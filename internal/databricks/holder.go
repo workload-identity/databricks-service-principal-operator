@@ -167,8 +167,8 @@ var _ Clients = (*Holder)(nil)
 // row takes a Snapshot instead: these each read the Holder again, and what they
 // read can change between them.
 
-func (h *Holder) Account() *databricks.AccountClient { return h.Snapshot().Account() }
-func (h *Holder) AccountID() string                  { return h.Snapshot().AccountID() }
+func (h *Holder) AccountClient() *databricks.AccountClient { return h.Snapshot().AccountClient() }
+func (h *Holder) AccountID() string                        { return h.Snapshot().AccountID() }
 
 func (h *Holder) FindServicePrincipal(ctx context.Context, issuing Issuing) (string, string, bool, error) {
 	return h.Snapshot().FindServicePrincipal(ctx, issuing)
@@ -212,9 +212,9 @@ func (u unconfigured) err() error {
 	return &ErrNotConfigured{Name: u.name, Namespace: u.namespace, Reason: u.reason}
 }
 
-func (u unconfigured) Snapshot() Clients                  { return u }
-func (u unconfigured) Account() *databricks.AccountClient { return nil }
-func (u unconfigured) AccountID() string                  { return "" }
+func (u unconfigured) Snapshot() Clients                        { return u }
+func (u unconfigured) AccountClient() *databricks.AccountClient { return nil }
+func (u unconfigured) AccountID() string                        { return "" }
 
 func (u unconfigured) FindServicePrincipal(context.Context, Issuing) (string, string, bool, error) {
 	return "", "", false, u.err()

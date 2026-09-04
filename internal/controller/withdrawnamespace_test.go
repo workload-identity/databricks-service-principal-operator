@@ -42,20 +42,20 @@ var otherOperator = types.NamespacedName{Namespace: "other-operators", Name: "el
 func (h *harness) accounts(t *testing.T) *DatabricksAccountReconciler {
 	t.Helper()
 	return &DatabricksAccountReconciler{
-		Client:  h.Client,
-		Scheme:  h.Projection.Scheme,
-		Account: testOperator,
-		Holder:  dbx.NewHolder(operatorNamespace, accountObject),
-		Runtime: dbx.Config{OIDCTokenFilepath: h.Issued.TokenPath, TokenAudience: testAudience},
-		build:   func(dbx.Config) (dbx.Clients, error) { return h.Stub, nil },
-		verify:  func(context.Context, dbx.Clients) error { return nil },
+		Client:                          h.Client,
+		Scheme:                          h.Projection.Scheme,
+		DatabricksAccountNamespacedName: testOperator,
+		Holder:                          dbx.NewHolder(operatorNamespace, accountObject),
+		Runtime:                         dbx.Config{OIDCTokenFilepath: h.Issued.TokenPath, TokenAudience: testAudience},
+		build:                           func(dbx.Config) (dbx.Clients, error) { return h.Stub, nil },
+		verify:                          func(context.Context, dbx.Clients) error { return nil },
 	}
 }
 
 // serving is a DatabricksAccount for another operator, in that operator's own
 // namespace, naming the namespaces it serves.
 func serving(operator types.NamespacedName, namespaces ...string) *dbxv1alpha1.DatabricksAccount {
-	object := account(operator.Name)
+	object := databricksAccountNamed(operator.Name)
 	object.Namespace = operator.Namespace
 	object.Spec.Namespaces = namespaces
 	return object
@@ -67,10 +67,10 @@ func serving(operator types.NamespacedName, namespaces ...string) *dbxv1alpha1.D
 func projectionFor(scheme *runtime.Scheme, c client.Client,
 	operator types.NamespacedName) *DatabricksServiceAccountReconciler {
 	return &DatabricksServiceAccountReconciler{
-		Client:  c,
-		Scheme:  scheme,
-		Records: operator.Namespace,
-		Account: operator,
+		Client:                          c,
+		Scheme:                          scheme,
+		Records:                         operator.Namespace,
+		DatabricksAccountNamespacedName: operator,
 	}
 }
 
@@ -78,12 +78,12 @@ func projectionFor(scheme *runtime.Scheme, c client.Client,
 // platform team editing spec.namespaces does.
 func nowServing(t *testing.T, c client.Client, namespaces ...string) {
 	t.Helper()
-	var account dbxv1alpha1.DatabricksAccount
-	if err := c.Get(context.Background(), testOperator, &account); err != nil {
+	var databricksAccount dbxv1alpha1.DatabricksAccount
+	if err := c.Get(context.Background(), testOperator, &databricksAccount); err != nil {
 		t.Fatal(err)
 	}
-	account.Spec.Namespaces = namespaces
-	if err := c.Update(context.Background(), &account); err != nil {
+	databricksAccount.Spec.Namespaces = namespaces
+	if err := c.Update(context.Background(), &databricksAccount); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -158,8 +158,8 @@ func withdrawnCondition(t *testing.T, c client.Client) *metav1.Condition {
 
 // requestFor is the reconcile request for one ServiceAccount, which is what a
 // projection controller is asked about.
-func requestFor(account *corev1.ServiceAccount) reconcile.Request {
-	return reconcile.Request{NamespacedName: client.ObjectKeyFromObject(account)}
+func requestFor(serviceAccount *corev1.ServiceAccount) reconcile.Request {
+	return reconcile.Request{NamespacedName: client.ObjectKeyFromObject(serviceAccount)}
 }
 
 // recordsIn is how many records one operator has written in its own namespace,
@@ -401,8 +401,8 @@ func TestNoServicePrincipalIsMintedForANamespaceOnItsWayOut(t *testing.T) {
 	h.Projection.Client = interceptor.NewClient(h.Client.(client.WithWatch), interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
 			object client.Object, opts ...client.GetOption) error {
-			if account, is := object.(*dbxv1alpha1.DatabricksAccount); is {
-				before.DeepCopyInto(account)
+			if databricksAccount, is := object.(*dbxv1alpha1.DatabricksAccount); is {
+				before.DeepCopyInto(databricksAccount)
 				return nil
 			}
 			return c.Get(ctx, key, object, opts...)
