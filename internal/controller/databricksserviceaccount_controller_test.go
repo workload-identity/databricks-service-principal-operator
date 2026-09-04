@@ -611,7 +611,7 @@ func tokenVolumeFor(audience string) corev1.Volume {
 func equippedPod(account string, identities ...dbxv1alpha1.ProjectedIdentity) *corev1.Pod {
 	if len(identities) == 0 {
 		identities = []dbxv1alpha1.ProjectedIdentity{{
-			Request: testOperator.String(), ClientID: "app-uuid", Audience: testAudience,
+			Profile: testOperator.String(), ClientID: "app-uuid", Audience: testAudience,
 		}}
 	}
 	pod := rawPodRunningAs(account, tokenVolume())
@@ -1255,7 +1255,7 @@ func TestAPodCarryingATokenForAnotherAudienceIsReported(t *testing.T) {
 	pod.Annotations = map[string]string{
 		dbxwebhook.ConfigAnnotation: dbxwebhook.Configuration(
 			[]dbxv1alpha1.ProjectedIdentity{{
-				Request: testOperator.String(), ClientID: "app-uuid", Audience: testAudience,
+				Profile: testOperator.String(), ClientID: "app-uuid", Audience: testAudience,
 			}}),
 	}
 	h := newHarness(t, stub,
@@ -1394,9 +1394,9 @@ func TestAServiceAccountAskingSeveralOperatorsIsAskingThisOne(t *testing.T) {
 		t.Fatalf("the projection carries %+v; this operator was asked for one identity and the "+
 			"other key is another operator's to answer", principal.Status.Identities)
 	}
-	if identityIn(t, principal).Request != testOperator.String() {
+	if identityIn(t, principal).Profile != testOperator.String() {
 		t.Errorf("the entry is keyed %q, want this operator's own key",
-			identityIn(t, principal).Request)
+			identityIn(t, principal).Profile)
 	}
 	if len(stub.created) != 1 {
 		t.Errorf("created %v, want the one this operator was asked for", stub.created)

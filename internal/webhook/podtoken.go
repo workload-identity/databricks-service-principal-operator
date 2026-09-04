@@ -220,7 +220,7 @@ func inject(pod *corev1.Pod, identities []dbxv1alpha1.ProjectedIdentity) {
 	for _, identity := range identities {
 		sources = append(sources, corev1.VolumeProjection{
 			ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
-				Path:              TokenProjectionPathFor(identity.Request),
+				Path:              TokenProjectionPathFor(identity.Profile),
 				Audience:          identity.Audience,
 				ExpirationSeconds: ptr(tokenExpirationSeconds),
 			},
@@ -253,10 +253,10 @@ func inject(pod *corev1.Pod, identities []dbxv1alpha1.ProjectedIdentity) {
 	// something before it starts needs its identity as much as the one that
 	// reaches it while running.
 	for i := range pod.Spec.InitContainers {
-		equip(&pod.Spec.InitContainers[i], identities[0].Request)
+		equip(&pod.Spec.InitContainers[i], identities[0].Profile)
 	}
 	for i := range pod.Spec.Containers {
-		equip(&pod.Spec.Containers[i], identities[0].Request)
+		equip(&pod.Spec.Containers[i], identities[0].Profile)
 	}
 }
 

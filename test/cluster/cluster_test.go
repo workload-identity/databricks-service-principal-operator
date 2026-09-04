@@ -823,7 +823,7 @@ metadata:
 	entries := make([]string, 0, len(identities))
 	for i, identity := range identities {
 		entries = append(entries, fmt.Sprintf(
-			`{"request":%q,"operator":%q,`+
+			`{"profile":%q,"operator":%q,`+
 				`"clientId":"0000000%d-0000-0000-0000-000000000000","audience":"databricks"}`,
 			identity, operatorRef, i+1))
 	}

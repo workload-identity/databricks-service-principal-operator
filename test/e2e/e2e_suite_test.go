@@ -414,7 +414,7 @@ spec:
 type projection struct {
 	Status struct {
 		Identities []struct {
-			Request                   string `json:"request"`
+			Profile                   string `json:"profile"`
 			Operator                  string `json:"operator"`
 			ClientID                  string `json:"clientId"`
 			ServicePrincipalID        string `json:"servicePrincipalId"`
@@ -441,7 +441,7 @@ func read(team, account string) projection {
 func requestsOn(team, account string) []string {
 	var requests []string
 	for _, identity := range read(team, account).Status.Identities {
-		requests = append(requests, identity.Request)
+		requests = append(requests, identity.Profile)
 	}
 	return requests
 }
@@ -452,7 +452,7 @@ func requestsOn(team, account string) []string {
 // ask.
 func removedIDOf(team, account, request string) string {
 	for _, identity := range read(team, account).Status.Identities {
-		if identity.Request == request {
+		if identity.Profile == request {
 			return identity.RemovedServicePrincipalID
 		}
 	}
@@ -466,7 +466,7 @@ func removedIDOf(team, account, request string) string {
 // thing on the object that says whose the entry is.
 func operatorOf(team, account, request string) string {
 	for _, identity := range read(team, account).Status.Identities {
-		if identity.Request == request {
+		if identity.Profile == request {
 			return identity.Operator
 		}
 	}
@@ -484,7 +484,7 @@ func conditionOn(team, account, request, condition string) string {
 // records.
 func clientIDOf(team, account, request string) string {
 	for _, identity := range read(team, account).Status.Identities {
-		if identity.Request == request {
+		if identity.Profile == request {
 			return identity.ClientID
 		}
 	}
@@ -495,7 +495,7 @@ func clientIDOf(team, account, request string) string {
 // account is asked about.
 func servicePrincipalIDOf(team, account, request string) string {
 	for _, identity := range read(team, account).Status.Identities {
-		if identity.Request == request {
+		if identity.Profile == request {
 			return identity.ServicePrincipalID
 		}
 	}

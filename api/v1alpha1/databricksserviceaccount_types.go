@@ -197,15 +197,18 @@ const (
 // each owned by its own writer -- which is what stops the two from undoing each
 // other, the way two operators writing one DatabricksAccount's status once did.
 type ProjectedIdentity struct {
-	// request is the profile name: what a workload passes to the Databricks SDK
-	// to use this identity. It is the identity's own name, or the operator's
-	// reference for the unnamed one. See Request.String.
+	// profile is what a workload passes to the Databricks SDK to use this
+	// identity: the name its own ServiceAccount gave it, or -- for the identity
+	// asked for without one -- the operator's reference, which is a name nobody
+	// typed and nothing derives. A rule for deriving it would be a rule the
+	// workload had to learn before it could name its own profile.
 	//
-	// It is the key, so one operator writes one entry and cannot touch another's.
-	// Unique across operators without anything checking: a name is an annotation
-	// map key on this one ServiceAccount, and no name holds the "/" that every
-	// operator reference holds.
-	Request string `json:"request"`
+	// It is also the key this list merges on, so one operator writes one entry
+	// and cannot touch another's. That holds without anything checking it: a
+	// name is an annotation map key on this one ServiceAccount, so it is unique
+	// here, and no name can collide with an operator reference because no name
+	// holds the "/" that every reference holds. See Request.String.
+	Profile string `json:"profile"`
 
 	// operator is the DatabricksAccount naming the operator that issued this, as
 	// <its namespace>/<its name> -- the value the ServiceAccount wrote in the
@@ -301,7 +304,7 @@ type DatabricksServiceAccountStatus struct {
 	// object answers "what identities does this workload have" rather than
 	// leaving somebody to find the others.
 	// +listType=map
-	// +listMapKey=request
+	// +listMapKey=profile
 	// +optional
 	Identities []ProjectedIdentity `json:"identities,omitempty"`
 }
@@ -323,7 +326,7 @@ func (s *DatabricksServiceAccountStatus) First() (ProjectedIdentity, bool) {
 // Identity returns the entry for one profile name, and whether there is one.
 func (s *DatabricksServiceAccountStatus) Identity(request string) (*ProjectedIdentity, bool) {
 	for i := range s.Identities {
-		if s.Identities[i].Request == request {
+		if s.Identities[i].Profile == request {
 			return &s.Identities[i], true
 		}
 	}

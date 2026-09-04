@@ -245,7 +245,7 @@ func (r *DatabricksServiceAccountReconciler) entryFor(ctx context.Context,
 	}
 
 	entry := dbxv1alpha1.ProjectedIdentity{
-		Request:                   request.String(),
+		Profile:                   request.String(),
 		Operator:                  request.Operator.String(),
 		Issued:                    r.Records + "/" + issued.Name,
 		ServicePrincipalID:        issued.Status.ServicePrincipalID,
@@ -340,7 +340,7 @@ func (r *DatabricksServiceAccountReconciler) apply(ctx context.Context,
 func projectedIdentityFor(entry dbxv1alpha1.ProjectedIdentity) *acv1alpha1.ProjectedIdentityApplyConfiguration {
 	// The key, always, including when it is the only thing there is: an entry
 	// without one is not an entry, and it is what the merge is keyed on.
-	identity := acv1alpha1.ProjectedIdentity().WithRequest(entry.Request)
+	identity := acv1alpha1.ProjectedIdentity().WithProfile(entry.Profile)
 
 	for _, field := range []struct {
 		value string
@@ -598,7 +598,7 @@ func (r *DatabricksServiceAccountReconciler) equipment(ctx context.Context,
 		case corev1.PodSucceeded, corev1.PodFailed:
 			continue
 		}
-		switch minted, carries := tokenAudienceOf(pod, entry.Request); {
+		switch minted, carries := tokenAudienceOf(pod, entry.Profile); {
 		case !carries:
 			noToken = append(noToken, pod.Name)
 		case minted != entry.Audience:
@@ -794,10 +794,10 @@ func (r *DatabricksServiceAccountReconciler) resentIdentities(ctx context.Contex
 // back is this operator's to do, because only it knows its own reference.
 func (r *DatabricksServiceAccountReconciler) identityNameOf(
 	entry dbxv1alpha1.ProjectedIdentity) string {
-	if entry.Request == r.Account.String() {
+	if entry.Profile == r.Account.String() {
 		return ""
 	}
-	return entry.Request
+	return entry.Profile
 }
 
 // injecting reports whether pods created in this namespace are given their

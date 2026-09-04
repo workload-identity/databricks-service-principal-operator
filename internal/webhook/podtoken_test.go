@@ -57,7 +57,7 @@ func identity(namespace, name string) *dbxv1alpha1.DatabricksServiceAccount {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 	}
 	principal.Status.Identities = []dbxv1alpha1.ProjectedIdentity{{
-		Request:            testOperator,
+		Profile:            testOperator,
 		Operator:           testOperator,
 		ClientID:           testClientID,
 		Audience:           testAudience,
@@ -694,11 +694,11 @@ func TestAPodCarriesEveryIdentityItWasIssued(t *testing.T) {
 
 	principal := identity(testNamespace, testAccount)
 	principal.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
-		{Request: reader, Operator: testOperator, ClientID: "reader-client", Audience: "databricks"},
+		{Profile: reader, Operator: testOperator, ClientID: "reader-client", Audience: "databricks"},
 		// Another operator's unnamed identity, which is why its profile is that
 		// operator's reference. Its audience is its own: nothing asks two platform
 		// teams to agree on one.
-		{Request: writer, Operator: writer, ClientID: "writer-client", Audience: "some-other-aud"},
+		{Profile: writer, Operator: writer, ClientID: "writer-client", Audience: "some-other-aud"},
 	}
 	i := newInjector(t, principal)
 	pod := admit(t, i, podUsing(testAccount))
@@ -740,7 +740,7 @@ func TestAnIdentityIsCalledWhatItsAnnotationKeyCalledIt(t *testing.T) {
 	t.Parallel()
 	principal := identity(testNamespace, testAccount)
 	principal.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
-		{Request: "reader", Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
+		{Profile: "reader", Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
 	}
 	i := newInjector(t, principal)
 	pod := admit(t, i, podUsing(testAccount))
@@ -783,8 +783,8 @@ func TestAnIdentityWithoutAClientIdYetDoesNotHoldBackItsNeighbours(t *testing.T)
 
 	principal := identity(testNamespace, testAccount)
 	principal.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
-		{Request: ready, Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
-		{Request: "writer", Operator: testOperator, Audience: testAudience},
+		{Profile: ready, Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
+		{Profile: "writer", Operator: testOperator, Audience: testAudience},
 	}
 	i := newInjector(t, principal)
 	pod := admit(t, i, podUsing(testAccount))

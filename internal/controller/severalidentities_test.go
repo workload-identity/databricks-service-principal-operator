@@ -320,7 +320,7 @@ func TestEquipmentIsReportedPerNamedIdentity(t *testing.T) {
 	pod.Annotations = map[string]string{
 		dbxwebhook.ConfigAnnotation: dbxwebhook.Configuration(
 			[]dbxv1alpha1.ProjectedIdentity{{
-				Request: reader, ClientID: "app-uuid", Audience: testAudience,
+				Profile: reader, ClientID: "app-uuid", Audience: testAudience,
 			}}),
 	}
 

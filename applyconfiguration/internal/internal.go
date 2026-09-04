@@ -116,7 +116,7 @@ var schemaYAML = typed.YAMLObject(`types:
             namedType: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.ProjectedIdentity
           elementRelationship: associative
           keys:
-          - request
+          - profile
 - name: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.IssuedDatabricksServicePrincipal
   map:
     fields:
@@ -220,10 +220,10 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: operator
       type:
         scalar: string
-    - name: removedServicePrincipalId
+    - name: profile
       type:
         scalar: string
-    - name: request
+    - name: removedServicePrincipalId
       type:
         scalar: string
     - name: servicePrincipalId

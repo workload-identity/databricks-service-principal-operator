@@ -42,6 +42,7 @@ go.work
 # to them because a clone does not have them.
 draft.md
 draft/
+notes/
 
 # Working review notes. Same reason as draft.md.
 review.md

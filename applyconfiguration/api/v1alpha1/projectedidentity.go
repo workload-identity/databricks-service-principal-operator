@@ -32,15 +32,18 @@ import (
 // each owned by its own writer -- which is what stops the two from undoing each
 // other, the way two operators writing one DatabricksAccount's status once did.
 type ProjectedIdentityApplyConfiguration struct {
-	// request is the profile name: what a workload passes to the Databricks SDK
-	// to use this identity. It is the identity's own name, or the operator's
-	// reference for the unnamed one. See Request.String.
+	// profile is what a workload passes to the Databricks SDK to use this
+	// identity: the name its own ServiceAccount gave it, or -- for the identity
+	// asked for without one -- the operator's reference, which is a name nobody
+	// typed and nothing derives. A rule for deriving it would be a rule the
+	// workload had to learn before it could name its own profile.
 	//
-	// It is the key, so one operator writes one entry and cannot touch another's.
-	// Unique across operators without anything checking: a name is an annotation
-	// map key on this one ServiceAccount, and no name holds the "/" that every
-	// operator reference holds.
-	Request *string `json:"request,omitempty"`
+	// It is also the key this list merges on, so one operator writes one entry
+	// and cannot touch another's. That holds without anything checking it: a
+	// name is an annotation map key on this one ServiceAccount, so it is unique
+	// here, and no name can collide with an operator reference because no name
+	// holds the "/" that every reference holds. See Request.String.
+	Profile *string `json:"profile,omitempty"`
 	// operator is the DatabricksAccount naming the operator that issued this, as
 	// <its namespace>/<its name> -- the value the ServiceAccount wrote in the
 	// annotation key that asked for it, echoed back.
@@ -113,11 +116,11 @@ func ProjectedIdentity() *ProjectedIdentityApplyConfiguration {
 	return &ProjectedIdentityApplyConfiguration{}
 }
 
-// WithRequest sets the Request field in the declarative configuration to the given value
+// WithProfile sets the Profile field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the Request field is set to the value of the last call.
-func (b *ProjectedIdentityApplyConfiguration) WithRequest(value string) *ProjectedIdentityApplyConfiguration {
-	b.Request = &value
+// If called multiple times, the Profile field is set to the value of the last call.
+func (b *ProjectedIdentityApplyConfiguration) WithProfile(value string) *ProjectedIdentityApplyConfiguration {
+	b.Profile = &value
 	return b
 }
 

@@ -49,20 +49,20 @@ on its own, so adding an identity does not touch the ones already there.
 $ kubectl -n team-a get databricksserviceaccount etl -o yaml
 status:
   identities:
-  - request: reader
+  - profile: reader
     operator: dbxsp-operator-system/databricks-account
     clientId: 11111111-1111-1111-1111-111111111111
     ...
-  - request: writer
+  - profile: writer
     operator: dbxsp-operator-system/databricks-account
     clientId: 22222222-2222-2222-2222-222222222222
     ...
 ```
 
-`request` is the profile name — the identity's own name — and `operator` is the
-operator that issued it, echoed back from the value you wrote. They are two
-fields because they answer two questions: which profile your code names, and
-whose entry this is.
+`profile` is what your code passes to the SDK — here the identity's own name —
+and `operator` is the operator that issued it, echoed back from the value you
+wrote. They are two fields because they answer two questions: which profile your
+code names, and whose entry this is.
 
 ## Each key is edited on its own
 

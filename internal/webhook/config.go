@@ -51,7 +51,7 @@ func Configuration(identities []dbxv1alpha1.ProjectedIdentity) string {
 		if rendered.Len() > 0 {
 			rendered.WriteString("\n")
 		}
-		rendered.WriteString("[" + identity.Request + "]\n")
+		rendered.WriteString("[" + identity.Profile + "]\n")
 
 		// No host, and that is the whole of what this operator does not decide.
 		// A host is a destination and this issues identities; measured against
@@ -64,7 +64,7 @@ func Configuration(identities []dbxv1alpha1.ProjectedIdentity) string {
 		// the token path marks another, and it will not choose between them.
 		rendered.WriteString("auth_type = file-oidc\n")
 		rendered.WriteString("client_id = " + identity.ClientID + "\n")
-		rendered.WriteString("databricks_id_token_filepath = " + TokenPathFor(identity.Request) + "\n")
+		rendered.WriteString("databricks_id_token_filepath = " + TokenPathFor(identity.Profile) + "\n")
 
 		// "audience", not "token_audience". The SDK looks a profile's keys up by
 		// the name in its own struct tag, and Config.TokenAudience is tagged

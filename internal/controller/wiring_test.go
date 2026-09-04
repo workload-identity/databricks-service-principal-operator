@@ -345,7 +345,7 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		theirs := acv1alpha1.DatabricksServiceAccount("shared", wiredNamespace).
 			WithStatus(acv1alpha1.DatabricksServiceAccountStatus().
 				WithIdentities(acv1alpha1.ProjectedIdentity().
-					WithRequest(stranger).
+					WithProfile(stranger).
 					WithOperator(stranger).
 					WithClientID("belongs-to-somebody-else")))
 		Expect(k8sClient.Status().Apply(ctx, theirs,
@@ -547,11 +547,11 @@ var _ = Describe("what the webhook produces", func() {
 		Expect(k8sClient.Create(ctx, projection)).To(Succeed())
 		projection.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
 			{
-				Request: reader, Operator: "ops-a/databricks-account",
+				Profile: reader, Operator: "ops-a/databricks-account",
 				ClientID: "reader-client", Audience: "databricks",
 			},
 			{
-				Request: writer, Operator: "ops-b/databricks-account",
+				Profile: writer, Operator: "ops-b/databricks-account",
 				ClientID: "writer-client", Audience: "some-other-aud",
 			},
 		}

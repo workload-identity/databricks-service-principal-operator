@@ -40,8 +40,8 @@ import (
 func TestNothingAtAllIsRenderedWhenNoIdentityHasAClientId(t *testing.T) {
 	t.Parallel()
 	rendered := Configuration([]dbxv1alpha1.ProjectedIdentity{
-		{Request: testOperator, Operator: testOperator, Audience: testAudience},
-		{Request: "reader", Operator: testOperator, Audience: testAudience},
+		{Profile: testOperator, Operator: testOperator, Audience: testAudience},
+		{Profile: "reader", Operator: testOperator, Audience: testAudience},
 	})
 	if rendered != "" {
 		t.Errorf("Configuration rendered %q for identities Databricks has not answered for. "+
@@ -61,17 +61,17 @@ func TestNothingAtAllIsRenderedWhenNoIdentityHasAClientId(t *testing.T) {
 func TestAnIdentityDatabricksHasNotAnsweredForContributesNoProfile(t *testing.T) {
 	t.Parallel()
 	converged := []dbxv1alpha1.ProjectedIdentity{
-		{Request: "reader", Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
-		{Request: "writer", Operator: testOperator, ClientID: "writer-client", Audience: testAudience},
+		{Profile: "reader", Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
+		{Profile: "writer", Operator: testOperator, ClientID: "writer-client", Audience: testAudience},
 	}
 	// One in every position, because the separator is written per profile and a
 	// leading, trailing or interior gap are three different mistakes.
 	mixed := []dbxv1alpha1.ProjectedIdentity{
-		{Request: "pending-first", Operator: testOperator, Audience: testAudience},
+		{Profile: "pending-first", Operator: testOperator, Audience: testAudience},
 		converged[0],
-		{Request: "pending-middle", Operator: testOperator, Audience: testAudience},
+		{Profile: "pending-middle", Operator: testOperator, Audience: testAudience},
 		converged[1],
-		{Request: "pending-last", Operator: testOperator, Audience: testAudience},
+		{Profile: "pending-last", Operator: testOperator, Audience: testAudience},
 	}
 
 	rendered := Configuration(mixed)

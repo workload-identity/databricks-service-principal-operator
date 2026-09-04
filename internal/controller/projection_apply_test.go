@@ -46,7 +46,7 @@ import (
 func TestTheProjectionSendsOnlyWhatIsSet(t *testing.T) {
 	t.Parallel()
 
-	const key = "request"
+	const key = "profile"
 
 	for field := range reflect.TypeFor[dbxv1alpha1.ProjectedIdentity]().Fields() {
 		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
@@ -60,7 +60,7 @@ func TestTheProjectionSendsOnlyWhatIsSet(t *testing.T) {
 
 			// Only this field, and the key, which is always sent: an entry
 			// without one is not an entry.
-			entry := dbxv1alpha1.ProjectedIdentity{Request: "ops-a/databricks-account"}
+			entry := dbxv1alpha1.ProjectedIdentity{Profile: "ops-a/databricks-account"}
 			switch value := reflect.ValueOf(&entry).Elem().FieldByName(field.Name); {
 			case value.Kind() == reflect.String:
 				value.SetString("set")
