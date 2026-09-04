@@ -375,28 +375,33 @@ metadata:
 %s`, team, serviceAccount, team, annotations.String()))
 }
 
-// ask writes one identity's key on a ServiceAccount that is already there.
+// askForIdentity writes one identity's key on a ServiceAccount that is already
+// there. One key is one request, and it names all three parties: this
+// ServiceAccount, that identity, that operator.
 //
 // Overwriting, because correcting a value that could not be read is the case
 // this exists for, and it is an edit to one key and not to the others.
-func ask(team, account, identity, operator string) {
-	_, err := kubectl("-n", team, "annotate", "serviceaccount", account, "--overwrite",
+func askForIdentity(team, serviceAccount, identity, operator string) {
+	_, err := kubectl("-n", team, "annotate", "serviceaccount", serviceAccount, "--overwrite",
 		dbxv1alpha1.ServicePrincipalAnnotationFor(identity)+"="+operator)
 	Expect(err).NotTo(HaveOccurred(),
-		"asking %s for identity %q of %s", account, identity, operator)
+		"asking %s for identity %q of %s", serviceAccount, identity, operator)
 }
 
-// withdraw takes one identity's key away, which is the only edit that destroys
-// an identity.
+// stopAskingForIdentity takes one identity's key away, which is the only edit
+// that destroys an identity. It undoes exactly one askForIdentity: what stops is
+// one request, not this ServiceAccount's asking, and the keys beside it are left
+// standing.
 //
 // Deleting a key rather than rewriting a list is the whole of what this suite
 // was rewritten for. A key that is gone says the identity is no longer wanted; a
 // key that is there and cannot be read says nothing at all, and the two used to
 // be the same input.
-func withdraw(team, account, identity string) {
-	_, err := kubectl("-n", team, "annotate", "serviceaccount", account,
+func stopAskingForIdentity(team, serviceAccount, identity string) {
+	_, err := kubectl("-n", team, "annotate", "serviceaccount", serviceAccount,
 		dbxv1alpha1.ServicePrincipalAnnotationFor(identity)+"-")
-	Expect(err).NotTo(HaveOccurred(), "withdrawing identity %q from %s", identity, account)
+	Expect(err).NotTo(HaveOccurred(),
+		"deleting the key asking %s for identity %q", serviceAccount, identity)
 }
 
 // runPod creates a pod that stays up long enough to be looked inside, and that
@@ -442,26 +447,26 @@ func read(team, serviceAccount string) databricksServiceAccount {
 	return p
 }
 
-// requestsOn lists the identities the DatabricksServiceAccount carries, by the
+// profilesOn lists the identities the DatabricksServiceAccount carries, by the
 // profile name each is keyed under.
 //
 // Not "as the asker wrote them": a named identity is keyed by the name in its
 // key, but the unnamed one is keyed by the operator's reference, which nobody
 // wrote anywhere.
-func requestsOn(team, serviceAccount string) []string {
-	var requests []string
+func profilesOn(team, serviceAccount string) []string {
+	var profiles []string
 	for _, identity := range read(team, serviceAccount).Status.Identities {
-		requests = append(requests, identity.Profile)
+		profiles = append(profiles, identity.Profile)
 	}
-	return requests
+	return profiles
 }
 
 // removedIDOf is the id of a service principal this operator created and that is
 // no longer in Databricks. It is kept rather than a flag because it is what an
 // audit log is searched with: a flag says something is wrong, an id says whom to
 // ask.
-func removedIDOf(team, account, profile string) string {
-	for _, identity := range read(team, account).Status.Identities {
+func removedIDOf(team, serviceAccount, profile string) string {
+	for _, identity := range read(team, serviceAccount).Status.Identities {
 		if identity.Profile == profile {
 			return identity.RemovedServicePrincipalID
 		}
@@ -474,8 +479,8 @@ func removedIDOf(team, account, profile string) string {
 // Worth asking now that a named identity's key is its name alone: the entry for
 // "reader" carries no operator anywhere in its key, so this field is the only
 // thing on the object that says whose the entry is.
-func operatorOf(team, account, profile string) string {
-	for _, identity := range read(team, account).Status.Identities {
+func operatorOf(team, serviceAccount, profile string) string {
+	for _, identity := range read(team, serviceAccount).Status.Identities {
 		if identity.Profile == profile {
 			return identity.Operator
 		}
@@ -484,16 +489,16 @@ func operatorOf(team, account, profile string) string {
 }
 
 // conditionOn is the reason one identity gives for the state it is in.
-func conditionOn(team, account, profile, condition string) string {
-	return kubectlOut("-n", team, "get", "databricksserviceaccount", account, "-o",
+func conditionOn(team, serviceAccount, profile, condition string) string {
+	return kubectlOut("-n", team, "get", "databricksserviceaccount", serviceAccount, "-o",
 		fmt.Sprintf("jsonpath={.status.identities[?(@.profile==%q)].conditions[?(@.type==%q)].reason}",
 			profile, condition))
 }
 
 // clientIDOf is what the workload presents, and what a grant to this identity
 // records.
-func clientIDOf(team, account, profile string) string {
-	for _, identity := range read(team, account).Status.Identities {
+func clientIDOf(team, serviceAccount, profile string) string {
+	for _, identity := range read(team, serviceAccount).Status.Identities {
 		if identity.Profile == profile {
 			return identity.ClientID
 		}
@@ -503,8 +508,8 @@ func clientIDOf(team, account, profile string) string {
 
 // servicePrincipalIDOf is what federation policies hang off, and what the
 // account is asked about.
-func servicePrincipalIDOf(team, account, profile string) string {
-	for _, identity := range read(team, account).Status.Identities {
+func servicePrincipalIDOf(team, serviceAccount, profile string) string {
+	for _, identity := range read(team, serviceAccount).Status.Identities {
 		if identity.Profile == profile {
 			return identity.ServicePrincipalID
 		}

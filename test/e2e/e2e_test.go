@@ -37,9 +37,9 @@ import (
 // wrong in a way one identity cannot show.
 var _ = Describe("A workload reaching Databricks with no credential", Ordered, func() {
 	const (
-		team    = "e2e-workload"
-		account = "etl"
-		runner  = "runner"
+		team           = "e2e-workload"
+		serviceAccount = "etl"
+		runner         = "runner"
 
 		// The names the asker gave, which are the annotation key suffixes, the
 		// profile names a workload passes to the SDK and the keys of the entries on
@@ -59,7 +59,7 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 	BeforeAll(func() {
 		removeTeam(team)
 		serve(team)
-		applyTeam(team, account, reader, writer)
+		applyTeam(team, serviceAccount, reader, writer)
 
 		// Waited for and recorded here rather than in the spec that first checks
 		// them. Every spec below needs these ids, and taking them from a sibling
@@ -68,10 +68,10 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 		// it stands up.
 		for _, identity := range []string{reader, writer} {
 			Eventually(func() string {
-				return servicePrincipalIDOf(team, account, identity)
+				return servicePrincipalIDOf(team, serviceAccount, identity)
 			}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
 				"nothing was issued for %q", identity)
-			issuedIDs[identity] = servicePrincipalIDOf(team, account, identity)
+			issuedIDs[identity] = servicePrincipalIDOf(team, serviceAccount, identity)
 		}
 	})
 
@@ -86,13 +86,13 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 
 	It("issues one identity per name the asker wrote", func() {
 		Eventually(func() []string {
-			return requestsOn(team, account)
+			return profilesOn(team, serviceAccount)
 		}, 3*time.Minute, 5*time.Second).Should(ConsistOf(reader, writer),
 			"the DatabricksServiceAccount does not carry both identities under the names they were asked by")
 
 		Eventually(func() bool {
 			for _, identity := range []string{reader, writer} {
-				if clientIDOf(team, account, identity) == "" {
+				if clientIDOf(team, serviceAccount, identity) == "" {
 					return false
 				}
 			}
@@ -115,7 +115,7 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 	})
 
 	It("equips a pod with a token per identity", func() {
-		runPod(team, runner, account)
+		runPod(team, runner, serviceAccount)
 
 		Eventually(func() string {
 			return kubectlOut("-n", team, "get", "pod", runner, "-o", "jsonpath={.status.phase}")
@@ -133,7 +133,7 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 		for _, identity := range []string{reader, writer} {
 			By("exchanging as " + identity)
 			got := exchangeInPod(team, runner, identity)
-			Expect(got).To(Equal(clientIDOf(team, account, identity)),
+			Expect(got).To(Equal(clientIDOf(team, serviceAccount, identity)),
 				"a token from this pod's %q profile was exchanged and Databricks answered as a "+
 					"different service principal", identity)
 		}
@@ -157,21 +157,21 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 	// nothing whatever -- not to the identity the key names, and not to its
 	// neighbour.
 	It("changes nothing at all when a key's value cannot be read", func() {
-		client := clientIDOf(team, account, reader)
+		client := clientIDOf(team, serviceAccount, reader)
 		Expect(client).NotTo(BeEmpty(), "there is no working identity here to leave alone")
 
-		ask(team, account, reader, operatorNamespace)
+		askForIdentity(team, serviceAccount, reader, operatorNamespace)
 		// Put back inside the spec that broke it, so that the withdrawal below
 		// is a withdrawal of an identity that is there rather than of one this
 		// spec left in an unreadable state.
-		DeferCleanup(func() { ask(team, account, reader, operatorRef()) })
+		DeferCleanup(func() { askForIdentity(team, serviceAccount, reader, operatorRef()) })
 
 		// Polled rather than read once. The edit wakes a reconcile immediately,
 		// so a single read straight after it passes before the operator has
 		// looked at the annotation at all -- which is the reading under which
 		// the destroy this is about went unnoticed.
 		Consistently(func() string {
-			return clientIDOf(team, account, reader)
+			return clientIDOf(team, serviceAccount, reader)
 		}, 90*time.Second, 10*time.Second).Should(Equal(client),
 			"a value that could not be read took %q off the DatabricksServiceAccount. A pod admitted now "+
 				"would be equipped for an identity the operator has stopped standing behind",
@@ -185,7 +185,7 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 			"the running workload can no longer authenticate as %q, so a mistyped annotation "+
 				"took down something that was already working", reader)
 
-		Expect(requestsOn(team, account)).To(ConsistOf(reader, writer),
+		Expect(profilesOn(team, serviceAccount)).To(ConsistOf(reader, writer),
 			"a key that could not be read changed what the other keys were given")
 		Expect(exists(issuedIDs[writer])).To(BeTrue(),
 			"one key's value could not be read and another identity's service principal went")
@@ -197,7 +197,7 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 		// has no Databricks to ask -- but the exchange: the identity still asked
 		// for still authenticates, from the same pod, after its neighbour was
 		// destroyed in the same account.
-		withdraw(team, account, reader)
+		stopAskingForIdentity(team, serviceAccount, reader)
 
 		Eventually(func() bool {
 			return exists(issuedIDs[reader])
@@ -216,17 +216,17 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 		// with, and a workload that starts now is what a workload that restarts
 		// after such an edit is.
 		const after = "after-drop"
-		runPod(team, after, account)
+		runPod(team, after, serviceAccount)
 		Eventually(func() string {
 			return kubectlOut("-n", team, "get", "pod", after, "-o", "jsonpath={.status.phase}")
 		}, 3*time.Minute, 5*time.Second).Should(Equal("Running"))
 
-		Expect(exchangeInPod(team, after, writer)).To(Equal(clientIDOf(team, account, writer)),
+		Expect(exchangeInPod(team, after, writer)).To(Equal(clientIDOf(team, serviceAccount, writer)),
 			"the identity that was kept stopped authenticating when its neighbour was destroyed")
 	})
 
 	It("destroys them in Databricks when the last key is deleted too", func() {
-		withdraw(team, account, writer)
+		stopAskingForIdentity(team, serviceAccount, writer)
 
 		// Both, though one went a spec ago. Asserting the pair says that a
 		// ServiceAccount left asking for nothing keeps nothing, not only that
@@ -257,8 +257,8 @@ var _ = Describe("A workload reaching Databricks with no credential", Ordered, f
 // no namespace to tear down.
 var _ = Describe("A namespace torn down with an identity in it", Ordered, func() {
 	const (
-		team    = "e2e-teardown"
-		account = "etl"
+		team           = "e2e-teardown"
+		serviceAccount = "etl"
 	)
 	var profile, issuedID string
 
@@ -266,13 +266,13 @@ var _ = Describe("A namespace torn down with an identity in it", Ordered, func()
 		profile = unnamedProfile()
 		removeTeam(team)
 		serve(team)
-		applyTeam(team, account, unnamed)
+		applyTeam(team, serviceAccount, unnamed)
 
 		Eventually(func() string {
-			return servicePrincipalIDOf(team, account, profile)
+			return servicePrincipalIDOf(team, serviceAccount, profile)
 		}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
 			"nothing was issued, so there is nothing for a teardown to lose")
-		issuedID = servicePrincipalIDOf(team, account, profile)
+		issuedID = servicePrincipalIDOf(team, serviceAccount, profile)
 		Expect(exists(issuedID)).To(BeTrue())
 	})
 
@@ -299,7 +299,7 @@ var _ = Describe("A namespace torn down with an identity in it", Ordered, func()
 		Eventually(func() string {
 			return kubectlOut("-n", operatorNamespace, "get", "issueddatabricksserviceprincipal",
 				"-o", "jsonpath={.items[*].metadata.name}")
-		}, 2*time.Minute, 5*time.Second).ShouldNot(ContainSubstring(team+"."+account),
+		}, 2*time.Minute, 5*time.Second).ShouldNot(ContainSubstring(team+"."+serviceAccount),
 			"the record outlived the service principal it was holding")
 	})
 })
@@ -317,8 +317,8 @@ var _ = Describe("A namespace torn down with an identity in it", Ordered, func()
 // after a uid rather than a name. Both are only observable here.
 var _ = Describe("A ServiceAccount recreated under the same name", Ordered, func() {
 	const (
-		team    = "e2e-reuse"
-		account = "etl"
+		team           = "e2e-reuse"
+		serviceAccount = "etl"
 	)
 	var profile, firstID, firstClient string
 
@@ -326,23 +326,23 @@ var _ = Describe("A ServiceAccount recreated under the same name", Ordered, func
 		profile = unnamedProfile()
 		removeTeam(team)
 		serve(team)
-		applyTeam(team, account, unnamed)
+		applyTeam(team, serviceAccount, unnamed)
 
 		Eventually(func() string {
-			return clientIDOf(team, account, profile)
+			return clientIDOf(team, serviceAccount, profile)
 		}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(), "nothing was issued to reuse the name of")
-		firstID = servicePrincipalIDOf(team, account, profile)
-		firstClient = clientIDOf(team, account, profile)
+		firstID = servicePrincipalIDOf(team, serviceAccount, profile)
+		firstClient = clientIDOf(team, serviceAccount, profile)
 	})
 
 	AfterAll(func() {
 		removeTeam(team)
 		destroyIfLeft(firstID)
-		destroyIfLeft(servicePrincipalIDOf(team, account, profile))
+		destroyIfLeft(servicePrincipalIDOf(team, serviceAccount, profile))
 	})
 
 	It("destroys the identity the first one had", func() {
-		_, err := kubectl("-n", team, "delete", "serviceaccount", account)
+		_, err := kubectl("-n", team, "delete", "serviceaccount", serviceAccount)
 		Expect(err).NotTo(HaveOccurred())
 
 		Eventually(func() bool {
@@ -365,18 +365,18 @@ var _ = Describe("A ServiceAccount recreated under the same name", Ordered, func
 	// What it does hold: the ServiceAccount that took the name is served like any
 	// other, and gets an identity of its own that Databricks has.
 	It("issues an identity of its own to the ServiceAccount that takes the name", func() {
-		applyTeam(team, account, unnamed)
+		applyTeam(team, serviceAccount, unnamed)
 
 		var second string
 		Eventually(func() string {
-			second = clientIDOf(team, account, profile)
+			second = clientIDOf(team, serviceAccount, profile)
 			return second
 		}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
 			"the ServiceAccount that took the name was never issued anything")
 
 		Expect(second).NotTo(Equal(firstClient),
 			"the new ServiceAccount reports the client id of the one that had the name before it")
-		Expect(exists(servicePrincipalIDOf(team, account, profile))).To(BeTrue(),
+		Expect(exists(servicePrincipalIDOf(team, serviceAccount, profile))).To(BeTrue(),
 			"the new identity was recorded and Databricks does not have it")
 	})
 })
@@ -395,8 +395,8 @@ var _ = Describe("A ServiceAccount recreated under the same name", Ordered, func
 // log with, and stop equipping pods with a client that resolves to nothing.
 var _ = Describe("An identity deleted in Databricks", Ordered, func() {
 	const (
-		team    = "e2e-removed"
-		account = "etl"
+		team           = "e2e-removed"
+		serviceAccount = "etl"
 	)
 	var profile, deletedID string
 
@@ -404,12 +404,12 @@ var _ = Describe("An identity deleted in Databricks", Ordered, func() {
 		profile = unnamedProfile()
 		removeTeam(team)
 		serve(team)
-		applyTeam(team, account, unnamed)
+		applyTeam(team, serviceAccount, unnamed)
 
 		Eventually(func() string {
-			return servicePrincipalIDOf(team, account, profile)
+			return servicePrincipalIDOf(team, serviceAccount, profile)
 		}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(), "nothing was issued to delete")
-		deletedID = servicePrincipalIDOf(team, account, profile)
+		deletedID = servicePrincipalIDOf(team, serviceAccount, profile)
 		Expect(exists(deletedID)).To(BeTrue())
 
 		By("deleting it in Databricks, the way whoever governs the account would")
@@ -418,22 +418,22 @@ var _ = Describe("An identity deleted in Databricks", Ordered, func() {
 
 	AfterAll(func() {
 		removeTeam(team)
-		destroyIfLeft(servicePrincipalIDOf(team, account, profile))
+		destroyIfLeft(servicePrincipalIDOf(team, serviceAccount, profile))
 	})
 
 	It("reports it, naming the id somebody can go and ask about", func() {
 		Eventually(func() string {
-			return removedIDOf(team, account, profile)
+			return removedIDOf(team, serviceAccount, profile)
 		}, 5*time.Minute, 5*time.Second).Should(Equal(deletedID),
 			"nothing on the DatabricksServiceAccount names the service principal that was deleted, so the only "+
 				"way to find out which one it was is to read the operator's logs")
 
-		Expect(conditionOn(team, account, profile, "Ready")).To(Equal("RemovedInDatabricks"),
+		Expect(conditionOn(team, serviceAccount, profile, "Ready")).To(Equal("RemovedInDatabricks"),
 			"the identity does not say why it is not ready")
 	})
 
 	It("stops naming a client id, so no pod is equipped with one that resolves to nothing", func() {
-		Expect(clientIDOf(team, account, profile)).To(BeEmpty(),
+		Expect(clientIDOf(team, serviceAccount, profile)).To(BeEmpty(),
 			"the DatabricksServiceAccount still carries a client id for a service principal that is gone. A pod "+
 				"admitted now would be given it, exchange for nothing, and fail at the far end")
 	})
@@ -452,7 +452,7 @@ var _ = Describe("An identity deleted in Databricks", Ordered, func() {
 		// looked and built another", and would report the first while meaning
 		// the other.
 		Eventually(func() string {
-			return removedIDOf(team, account, profile)
+			return removedIDOf(team, serviceAccount, profile)
 		}, 5*time.Minute, 5*time.Second).Should(Equal(deletedID),
 			"the operator never noticed the service principal was deleted, so there is nothing "+
 				"yet to say about what it did next")
@@ -462,7 +462,7 @@ var _ = Describe("An identity deleted in Databricks", Ordered, func() {
 		// one -- with a new client id, holding none of what was granted to the
 		// old, and overruling whoever did the deleting.
 		Consistently(func() string {
-			return clientIDOf(team, account, profile)
+			return clientIDOf(team, serviceAccount, profile)
 		}, 90*time.Second, 10*time.Second).Should(BeEmpty(),
 			"the operator issued a replacement for an identity somebody deleted in Databricks")
 	})
@@ -492,9 +492,9 @@ var _ = Describe("An identity deleted in Databricks", Ordered, func() {
 // this deletes it.
 var _ = Describe("A ServiceAccount taking a name an orphaned identity still trusts", Ordered, func() {
 	const (
-		team    = "e2e-orphan"
-		account = "etl"
-		runner  = "runner"
+		team           = "e2e-orphan"
+		serviceAccount = "etl"
+		runner         = "runner"
 	)
 	var profile, orphanID, orphanClient string
 
@@ -502,8 +502,8 @@ var _ = Describe("A ServiceAccount taking a name an orphaned identity still trus
 		profile = unnamedProfile()
 		removeTeam(team)
 		serve(team)
-		orphanID, orphanClient = makeOrphan(team, account)
-		applyTeam(team, account, unnamed)
+		orphanID, orphanClient = makeOrphan(team, serviceAccount)
+		applyTeam(team, serviceAccount, unnamed)
 	})
 
 	AfterAll(func() {
@@ -512,7 +512,7 @@ var _ = Describe("A ServiceAccount taking a name an orphaned identity still trus
 		// up after a failure; it is the answer the design gives for an orphan,
 		// carried out by whoever made one.
 		destroyIfLeft(orphanID)
-		destroyIfLeft(servicePrincipalIDOf(team, account, profile))
+		destroyIfLeft(servicePrincipalIDOf(team, serviceAccount, profile))
 	})
 
 	It("is a real orphan: the account holds it and the cluster does not", func() {
@@ -527,7 +527,7 @@ var _ = Describe("A ServiceAccount taking a name an orphaned identity still trus
 	It("is issued an identity of its own, not the one left behind", func() {
 		var taken string
 		Eventually(func() string {
-			taken = clientIDOf(team, account, profile)
+			taken = clientIDOf(team, serviceAccount, profile)
 			return taken
 		}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
 			"the ServiceAccount that took the name was never issued anything")
@@ -542,13 +542,13 @@ var _ = Describe("A ServiceAccount taking a name an orphaned identity still trus
 		// The DatabricksServiceAccount is the operator's claim; this is what a
 		// workload gets. They are written by different code and the one that decides
 		// is this.
-		runPod(team, runner, account)
+		runPod(team, runner, serviceAccount)
 		Eventually(func() string {
 			return kubectlOut("-n", team, "get", "pod", runner, "-o", "jsonpath={.status.phase}")
 		}, 3*time.Minute, 5*time.Second).Should(Equal("Running"))
 
 		got := exchangeInPod(team, runner, profile)
-		Expect(got).To(Equal(clientIDOf(team, account, profile)),
+		Expect(got).To(Equal(clientIDOf(team, serviceAccount, profile)),
 			"the pod exchanged for something other than the identity this ServiceAccount was issued")
 		Expect(got).NotTo(Equal(orphanClient), "the pod exchanged for the orphan")
 	})

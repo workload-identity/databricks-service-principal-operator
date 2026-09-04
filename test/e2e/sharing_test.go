@@ -136,7 +136,7 @@ var _ = Describe("One ServiceAccount asking two operators", Ordered, Serial, fun
 		// The same subject stays, and so does the other operator's identity for
 		// it. An operator that cannot tell its own work from its neighbour's
 		// destroys both here, and a key is still asking for one of them.
-		withdraw(team, name, unnamed)
+		stopAskingForIdentity(team, name, unnamed)
 
 		Eventually(func() bool {
 			return exists(myID)
@@ -150,7 +150,7 @@ var _ = Describe("One ServiceAccount asking two operators", Ordered, Serial, fun
 				"ServiceAccount still asks for it")
 
 		Eventually(func() []string {
-			return requestsOn(team, name)
+			return profilesOn(team, name)
 		}, 2*time.Minute, 5*time.Second).Should(ConsistOf(theirIdentity),
 			"the DatabricksServiceAccount does not carry exactly the entry that is still asked for: an "+
 				"operator either took the other's entry off it, or left its own on it after "+
