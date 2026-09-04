@@ -216,7 +216,7 @@ func (c *clients) FindServicePrincipal(ctx context.Context, issuing Issuing) (
 	}
 
 	display := DisplayNameFor(issuing.Namespace, issuing.Name, issuing.Identity)
-	matches, err := c.accountClient.ServicePrincipalsV2.ListAll(ctx, iam.ListAccountServicePrincipalsRequest{
+	namesakes, err := c.accountClient.ServicePrincipalsV2.ListAll(ctx, iam.ListAccountServicePrincipalsRequest{
 		Filter: fmt.Sprintf("displayName eq %q", display),
 	})
 	if err != nil {
@@ -225,7 +225,7 @@ func (c *clients) FindServicePrincipal(ctx context.Context, issuing Issuing) (
 
 	marker := MarkerFor(issuing)
 	var candidates []iam.AccountServicePrincipal
-	for _, principal := range matches {
+	for _, principal := range namesakes {
 		if principal.ExternalId == marker {
 			candidates = append(candidates, principal)
 		}
@@ -311,7 +311,7 @@ func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID
 		return fmt.Errorf("listing the federation policies on service principal %s: %w", servicePrincipalID, err)
 	}
 	for _, policy := range existing.Policies {
-		if matches(policy.OidcPolicy, issuer, subject, audience) {
+		if trusts(policy.OidcPolicy, issuer, subject, audience) {
 			return nil
 		}
 	}
@@ -391,7 +391,7 @@ func (c *clients) RemoveFederationPolicies(ctx context.Context, servicePrincipal
 	return nil
 }
 
-func matches(policy *oauth2.OidcFederationPolicy, issuer, subject, audience string) bool {
+func trusts(policy *oauth2.OidcFederationPolicy, issuer, subject, audience string) bool {
 	if policy == nil {
 		return false
 	}
