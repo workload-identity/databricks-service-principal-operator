@@ -274,7 +274,8 @@ identity's token is minted for whatever its own operator's token carries, and th
 pod holds one token per identity — so nobody has to go round asking the other
 platform teams what theirs is. Both operators are asked about the same pod and
 agree without coordinating: whichever is asked first equips it with every
-identity in the projection, and the second finds its work already done.
+identity in the DatabricksServiceAccount, and the second finds its work already
+done.
 
 ## Ending one and keeping the rest
 

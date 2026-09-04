@@ -305,10 +305,10 @@ const testRecords = operatorNamespace
 // and destroys it. A test that ran only one would be asserting about half of a
 // sentence.
 type harness struct {
-	Projection *DatabricksServiceAccountReconciler
-	Issued     *IssuedDatabricksServicePrincipalReconciler
-	Client     client.Client
-	Stub       *stubClients
+	DatabricksServiceAccounts *DatabricksServiceAccountReconciler
+	Issued                    *IssuedDatabricksServicePrincipalReconciler
+	Client                    client.Client
+	Stub                      *stubClients
 }
 
 // accountServing is this operator's DatabricksAccount, declaring which
@@ -344,7 +344,7 @@ func newHarnessWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
 	// the reading instead is what made one bad moment at startup permanent.
 	token := writeTokenAs(t, testIssuer, "system:serviceaccount:operators:controller-manager", testAudience)
 	return &harness{
-		Projection: &DatabricksServiceAccountReconciler{
+		DatabricksServiceAccounts: &DatabricksServiceAccountReconciler{
 			Client:                          c,
 			Scheme:                          scheme,
 			DatabricksAccountNamespacedName: testOperator,
@@ -369,8 +369,8 @@ func newHarnessWith(t *testing.T, stub *stubClients, funcs interceptor.Funcs,
 //
 // Several passes rather than one, because that is what happens in a cluster: a
 // record is written before anything is created, the create is a second pass, and
-// the projection copying the result is a third. Hiding that behind one call
-// would be hiding the ordering the whole design rests on.
+// the DatabricksServiceAccount controller copying the result is a third. Hiding
+// that behind one call would be hiding the ordering the whole design rests on.
 func (h *harness) settle(t *testing.T) {
 	t.Helper()
 	for range 4 {
@@ -379,10 +379,10 @@ func (h *harness) settle(t *testing.T) {
 	}
 }
 
-// project runs the projection for one ServiceAccount.
+// project runs the DatabricksServiceAccount controller for one ServiceAccount.
 func (h *harness) project(t *testing.T, namespace, name string) {
 	t.Helper()
-	if _, err := h.Projection.Reconcile(context.Background(), reconcile.Request{
+	if _, err := h.DatabricksServiceAccounts.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Namespace: namespace, Name: name},
 	}); err != nil {
 		t.Fatalf("projecting %s/%s: %v", namespace, name, err)

@@ -434,11 +434,11 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 		issued.Status.AccountID = clients.AccountID()
 		issued.Status.Issuer = issuer
 		// Assigned here rather than after the write below, with the client id it
-		// belongs to. The projection copies both into the tenant's namespace and
-		// the webhook injects both, and a pod given a client id with no audience
-		// gets a token minted for the audience kubelet defaults to -- which is
-		// the one value that can never be exchanged. Half of a pair is worse
-		// than neither.
+		// belongs to. The DatabricksServiceAccount controller copies both into
+		// the tenant's namespace and the webhook injects both, and a pod given a
+		// client id with no audience gets a token minted for the audience kubelet
+		// defaults to -- which is the one value that can never be exchanged. Half
+		// of a pair is worse than neither.
 		issued.Status.Audience = audience
 
 		// Written before anything else is attempted. A service principal exists
@@ -520,17 +520,18 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 	//
 	// Claiming it and removing the trust are two controllers with nothing
 	// sequencing them, and in between the two a ServiceAccount here still
-	// produces records: a projection pass that read the account before the edit
-	// landed writes its record after it. A removal begun in that window acts on
-	// the records it can see, and a record written just after it mints a service
-	// principal nobody asked for and has its trust taken off on a later pass --
+	// produces records: a pass of the DatabricksServiceAccount controller that
+	// read the account before the edit landed writes its record after it. A
+	// removal begun in that window acts on the records it can see, and a record
+	// written just after it mints a service principal nobody asked for and has
+	// its trust taken off on a later pass --
 	// leaving a new applicationId in the account that nothing wants and nothing
 	// explains, and a count of what is still exchangeable that is chasing a set
 	// still growing while it counts.
 	//
 	// Both controllers read one cache, so a claim this one sees is one the
-	// projection sees too. Waiting for it is what makes the set this withdrawal
-	// acts on stop moving before any of it is removed.
+	// DatabricksServiceAccount controller sees too. Waiting for it is what makes
+	// the set this withdrawal acts on stop moving before any of it is removed.
 	holder, exists, err := withdrawalHeldBy(ctx, r.Client, namespace)
 	switch {
 	case err != nil:

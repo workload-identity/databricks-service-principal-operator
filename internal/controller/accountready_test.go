@@ -129,9 +129,10 @@ func TestAnotherAccountWakesNothing(t *testing.T) {
 // TestEveryRecordIsWokenOnce covers the listing that turns one account event
 // into the requests it stands for.
 //
-// It is the records that are woken, not the projections. A projection reaches
-// nothing outside the cluster, so an account becoming usable changes nothing
-// about it; what was waiting on the account is the controller that acts in it.
+// It is the records that are woken, not the copies in tenants' namespaces.
+// Making a copy reaches nothing outside the cluster, so an account becoming
+// usable changes nothing about one; what was waiting on the account is the
+// controller that acts in it.
 func TestEveryRecordIsWokenOnce(t *testing.T) {
 	t.Parallel()
 	list := &dbxv1alpha1.IssuedDatabricksServicePrincipalList{

@@ -52,12 +52,12 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 	"$(CONTROLLER_GEN)" applyconfiguration:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt",year=$(YEAR) paths="./..."
 
-# The apply configurations are how the projection is written. They are the only
-# form that can send "this instance has no opinion about host" rather than "host
-# is empty", and an instance owns whatever it sends -- so a type edited without
-# this rerun is an instance claiming values it never set. Kept in `generate`
-# rather than a target of its own for that reason: there is no state in which
-# regenerating deepcopy and not these is correct.
+# The apply configurations are how the DatabricksServiceAccount is written. They
+# are the only form that can send "this instance has no opinion about host"
+# rather than "host is empty", and an instance owns whatever it sends -- so a
+# type edited without this rerun is an instance claiming values it never set.
+# Kept in `generate` rather than a target of its own for that reason: there is
+# no state in which regenerating deepcopy and not these is correct.
 #
 # First, and that is not cosmetic. The deepcopy line loads ./... , which includes
 # the controller that imports these, so on a clean checkout -- or after this

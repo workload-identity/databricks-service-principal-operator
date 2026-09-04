@@ -275,7 +275,7 @@ func main() {
 	decided.Holder = dbClients
 	decided.Runtime = runtimeCfg
 
-	accountReconciler, projectionReconciler, issuedReconciler := reconcilers(
+	accountReconciler, databricksServiceAccountReconciler, issuedReconciler := reconcilers(
 		decided, mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme())
 
 	if err := accountReconciler.SetupWithManager(mgr); err != nil {
@@ -286,7 +286,7 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "issueddatabricksserviceprincipal")
 		os.Exit(1)
 	}
-	if err := projectionReconciler.SetupWithManager(mgr); err != nil {
+	if err := databricksServiceAccountReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "databricksserviceaccount")
 		os.Exit(1)
 	}

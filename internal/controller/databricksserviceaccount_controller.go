@@ -334,9 +334,9 @@ func (r *DatabricksServiceAccountReconciler) apply(ctx context.Context,
 // a value nobody meant to claim.
 //
 // So each field is set only when it has one, and nothing else is sent. That
-// rule is what TestTheProjectionSendsOnlyWhatIsSet holds: it also fails when a
-// field is added to ProjectedIdentity and not carried here, which is the
-// silent half -- the DatabricksServiceAccount simply stops reporting it.
+// rule is what TestTheDatabricksServiceAccountSendsOnlyWhatIsSet holds: it also
+// fails when a field is added to ProjectedIdentity and not carried here, which
+// is the silent half -- the DatabricksServiceAccount simply stops reporting it.
 func projectedIdentityFor(entry dbxv1alpha1.ProjectedIdentity) *acv1alpha1.ProjectedIdentityApplyConfiguration {
 	// The key, always, including when it is the only thing there is: an entry
 	// without one is not an entry, and it is what the merge is keyed on.

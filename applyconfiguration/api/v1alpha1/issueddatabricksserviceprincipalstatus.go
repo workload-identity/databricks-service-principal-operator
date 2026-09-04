@@ -34,10 +34,11 @@ type IssuedDatabricksServicePrincipalStatusApplyConfiguration struct {
 	// the 404 that means "not here" as the one that means "gone".
 	//
 	// It is in the status rather than the spec because the account is not known
-	// to whoever writes the record -- the projection knows a ServiceAccount is
-	// asking and nothing about Databricks. It is written before the first call
-	// is made, not with the answer, so that a pass which creates a service
-	// principal and then stops has already said where to look for it.
+	// to whoever writes the record -- the DatabricksServiceAccount controller
+	// knows a ServiceAccount is asking and nothing about Databricks. It is
+	// written before the first call is made, not with the answer, so that a pass
+	// which creates a service principal and then stops has already said where to
+	// look for it.
 	AccountID *string `json:"accountId,omitempty"`
 	// servicePrincipalId is the numeric id Databricks assigned. Federation
 	// policies hang off it, and it is what deletes it.

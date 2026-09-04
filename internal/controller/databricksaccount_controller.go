@@ -78,7 +78,8 @@ const (
 
 // DatabricksAccountReconciler turns one DatabricksAccount into the clients the
 // record's controller uses. It is the only other one that reaches Databricks at
-// all: the projection's controller talks to nothing outside the cluster.
+// all: the DatabricksServiceAccount controller talks to nothing outside the
+// cluster.
 type DatabricksAccountReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -254,10 +255,10 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // operator's own namespace.
 //
 // Both halves of that matter. The records are where an account id is written;
-// the projections in tenants' namespaces are copies of them, and a copy is
-// missing exactly when these questions are most worth asking -- an identity
-// whose namespace was torn down still has its record and no longer has its
-// projection. And another operator's identities are not this one's to read:
+// the DatabricksServiceAccounts in tenants' namespaces are copies of them, and
+// a copy is missing exactly when these questions are most worth asking -- an
+// identity whose namespace was torn down still has its record and no longer has
+// its copy. And another operator's identities are not this one's to read:
 // they are in another namespace, in another account, and counting them here
 // would say this operator has stranded something it never issued.
 func (r *DatabricksAccountReconciler) records(ctx context.Context) (
@@ -335,10 +336,10 @@ func (r *DatabricksAccountReconciler) reportAgreement(databricksAccount *dbxv1al
 // and knowing nothing is never a reason to take something back.
 //
 // One function rather than a method on each controller that asks. Both the
-// projection and the record decide what to do from this answer, and two
-// spellings of it are two chances for one of them to read a namespace as served
-// that the other does not -- which is an identity minted on one side and
-// withdrawn on the other, at the same time, for ever.
+// DatabricksServiceAccount controller and the record's decide what to do from
+// this answer, and two spellings of it are two chances for one of them to read
+// a namespace as served that the other does not -- which is an identity minted
+// on one side and withdrawn on the other, at the same time, for ever.
 func accountServes(ctx context.Context, reader client.Reader,
 	name types.NamespacedName, namespace string) (declared, served bool, err error) {
 	var databricksAccount dbxv1alpha1.DatabricksAccount

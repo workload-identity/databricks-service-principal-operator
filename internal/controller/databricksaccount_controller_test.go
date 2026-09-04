@@ -331,11 +331,11 @@ func TestUnconfiguredHolderIsNotAFailedLookup(t *testing.T) {
 // identityMadeIn is one recorded against a particular Databricks account.
 // identityMadeIn is a record of an identity this operator issued in some account.
 //
-// A record and not a projection, and in the operator's own namespace and not the
-// tenant's, because that is where the count is taken from: the projection is a
-// copy, and it is missing exactly when this question is most worth asking -- an
-// identity whose namespace was torn down still has its record and no longer has
-// its projection.
+// A record and not a DatabricksServiceAccount, and in the operator's own
+// namespace and not the tenant's, because that is where the count is taken
+// from: the DatabricksServiceAccount is a copy, and a copy is missing exactly
+// when this question is most worth asking -- an identity whose namespace was
+// torn down still has its record and no longer has its copy.
 func identityMadeIn(name, accountID string) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
 	issued := &dbxv1alpha1.IssuedDatabricksServicePrincipal{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: operatorNamespace},

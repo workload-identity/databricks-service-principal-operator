@@ -933,7 +933,8 @@ func TestEnablingANamespaceWakesTheServiceAccountsInIt(t *testing.T) {
 		mintingNamespace(testNamespace), asked, silent,
 		namespaceNamed("team-b"), elsewhere)
 
-	requests := h.Projection.identitiesInNamespace(context.Background(), mintingNamespace(testNamespace))
+	requests := h.DatabricksServiceAccounts.identitiesInNamespace(
+		context.Background(), mintingNamespace(testNamespace))
 
 	if len(requests) != 1 {
 		t.Fatalf("woke %+v, want only the ServiceAccount that asked", requests)
@@ -954,7 +955,8 @@ func TestEnablingANamespaceWakesNothingElse(t *testing.T) {
 		serviceAccountNamed("team-b", "one"),
 		serviceAccountNamed("team-b", "two"))
 
-	if requests := h.Projection.identitiesInNamespace(context.Background(), namespaceNamed("team-b")); len(requests) != 0 {
+	if requests := h.DatabricksServiceAccounts.identitiesInNamespace(
+		context.Background(), namespaceNamed("team-b")); len(requests) != 0 {
 		t.Errorf("woke %+v; none of those ServiceAccounts asked for anything", requests)
 	}
 }
@@ -980,7 +982,8 @@ func TestEnablingANamespaceWakesAServiceAccountItCanOnlyRefuse(t *testing.T) {
 	h := newHarness(t, stub,
 		mintingNamespace(testNamespace), mistyped, serviceAccountNamed(testNamespace, "no-databricks"))
 
-	requests := h.Projection.identitiesInNamespace(context.Background(), mintingNamespace(testNamespace))
+	requests := h.DatabricksServiceAccounts.identitiesInNamespace(
+		context.Background(), mintingNamespace(testNamespace))
 
 	if len(requests) != 1 {
 		t.Fatalf("woke %+v, want the ServiceAccount whose key cannot be read", requests)
@@ -1171,11 +1174,12 @@ func TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted(t *testing.T) {
 
 	// And the owner of the namespace can read all of that without being able to
 	// read the operator's own.
-	projected := principalOf(t, h.Client)
-	if projected == nil {
-		t.Fatal("nothing was projected")
+	databricksServiceAccount := principalOf(t, h.Client)
+	if databricksServiceAccount == nil {
+		t.Fatal("nothing was databricksServiceAccount")
 	}
-	shown := meta.FindStatusCondition(identityIn(t, projected).Conditions, conditionReady)
+	shown := meta.FindStatusCondition(
+		identityIn(t, databricksServiceAccount).Conditions, conditionReady)
 	if shown == nil || shown.Reason != reasonAccountMismatch {
 		t.Errorf("the DatabricksServiceAccount says %v; it carries the record's words or it is no use", shown)
 	}
@@ -1201,14 +1205,14 @@ func TestTheAccountIsRecordedWithTheId(t *testing.T) {
 	}
 }
 
-// TestDeletingTheProjectionChangesNothing covers the difference between a record
-// and a copy of one.
+// TestDeletingTheDatabricksServiceAccountChangesNothing covers the difference
+// between a record and a copy of one.
 //
 // Somebody deleting this object has not said the workload should lose its
 // identity -- the ServiceAccount is still asking, and that is the only thing
 // that says it wants one. It is not a request to rotate either: it is deleting a
 // view, and a view comes back.
-func TestDeletingTheProjectionChangesNothing(t *testing.T) {
+func TestDeletingTheDatabricksServiceAccountChangesNothing(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
 	h := newHarness(t, stub,

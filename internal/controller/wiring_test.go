@@ -92,12 +92,12 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		tokenFile := filepath.Join(GinkgoT().TempDir(), "token")
 		Expect(os.WriteFile(tokenFile, []byte(token), 0o600)).To(Succeed())
 
-		projection := &DatabricksServiceAccountReconciler{
+		databricksServiceAccountReconciler := &DatabricksServiceAccountReconciler{
 			Client:                          manager.GetClient(),
 			Scheme:                          manager.GetScheme(),
 			DatabricksAccountNamespacedName: types.NamespacedName{Namespace: wiredRecords, Name: "databricks-account"},
 		}
-		Expect(projection.SetupWithManager(manager)).To(Succeed())
+		Expect(databricksServiceAccountReconciler.SetupWithManager(manager)).To(Succeed())
 
 		// The real Holder, with no DatabricksAccount to build clients from, so
 		// nothing here reaches Databricks. What these specs are about is what
@@ -239,11 +239,11 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		Expect(k8sClient.Update(ctx, namespace)).To(Succeed())
 
 		Eventually(func() bool {
-			projected := recordedIdentity(named, wiredAccount)
-			if projected == nil {
+			databricksServiceAccount := recordedIdentity(named, wiredAccount)
+			if databricksServiceAccount == nil {
 				return false
 			}
-			_, minted := projected.Status.Identity("reader")
+			_, minted := databricksServiceAccount.Status.Identity("reader")
 			return minted
 		}, 20*time.Second, 250*time.Millisecond).Should(BeTrue(),
 			"enabling the namespace woke nothing. This ServiceAccount stays unserved until "+
@@ -329,11 +329,11 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func() bool {
-			projected := recordedIdentity(wiredNamespace, "shared")
-			if projected == nil {
+			databricksServiceAccount := recordedIdentity(wiredNamespace, "shared")
+			if databricksServiceAccount == nil {
 				return false
 			}
-			_, mine := projected.Status.Identity(wiredRecords + "/databricks-account")
+			_, mine := databricksServiceAccount.Status.Identity(wiredRecords + "/databricks-account")
 			return mine
 		}, 20*time.Second, 250*time.Millisecond).Should(BeTrue(),
 			"this operator never wrote its own entry, so there is nothing to test the merge with")
@@ -361,18 +361,18 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		Expect(k8sClient.Update(ctx, serviceAccount)).To(Succeed())
 
 		Eventually(func() bool {
-			projected := recordedIdentity(wiredNamespace, "shared")
-			if projected == nil {
+			databricksServiceAccount := recordedIdentity(wiredNamespace, "shared")
+			if databricksServiceAccount == nil {
 				return false
 			}
-			_, appeared := projected.Status.Identity("later")
+			_, appeared := databricksServiceAccount.Status.Identity("later")
 			return appeared
 		}, 20*time.Second, 250*time.Millisecond).Should(BeTrue(),
 			"this operator never wrote after the other one did, so the merge was never exercised")
 
-		projected := recordedIdentity(wiredNamespace, "shared")
-		Expect(projected).NotTo(BeNil())
-		other, kept := projected.Status.Identity(stranger)
+		databricksServiceAccount := recordedIdentity(wiredNamespace, "shared")
+		Expect(databricksServiceAccount).NotTo(BeNil())
+		other, kept := databricksServiceAccount.Status.Identity(stranger)
 		Expect(kept).To(BeTrue(),
 			"this operator's write removed another operator's entry; the workload loses an "+
 				"identity it was issued, and the other operator cannot tell -- it reads its own "+
@@ -404,11 +404,11 @@ var _ = Describe("what wakes the controller", Ordered, func() {
 		})).To(Succeed())
 
 		Eventually(func() int {
-			projected := recordedIdentity(wiredNamespace, "named")
-			if projected == nil {
+			databricksServiceAccount := recordedIdentity(wiredNamespace, "named")
+			if databricksServiceAccount == nil {
 				return 0
 			}
-			return len(projected.Status.Identities)
+			return len(databricksServiceAccount.Status.Identities)
 		}, 20*time.Second, 250*time.Millisecond).Should(Equal(2),
 			"nothing was projected, so there is nothing to withdraw")
 

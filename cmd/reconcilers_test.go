@@ -32,16 +32,16 @@ func TestEverySettingReachesAReconciler(t *testing.T) {
 		},
 	}
 
-	account, projection, issued := reconcilers(want, nil, nil, nil)
+	account, databricksServiceAccountReconciler, issued := reconcilers(want, nil, nil, nil)
 
 	wanted := want.DatabricksAccountNamespacedName
 	if issued.DatabricksAccountNamespacedName != wanted ||
 		account.DatabricksAccountNamespacedName != wanted ||
-		projection.DatabricksAccountNamespacedName != wanted {
+		databricksServiceAccountReconciler.DatabricksAccountNamespacedName != wanted {
 		t.Errorf("DatabricksAccountNamespacedName is %v, %v and %v, want %v -- the operator would "+
 			"act in whichever DatabricksAccount somebody created",
 			issued.DatabricksAccountNamespacedName, account.DatabricksAccountNamespacedName,
-			projection.DatabricksAccountNamespacedName, wanted)
+			databricksServiceAccountReconciler.DatabricksAccountNamespacedName, wanted)
 	}
 	if issued.Databricks != want.Holder || account.Holder != want.Holder {
 		t.Error("the two controllers were not given the same Holder; the account controller " +

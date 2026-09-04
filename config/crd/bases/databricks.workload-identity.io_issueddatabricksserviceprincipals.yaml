@@ -54,8 +54,8 @@ spec:
 
           Deleting this object destroys the identity. That is what it means, and it is
           the only object here that means it. The DatabricksServiceAccount in the
-          tenant's namespace is a projection of this one: it can be deleted, and it
-          comes back.
+          tenant's namespace is a copy of this one: it can be deleted, and it comes
+          back.
 
           Nobody writes one of these. The name is derived and the spec is immutable.
         properties:
@@ -179,10 +179,11 @@ spec:
                   the 404 that means "not here" as the one that means "gone".
 
                   It is in the status rather than the spec because the account is not known
-                  to whoever writes the record -- the projection knows a ServiceAccount is
-                  asking and nothing about Databricks. It is written before the first call
-                  is made, not with the answer, so that a pass which creates a service
-                  principal and then stops has already said where to look for it.
+                  to whoever writes the record -- the DatabricksServiceAccount controller
+                  knows a ServiceAccount is asking and nothing about Databricks. It is
+                  written before the first call is made, not with the answer, so that a pass
+                  which creates a service principal and then stops has already said where to
+                  look for it.
                 type: string
               audience:
                 type: string

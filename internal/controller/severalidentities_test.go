@@ -96,16 +96,17 @@ func TestOneServiceAccountGetsTwoIdentitiesFromOneOperator(t *testing.T) {
 			"twice", records[0].Status.ServicePrincipalID)
 	}
 
-	projected := principalOf(t, h.Client)
-	if projected == nil {
+	databricksServiceAccount := principalOf(t, h.Client)
+	if databricksServiceAccount == nil {
 		t.Fatal("nothing was projected")
 	}
-	if len(projected.Status.Identities) != 2 {
+	if len(databricksServiceAccount.Status.Identities) != 2 {
 		t.Fatalf("the DatabricksServiceAccount carries %d entries, want both: %+v",
-			len(projected.Status.Identities), projected.Status.Identities)
+			len(databricksServiceAccount.Status.Identities),
+			databricksServiceAccount.Status.Identities)
 	}
 	for _, want := range []string{"reader", "writer"} {
-		entry, carried := projected.Status.Identity(want)
+		entry, carried := databricksServiceAccount.Status.Identity(want)
 		if !carried {
 			t.Fatalf("the DatabricksServiceAccount has no entry for %q; the workload cannot name a profile "+
 				"it cannot see", want)
@@ -176,15 +177,15 @@ func TestDroppingOneIdentityKeepsTheOther(t *testing.T) {
 			after[0].Status.ServicePrincipalID)
 	}
 
-	projected := principalOf(t, h.Client)
-	if projected == nil {
+	databricksServiceAccount := principalOf(t, h.Client)
+	if databricksServiceAccount == nil {
 		t.Fatal("the DatabricksServiceAccount is gone; one identity remains")
 	}
-	if _, still := projected.Status.Identity("reader"); still {
+	if _, still := databricksServiceAccount.Status.Identity("reader"); still {
 		t.Error("the DatabricksServiceAccount still shows the dropped identity, so a pod would go on being " +
 			"equipped for one that no longer exists")
 	}
-	if _, kept := projected.Status.Identity("writer"); !kept {
+	if _, kept := databricksServiceAccount.Status.Identity("writer"); !kept {
 		t.Error("the DatabricksServiceAccount lost the identity that is still asked for")
 	}
 }
@@ -238,8 +239,9 @@ func TestAddingASecondIdentityLeavesTheFirstAlone(t *testing.T) {
 	}
 }
 
-// TestWithdrawingNamedIdentitiesTakesTheProjectionWithThem covers the whole of a
-// ServiceAccount's request going away when the identities were named.
+// TestWithdrawingNamedIdentitiesTakesTheDatabricksServiceAccountWithThem covers
+// the whole of a ServiceAccount's request going away when the identities were
+// named.
 //
 // Withdrawing removes the entries this operator owns, and a named identity's key
 // is the name its asker chose, which says nothing about who issued it. An
@@ -251,16 +253,17 @@ func TestAddingASecondIdentityLeavesTheFirstAlone(t *testing.T) {
 // whose records are deleted and whose service principals are destroyed. It is
 // the one state this object is supposed to be incapable of: it decides nothing,
 // so the only thing it can be is wrong.
-func TestWithdrawingNamedIdentitiesTakesTheProjectionWithThem(t *testing.T) {
+func TestWithdrawingNamedIdentitiesTakesTheDatabricksServiceAccountWithThem(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{accountID: "the-account"}
 	h := newHarness(t, stub,
 		mintingNamespace(testNamespace), askingFor(testNamespace, testName, "reader", "writer"))
 	h.settle(t)
 
-	if projected := principalOf(t, h.Client); projected == nil ||
-		len(projected.Status.Identities) != 2 {
-		t.Fatalf("this test is about withdrawing two named identities; there are %v", projected)
+	if databricksServiceAccount := principalOf(t, h.Client); databricksServiceAccount == nil ||
+		len(databricksServiceAccount.Status.Identities) != 2 {
+		t.Fatalf("this test is about withdrawing two named identities; there are %v",
+			databricksServiceAccount)
 	}
 
 	serviceAccount := &corev1.ServiceAccount{}
@@ -281,11 +284,11 @@ func TestWithdrawingNamedIdentitiesTakesTheProjectionWithThem(t *testing.T) {
 	if len(stub.deleted) != 2 {
 		t.Errorf("deleted %v in Databricks, want both identities", stub.deleted)
 	}
-	if projected := principalOf(t, h.Client); projected != nil {
+	if databricksServiceAccount := principalOf(t, h.Client); databricksServiceAccount != nil {
 		t.Errorf("the DatabricksServiceAccount is still there, carrying %+v. Its records are gone and its "+
 			"service principals are destroyed, so every word of it is false -- and it reports "+
-			"Ready, which is the one thing a projection cannot be trusted to be wrong about",
-			projected.Status.Identities)
+			"Ready, which is the one thing a copy cannot be trusted to be wrong about",
+			databricksServiceAccount.Status.Identities)
 	}
 }
 
@@ -329,8 +332,8 @@ func TestEquipmentIsReportedPerNamedIdentity(t *testing.T) {
 		askingFor(testNamespace, testName, "reader", "writer"), cached(pod))
 	h.settle(t)
 
-	projected := principalOf(t, h.Client)
-	if projected == nil {
+	databricksServiceAccount := principalOf(t, h.Client)
+	if databricksServiceAccount == nil {
 		t.Fatal("nothing was projected")
 	}
 	for _, want := range []struct {
@@ -349,7 +352,7 @@ func TestEquipmentIsReportedPerNamedIdentity(t *testing.T) {
 		{writer, metav1.ConditionFalse, "running without this identity's Databricks token",
 			"the pod has no token for this identity, whatever it holds for another"},
 	} {
-		entry, carried := projected.Status.Identity(want.request)
+		entry, carried := databricksServiceAccount.Status.Identity(want.request)
 		if !carried {
 			t.Fatalf("no entry for %q", want.request)
 		}
@@ -413,11 +416,11 @@ func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
 			stub.deleted)
 	}
 
-	projected := principalOf(t, h.Client)
-	if projected == nil {
+	databricksServiceAccount := principalOf(t, h.Client)
+	if databricksServiceAccount == nil {
 		t.Fatal("the DatabricksServiceAccount is gone; both identities are still there")
 	}
-	still, carried := projected.Status.Identity("reader")
+	still, carried := databricksServiceAccount.Status.Identity("reader")
 	if !carried {
 		t.Fatal("the DatabricksServiceAccount dropped the mistyped identity. Its owner can no longer see the " +
 			"identity they still hold, and the webhook equips no new pod for it")
@@ -426,7 +429,7 @@ func TestAValueThatCannotBeReadDestroysNothing(t *testing.T) {
 		t.Errorf("the entry now says %+v and said %+v; nothing was asked for, so nothing about "+
 			"it should have moved", still, was)
 	}
-	if _, other := projected.Status.Identity("writer"); !other {
+	if _, other := databricksServiceAccount.Status.Identity("writer"); !other {
 		t.Error("the identity whose key was never touched went with it")
 	}
 }
@@ -480,12 +483,12 @@ func TestAServiceAccountWhoseOnlyKeyIsMistypedKeepsItsIdentity(t *testing.T) {
 			"every grant made on it because somebody left out a %q", stub.deleted, "/")
 	}
 
-	projected := principalOf(t, h.Client)
-	if projected == nil {
+	databricksServiceAccount := principalOf(t, h.Client)
+	if databricksServiceAccount == nil {
 		t.Fatal("the DatabricksServiceAccount is gone, so its owner cannot see the identity they still hold " +
 			"and the webhook equips no new pod for it")
 	}
-	still, carried := projected.Status.Identity(testOperator.String())
+	still, carried := databricksServiceAccount.Status.Identity(testOperator.String())
 	if !carried {
 		t.Fatal("the DatabricksServiceAccount dropped the only identity on it")
 	}
@@ -551,15 +554,15 @@ func TestAKeyThatIsGoneIsWithdrawnWhileAKeyThatWillNotParseIsHeld(t *testing.T) 
 			stub.deleted)
 	}
 
-	projected := principalOf(t, h.Client)
-	if projected == nil {
+	databricksServiceAccount := principalOf(t, h.Client)
+	if databricksServiceAccount == nil {
 		t.Fatal("the DatabricksServiceAccount is gone; the mistyped identity is still there and still working")
 	}
-	if _, gone := projected.Status.Identity(testOperator.String()); gone {
+	if _, gone := databricksServiceAccount.Status.Identity(testOperator.String()); gone {
 		t.Error("the DatabricksServiceAccount still shows the withdrawn identity, so a pod would go on being " +
 			"equipped for one whose service principal is destroyed")
 	}
-	if _, held := projected.Status.Identity("reader"); !held {
+	if _, held := databricksServiceAccount.Status.Identity("reader"); !held {
 		t.Error("the DatabricksServiceAccount dropped the mistyped identity, which nobody withdrew")
 	}
 }

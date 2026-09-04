@@ -43,7 +43,7 @@ func (h *harness) accounts(t *testing.T) *DatabricksAccountReconciler {
 	t.Helper()
 	return &DatabricksAccountReconciler{
 		Client:                          h.Client,
-		Scheme:                          h.Projection.Scheme,
+		Scheme:                          h.DatabricksServiceAccounts.Scheme,
 		DatabricksAccountNamespacedName: testOperator,
 		Holder:                          dbx.NewHolder(operatorNamespace, accountObject),
 		Runtime:                         dbx.Config{OIDCTokenFilepath: h.Issued.TokenPath, TokenAudience: testAudience},
@@ -61,10 +61,11 @@ func serving(operator types.NamespacedName, namespaces ...string) *dbxv1alpha1.D
 	return object
 }
 
-// projectionFor is another operator's projection controller over the same
-// cluster. It is a different operator by the only thing that makes one: the
-// DatabricksAccount it acts on, which is also its field manager.
-func projectionFor(scheme *runtime.Scheme, c client.Client,
+// databricksServiceAccountsFor is another operator's DatabricksServiceAccount
+// controller over the same cluster. It is a different operator by the only
+// thing that makes one: the DatabricksAccount it acts on, which is also its
+// field manager.
+func databricksServiceAccountsFor(scheme *runtime.Scheme, c client.Client,
 	operator types.NamespacedName) *DatabricksServiceAccountReconciler {
 	return &DatabricksServiceAccountReconciler{
 		Client:                          c,
@@ -156,7 +157,7 @@ func withdrawnCondition(t *testing.T, c client.Client) *metav1.Condition {
 }
 
 // requestFor is the reconcile request for one ServiceAccount, which is what a
-// projection controller is asked about.
+// DatabricksServiceAccount controller is asked about.
 func requestFor(serviceAccount *corev1.ServiceAccount) reconcile.Request {
 	return reconcile.Request{NamespacedName: client.ObjectKeyFromObject(serviceAccount)}
 }
@@ -311,9 +312,9 @@ func TestTakingANamespaceBackDestroysNothingAndEndsTheExchange(t *testing.T) {
 // wake-up reaches both at once. So the record's controller is driven first with
 // the namespace still unclaimed, where it must ask Databricks for nothing at
 // all, and then again after the claim lands and the trust goes -- and then a
-// projection pass and another record pass, which is the pair that would
-// re-assert the trust on a record that already exists and put back what was just
-// taken away.
+// DatabricksServiceAccount pass and another record pass, which is the pair that
+// would re-assert the trust on a record that already exists and put back what
+// was just taken away.
 func TestNothingIsWrittenBackWhileTheNamespaceIsUnclaimed(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
@@ -368,13 +369,14 @@ func TestNothingIsWrittenBackWhileTheNamespaceIsUnclaimed(t *testing.T) {
 // interleaving a withdrawal cannot converge its way out of.
 //
 // Between the edit and the claim landing, a ServiceAccount here still produces
-// records: a projection pass that read the account before the edit landed writes
-// its record after it. A withdrawal begun in that window enumerates the records
-// it can see, and this one is not among them -- so it mints a service principal
-// nobody asked for, with an applicationId no workload was ever given, and a
-// later pass takes its trust away again. What is left is an object in the
-// Databricks account that nothing wants and nothing explains, and it cannot be
-// undone by converging harder: it is already there.
+// records: a pass of the DatabricksServiceAccount controller that read the
+// account before the edit landed writes its record after it. A withdrawal begun
+// in that window enumerates the records it can see, and this one is not among
+// them -- so it mints a service principal nobody asked for, with an
+// applicationId no workload was ever given, and a later pass takes its trust
+// away again. What is left is an object in the Databricks account that nothing
+// wants and nothing explains, and it cannot be undone by converging harder: it
+// is already there.
 //
 // The withdrawal therefore waits until this operator has claimed the namespace
 // before it asks Databricks anything, so that the set it acts on has stopped
@@ -393,11 +395,11 @@ func TestNoServicePrincipalIsMintedForANamespaceOnItsWayOut(t *testing.T) {
 	}
 	nowServing(t, h.Client)
 
-	// The projection controller in the middle of a pass it started before the
-	// edit: it reads the account as it was, and everything else as it is. That
-	// is the whole of the window, and no watch closes it -- the read happened
-	// before the write landed and the record is written after.
-	h.Projection.Client = interceptor.NewClient(h.Client.(client.WithWatch), interceptor.Funcs{
+	// The DatabricksServiceAccount controller in the middle of a pass it started
+	// before the edit: it reads the account as it was, and everything else as it
+	// is. That is the whole of the window, and no watch closes it -- the read
+	// happened before the write landed and the record is written after.
+	h.DatabricksServiceAccounts.Client = interceptor.NewClient(h.Client.(client.WithWatch), interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey,
 			object client.Object, opts ...client.GetOption) error {
 			if databricksAccount, is := object.(*dbxv1alpha1.DatabricksAccount); is {
@@ -824,7 +826,7 @@ func TestReleasingLetsTheOtherOperatorMintAgain(t *testing.T) {
 		serving(otherOperator, testNamespace),
 	)
 	h.settle(t)
-	other := projectionFor(h.Projection.Scheme, h.Client, otherOperator)
+	other := databricksServiceAccountsFor(h.DatabricksServiceAccounts.Scheme, h.Client, otherOperator)
 
 	nowServing(t, h.Client)
 	reconcileAccount(t, h.accounts(t), accountObject)

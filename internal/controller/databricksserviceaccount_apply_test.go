@@ -27,8 +27,8 @@ import (
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 )
 
-// TestTheProjectionSendsOnlyWhatIsSet holds the whole reason this operator builds
-// an apply configuration rather than filling in a struct.
+// TestTheDatabricksServiceAccountSendsOnlyWhatIsSet holds the whole reason
+// this operator builds an apply configuration rather than filling in a struct.
 //
 // Under server-side apply an operator owns everything it sends. Sending a value
 // nobody set is not a cosmetic waste: it is this operator claiming "host is the
@@ -43,7 +43,7 @@ import (
 //   - the conversion drops a field that was set -- the DatabricksServiceAccount
 //     silently stops reporting it, and nothing else notices, because every
 //     reader of this object is a person.
-func TestTheProjectionSendsOnlyWhatIsSet(t *testing.T) {
+func TestTheDatabricksServiceAccountSendsOnlyWhatIsSet(t *testing.T) {
 	t.Parallel()
 
 	const key = "profile"

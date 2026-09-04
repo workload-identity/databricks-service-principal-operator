@@ -50,8 +50,8 @@ import (
 //
 // Deleting this object destroys the identity. That is what it means, and it is
 // the only object here that means it. The DatabricksServiceAccount in the
-// tenant's namespace is a projection of this one: it can be deleted, and it
-// comes back.
+// tenant's namespace is a copy of this one: it can be deleted, and it comes
+// back.
 //
 // Nobody writes one of these. The name is derived and the spec is immutable.
 type IssuedDatabricksServicePrincipalApplyConfiguration struct {

@@ -351,7 +351,7 @@ func (i ProjectedIdentity) AskedOf(operator types.NamespacedName) bool {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // DatabricksServiceAccount shows the owner of one ServiceAccount what this
-// operator issued to it. It is a projection and it decides nothing.
+// operator issued to it. It is a copy and it decides nothing.
 //
 // Every field on it was copied from an IssuedDatabricksServicePrincipal in the
 // operator's own namespace, which is the record and the only one. This object
@@ -366,7 +366,7 @@ func (i ProjectedIdentity) AskedOf(operator types.NamespacedName) bool {
 // would otherwise have to ask the platform team for.
 //
 // The operator never reads this object to decide anything. The moment it did,
-// this would stop being a projection and become a second record, and two records
+// this would stop being a copy and become a second record, and two records
 // disagree eventually without anybody noticing.
 //
 // It has no spec. Everything is already addressable: the name and namespace say

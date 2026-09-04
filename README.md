@@ -482,7 +482,7 @@ deleting the namespace.**
 **Nothing else destroys one.** Removing the namespace's `mint` label stops new
 identities and leaves existing ones alone. Deleting the
 `DatabricksServiceAccount` in your namespace does nothing at all: that object
-is a projection, and it is rebuilt on the next pass.
+is a copy, and it is rebuilt on the next pass.
 
 ---
 
@@ -532,7 +532,7 @@ operator's own namespace:
 kubectl -n dbxsp-operator-system get isdbxsp
 ```
 
-That object is the record. The one in your namespace is a projection of it:
+That object is the record. The one in your namespace is a copy of it:
 delete it and it comes back, write to it and the next pass overwrites you.
 
 The record is what deletes the service principal in Databricks, and it lives
