@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
@@ -104,39 +106,52 @@ func podUsing(account string) *corev1.Pod {
 	}
 }
 
-// admit runs the pod through the webhook and returns what it becomes.
-func admit(t *testing.T, i *PodTokenInjector, pod *corev1.Pod) *corev1.Pod {
+// requestFor is what the API server sends for this pod.
+func requestFor(t *testing.T, pod *corev1.Pod) admission.Request {
 	t.Helper()
 	raw, err := json.Marshal(pod)
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := i.Handle(context.Background(), admission.Request{
+	return admission.Request{
 		AdmissionRequest: admissionv1.AdmissionRequest{
 			Namespace: pod.Namespace,
 			Object:    runtime.RawExtension{Raw: raw},
 		},
-	})
-	if !response.Allowed {
-		t.Fatalf("the pod was refused: %+v", response.Result)
 	}
+}
 
-	patched := pod.DeepCopy()
-	if len(response.Patches) == 0 {
-		return patched
+// podFrom is the pod the API server ends up storing: what went in, with the
+// response's patches applied. Asserting on the operations instead would be
+// asserting on a shape nothing in the cluster ever sees.
+func podFrom(t *testing.T, request admission.Request, response admission.Response) *corev1.Pod {
+	t.Helper()
+	raw := request.Object.Raw
+	if len(response.Patches) > 0 {
+		patchJSON, err := json.Marshal(response.Patches)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if raw, err = applyPatch(raw, patchJSON); err != nil {
+			t.Fatal(err)
+		}
 	}
-	patchJSON, err := json.Marshal(response.Patches)
-	if err != nil {
-		t.Fatal(err)
-	}
-	applied, err := applyPatch(raw, patchJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(applied, patched); err != nil {
+	patched := &corev1.Pod{}
+	if err := json.Unmarshal(raw, patched); err != nil {
 		t.Fatal(err)
 	}
 	return patched
+}
+
+// admit runs the pod through the webhook and returns what it becomes.
+func admit(t *testing.T, i *PodTokenInjector, pod *corev1.Pod) *corev1.Pod {
+	t.Helper()
+	request := requestFor(t, pod)
+	response := i.Handle(context.Background(), request)
+	if !response.Allowed {
+		t.Fatalf("the pod was refused: %+v", response.Result)
+	}
+	return podFrom(t, request, response)
 }
 
 // TestAPodGetsATokenItsFederationPolicyWillAccept covers the whole reason this
@@ -262,6 +277,58 @@ func TestAPodWithNoIdentityIsLeftAlone(t *testing.T) {
 	}
 	if len(after.Spec.Containers[0].Env) != 0 {
 		t.Errorf("env is %+v for a pod whose ServiceAccount never asked", after.Spec.Containers[0].Env)
+	}
+}
+
+// TestAPodIsAdmittedWhenTheIdentityCannotBeRead covers the read failing for a
+// reason that is not the object being absent -- apiserver unreachable, cache not
+// started, request timed out.
+//
+// The pod is admitted unequipped rather than refused. Refusing trades a legible
+// failure for an illegible one: a workload that does not start, with an error
+// naming this operator to somebody whose Deployment says nothing about
+// Databricks, instead of a workload that starts and whose first Databricks call
+// is refused with the reason on its own DatabricksServicePrincipal.
+//
+// Admitted and unequipped are one answer, not two. Equipping from a read that
+// never arrived would mount a token for an identity nobody confirmed exists.
+func TestAPodIsAdmittedWhenTheIdentityCannotBeRead(t *testing.T) {
+	t.Parallel()
+	unreachable := errors.New("etcdserver: request timed out")
+
+	i := newInjector(t, identity(testNamespace, testAccount))
+	i.Client = interceptor.NewClient(i.Client.(client.WithWatch), interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return unreachable
+		},
+	})
+
+	request := requestFor(t, podUsing(testAccount))
+	response := i.Handle(context.Background(), request)
+
+	if !response.Allowed {
+		t.Fatalf("the pod was refused because this webhook could not read: %+v. The workload "+
+			"then does not start, for a reason unrelated to what it does and named nowhere its "+
+			"owner would look", response.Result)
+	}
+	if response.Result == nil || !strings.Contains(response.Result.Message, unreachable.Error()) {
+		t.Errorf("the response says %+v and does not carry %q. Nothing in internal/ logs, so "+
+			"this string is the only place anybody learns the read failed",
+			response.Result, unreachable)
+	}
+
+	after := podFrom(t, request, response)
+	if len(after.Spec.Volumes) != 0 {
+		t.Errorf("volumes are %+v; the identity these were built from was never read",
+			after.Spec.Volumes)
+	}
+	if len(after.Spec.Containers[0].VolumeMounts) != 0 {
+		t.Errorf("mounts are %+v on a pod nothing was projected into",
+			after.Spec.Containers[0].VolumeMounts)
+	}
+	if len(after.Spec.Containers[0].Env) != 0 {
+		t.Errorf("env is %+v; the container is told where a configuration is that no read "+
+			"produced", after.Spec.Containers[0].Env)
 	}
 }
 
@@ -482,6 +549,54 @@ func TestAWorkloadsOwnConfigurationIsNotDisplaced(t *testing.T) {
 	if _, set := envOf(after.Spec.Containers[0], EnvConfigFile); !set {
 		t.Errorf("%s was not set; a workload that brought its own configuration is still "+
 			"entitled to be told what it was issued", EnvConfigFile)
+	}
+}
+
+// TestAContainerAlreadySettingTheseNamesKeepsItsOwnValues covers a workload that
+// publishes this operator's own names itself.
+//
+// A container that sets one of them was written by somebody who decided what it
+// should say -- pointing at a configuration they assembled, or at a profile
+// other than the one the status happens to carry first. Two entries of one name
+// in a container's env is a pod the API server accepts and kubelet resolves to
+// the last, so appending would take that decision away with nothing anywhere
+// saying it happened.
+func TestAContainerAlreadySettingTheseNamesKeepsItsOwnValues(t *testing.T) {
+	t.Parallel()
+	const (
+		theirFile    = "/etc/databricks/assembled-by-them"
+		theirProfile = "the-one-they-meant"
+	)
+
+	i := newInjector(t, identity(testNamespace, testAccount))
+	pod := podUsing(testAccount)
+	pod.Spec.Containers[0].Env = []corev1.EnvVar{
+		{Name: EnvConfigFile, Value: theirFile},
+		{Name: EnvConfigProfile, Value: theirProfile},
+	}
+
+	container := admit(t, i, pod).Spec.Containers[0]
+
+	// The count, not just the value: a container holding both entries would read
+	// as correct here whenever the workload's happened to come second.
+	set := map[string][]string{}
+	for _, e := range container.Env {
+		set[e.Name] = append(set[e.Name], e.Value)
+	}
+	for name, want := range map[string]string{EnvConfigFile: theirFile, EnvConfigProfile: theirProfile} {
+		if got := set[name]; len(got) != 1 || got[0] != want {
+			t.Errorf("%s is %q, want exactly one entry holding %q. kubelet resolves the last of "+
+				"several, so a second entry is this webhook overruling the container silently",
+				name, got, want)
+		}
+	}
+
+	// And it was equipped all the same. Nothing about this container collides
+	// with the volume or the mount, so withholding those would punish it for
+	// having said where its configuration is.
+	if len(container.VolumeMounts) != 1 || container.VolumeMounts[0].Name != TokenVolume {
+		t.Errorf("mounts are %+v; the token was projected and this container cannot read it",
+			container.VolumeMounts)
 	}
 }
 

@@ -1,0 +1,95 @@
+/*
+Copyright 2026 Weidao Lee.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package webhook
+
+import (
+	"strings"
+	"testing"
+
+	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
+)
+
+// TestNothingAtAllIsRenderedWhenNoIdentityHasAClientId is a contract of
+// Configuration itself, and the caller that depends on it is not the webhook.
+//
+// The webhook drops unconverged identities before it renders, so it never asks
+// this question. The controller's describes does: it renders one identity's
+// block and asks whether the pod's annotation contains it, and it reads the
+// empty string as "there is nothing to look for". A block with client_id and
+// nothing after it is not empty, every annotation contains a substring of some
+// pod, and Equipped would report True for pods carrying no such profile --
+// which matters exactly when an identity is recorded as removed in Databricks,
+// because that clears the client id.
+//
+// So the empty answer has to be exactly empty. Not a newline, not a section
+// header for a profile naming nobody.
+func TestNothingAtAllIsRenderedWhenNoIdentityHasAClientId(t *testing.T) {
+	t.Parallel()
+	rendered := Configuration([]dbxv1alpha1.ProjectedIdentity{
+		{Request: testOperator, Operator: testOperator, Audience: testAudience},
+		{Request: "reader", Operator: testOperator, Audience: testAudience},
+	})
+	if rendered != "" {
+		t.Errorf("Configuration rendered %q for identities Databricks has not answered for. "+
+			"describes reads a non-empty answer as a block to look for in the pod, and reports "+
+			"every pod in the namespace as equipped with it", rendered)
+	}
+}
+
+// TestAnIdentityDatabricksHasNotAnsweredForContributesNoProfile is the same
+// property where the answer is not empty.
+//
+// A profile naming no client cannot be exchanged for anything -- it fails as
+// TOKEN_INVALID with the federation policy echoed back, which reads as though
+// the policy were wrong -- so an identity still without one has to leave the
+// file exactly as it would be had that identity not been in the list, including
+// the blank lines between the profiles that survive it.
+func TestAnIdentityDatabricksHasNotAnsweredForContributesNoProfile(t *testing.T) {
+	t.Parallel()
+	converged := []dbxv1alpha1.ProjectedIdentity{
+		{Request: "reader", Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
+		{Request: "writer", Operator: testOperator, ClientID: "writer-client", Audience: testAudience},
+	}
+	// One in every position, because the separator is written per profile and a
+	// leading, trailing or interior gap are three different mistakes.
+	mixed := []dbxv1alpha1.ProjectedIdentity{
+		{Request: "pending-first", Operator: testOperator, Audience: testAudience},
+		converged[0],
+		{Request: "pending-middle", Operator: testOperator, Audience: testAudience},
+		converged[1],
+		{Request: "pending-last", Operator: testOperator, Audience: testAudience},
+	}
+
+	rendered := Configuration(mixed)
+	if strings.Contains(rendered, "pending-") {
+		t.Errorf("the configuration is %q and names an identity with no client id; the workload "+
+			"gets a profile whose only outcome is TOKEN_INVALID", rendered)
+	}
+	if want := Configuration(converged); rendered != want {
+		t.Errorf("the configuration is %q, want %q -- byte for byte what the converged "+
+			"identities render on their own", rendered, want)
+	}
+
+	// And the neighbours are readable, so the comparison above is between two
+	// files the SDK resolves rather than two that are equally wrong.
+	if got := resolvedProfile(t, rendered, "reader").ClientID; got != "reader-client" {
+		t.Errorf("profile %q resolves client_id %q", "reader", got)
+	}
+	if got := resolvedProfile(t, rendered, "writer").ClientID; got != "writer-client" {
+		t.Errorf("profile %q resolves client_id %q", "writer", got)
+	}
+}
