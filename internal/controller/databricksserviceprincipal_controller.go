@@ -121,14 +121,14 @@ func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, re
 
 	requested := dbxv1alpha1.RequestsFor(account.Annotations, r.Account)
 
-	held, err := r.held(ctx, &account, requested)
+	resent, err := r.resentIdentities(ctx, &account, requested)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if len(requested.Understood) == 0 && len(held) == 0 {
-		// Nothing asked and nothing being held back on, which is the only
-		// reading under which every entry this operator owns was withdrawn.
+	if len(requested.Understood) == 0 && len(resent) == 0 {
+		// Nothing asked and nothing sent again, which is the only reading under
+		// which every entry this operator owns was withdrawn.
 		// The condition used to be "no requests", and a value that would not
 		// parse produced none -- so a lost "/" arrived here as a withdrawal and
 		// destroyed a service principal along with every grant made on it.
@@ -136,7 +136,7 @@ func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, re
 		// This operator's entries go and the others stay. Withdrawing is also
 		// what ends the identity, and that is the record's controller's to act
 		// on -- nothing here destroys anything.
-		return ctrl.Result{}, r.withdraw(ctx, &account)
+		return ctrl.Result{}, r.removeIdentities(ctx, &account)
 	}
 
 	// Whether new records may be made here, asked once for the whole
@@ -148,7 +148,7 @@ func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, re
 		return ctrl.Result{}, err
 	}
 
-	entries := make([]dbxv1alpha1.ProjectedIdentity, 0, len(requested.Understood)+len(held))
+	entries := make([]dbxv1alpha1.ProjectedIdentity, 0, len(requested.Understood)+len(resent))
 	for _, request := range requested.Understood {
 		entry, made, err := r.entryFor(ctx, &account, request, minting)
 		if err != nil {
@@ -159,12 +159,12 @@ func (r *DatabricksServicePrincipalReconciler) Reconcile(ctx context.Context, re
 		}
 		entries = append(entries, entry)
 	}
-	entries = append(entries, held...)
+	entries = append(entries, resent...)
 
 	// Ordered by the name the asker gave each identity, unnamed first, which is
 	// the order First reads and so decides what a pod naming no profile is
 	// given. It has to be imposed here: what was asked for and what is being
-	// held arrive as two groups, and neither the annotations nor the projection
+	// resent arrive as two groups, and neither the annotations nor the projection
 	// carries an order to take instead.
 	slices.SortFunc(entries, func(a, b dbxv1alpha1.ProjectedIdentity) int {
 		return strings.Compare(r.identityNameOf(a), r.identityNameOf(b))
@@ -355,14 +355,16 @@ func projectedIdentityFor(entry dbxv1alpha1.ProjectedIdentity) *acv1alpha1.Proje
 	return identity
 }
 
-// withdraw removes this operator's entry, and the object with it when it was the
-// last one.
+// removeIdentities takes this operator's entries out of the projection, and the
+// object with them when they were the last ones. Nothing outside the cluster is
+// reached: the service principals these entries describe are the record
+// controller's to end, and it ends none of them because of this.
 //
 // Applying no entries removes what this operator owns and leaves what it does
 // not. An object left holding none says a ServiceAccount was issued nothing,
 // which is what every ServiceAccount in the cluster says by having no object at
 // all, so it goes.
-func (r *DatabricksServicePrincipalReconciler) withdraw(ctx context.Context,
+func (r *DatabricksServicePrincipalReconciler) removeIdentities(ctx context.Context,
 	account *corev1.ServiceAccount) error {
 	var projection dbxv1alpha1.DatabricksServicePrincipal
 	switch err := r.Get(ctx, client.ObjectKeyFromObject(account), &projection); {
@@ -399,7 +401,7 @@ func (r *DatabricksServicePrincipalReconciler) withdraw(ctx context.Context,
 		// object that has no fields -- which structured merge writes as null,
 		// and the API server refuses: `status: Invalid value: "null": in body
 		// must be of type object`. The apply then fails on every pass, forever,
-		// and the projection it was supposed to withdraw stays exactly as it was.
+		// and the projection it was supposed to empty stays exactly as it was.
 		//
 		// The case where that happens is the case where the object goes anyway.
 		//
@@ -732,16 +734,16 @@ func tokenAudienceOf(pod *corev1.Pod, request string) (audience string, carries 
 	return "", false
 }
 
-// held is every entry this operator already wrote whose annotation key is there
-// and could not be read.
+// resentIdentities is last pass's entry for every identity whose annotation key
+// is there and could not be read, to be sent again exactly as it stands.
 //
-// Sent again exactly as it stands. An apply keeps only what it sends, so leaving
-// one out takes the identity off the object its owner reads and stops the
-// webhook equipping new pods for it -- over a typo, while the service principal
-// itself is untouched and still in use. Nothing about it is recomputed either:
-// the request that would say what to compute is the thing that could not be
-// read.
-func (r *DatabricksServicePrincipalReconciler) held(ctx context.Context,
+// Sent again because an apply keeps only what it sends: an entry left out is an
+// entry taken away, so the identity would come off the object its owner reads
+// and the webhook would stop equipping new pods for it -- over a typo, while the
+// service principal itself is untouched and still in use. Nothing about it is
+// recomputed either, because the request that would say what to compute is the
+// thing that could not be read.
+func (r *DatabricksServicePrincipalReconciler) resentIdentities(ctx context.Context,
 	account *corev1.ServiceAccount,
 	requested dbxv1alpha1.Requested) ([]dbxv1alpha1.ProjectedIdentity, error) {
 	if len(requested.Refused) == 0 {
@@ -756,13 +758,13 @@ func (r *DatabricksServicePrincipalReconciler) held(ctx context.Context,
 		return nil, err
 	}
 
-	var held []dbxv1alpha1.ProjectedIdentity
+	var resent []dbxv1alpha1.ProjectedIdentity
 	for _, entry := range projection.Status.Identities {
 		if entry.AskedOf(r.Account) && requested.Unreadable(r.identityNameOf(entry)) {
-			held = append(held, entry)
+			resent = append(resent, entry)
 		}
 	}
-	return held, nil
+	return resent, nil
 }
 
 // identityNameOf is the name this entry's asker gave the identity, which is what

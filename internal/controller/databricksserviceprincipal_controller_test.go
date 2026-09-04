@@ -405,7 +405,7 @@ func TestAskingAgainStartsAgain(t *testing.T) {
 	stub.gone = identityIn(t, principalOf(t, h.Client)).ServicePrincipalID
 	h.settle(t)
 
-	withdraw(t, h.Client)
+	stopsAsking(t, h.Client)
 	h.settle(t)
 	if h.issuedOf(t, asking(testNamespace, testName)) != nil {
 		t.Fatal("the record outlived the request it was made for")
@@ -464,8 +464,10 @@ func TestOneThatIsThereIsNotBuiltAgain(t *testing.T) {
 // acceptable. A person can decide that; they remove the finalizer by hand,
 // having seen what is left.
 
-// withdraw removes the annotation, which is the only thing that revokes.
-func withdraw(t *testing.T, c client.Client) {
+// stopsAsking takes the annotation off, which is the only thing that revokes.
+// The opposite of asking, and named for it: what a ServiceAccount withdraws is
+// its request, which is a different act from the account withdrawing a namespace.
+func stopsAsking(t *testing.T, c client.Client) {
 	t.Helper()
 	account := serviceAccount(testNamespace, testName)
 	if err := c.Get(context.Background(),
@@ -485,7 +487,7 @@ func TestAFailedDeleteHoldsTheRecord(t *testing.T) {
 		mintingNamespace(testNamespace), asking(testNamespace, testName))
 	h.settle(t)
 
-	withdraw(t, h.Client)
+	stopsAsking(t, h.Client)
 	stub.deleteErr = errors.New("the service is temporarily unavailable")
 	h.settle(t)
 

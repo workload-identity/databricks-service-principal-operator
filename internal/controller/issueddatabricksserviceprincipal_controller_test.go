@@ -154,7 +154,7 @@ func TestARecordWithNoIdStillDestroysWhatItMade(t *testing.T) {
 	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
 	h := newHarness(t, stub, mintingNamespace(testNamespace), account, issued)
 
-	withdraw(t, h.Client)
+	stopsAsking(t, h.Client)
 	h.settle(t)
 
 	if len(stub.deleted) != 1 || stub.deleted[0] != "7788" {
@@ -185,7 +185,7 @@ func TestADeletionIsNotHeldOverAValueItDiscards(t *testing.T) {
 	h.Issued.TokenPath = writeTokenAs(t, testIssuer,
 		"system:serviceaccount:operators:controller-manager", "")
 
-	withdraw(t, h.Client)
+	stopsAsking(t, h.Client)
 	h.settle(t)
 
 	if len(stub.deleted) != 1 || stub.deleted[0] != "7788" {
@@ -308,7 +308,7 @@ func TestARecordIsHeldRatherThanActedOnInTheWrongAccount(t *testing.T) {
 		deleteErr: errors.New("the service is temporarily unavailable"),
 	}
 	h := newHarness(t, stub, mintingNamespace(testNamespace), account, issued)
-	withdraw(t, h.Client)
+	stopsAsking(t, h.Client)
 	h.settle(t)
 
 	if h.issuedOf(t, account).DeletionTimestamp.IsZero() {
@@ -445,7 +445,7 @@ func TestRemovingTheFinalizerByHandIsNotArguedWith(t *testing.T) {
 	stub := &stubClients{deleteErr: errors.New("the service is temporarily unavailable")}
 	h := newHarness(t, stub, mintingNamespace(testNamespace), account, held)
 
-	withdraw(t, h.Client)
+	stopsAsking(t, h.Client)
 	h.settle(t)
 
 	stuck := h.issuedOf(t, account)
@@ -536,7 +536,7 @@ func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
 	}{
 		{"converging", func(*testing.T, *harness, *corev1.ServiceAccount) {}},
 		{"on its way out", func(t *testing.T, h *harness, _ *corev1.ServiceAccount) {
-			withdraw(t, h.Client)
+			stopsAsking(t, h.Client)
 		}},
 	} {
 		t.Run(going.name, func(t *testing.T) {
