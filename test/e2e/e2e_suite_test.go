@@ -261,6 +261,11 @@ func exists(id string) bool {
 // are not passed in, so a configuration naming the wrong path or the wrong
 // client fails here rather than being worked around.
 //
+// The token path and the audience are read twice, under the name Go declares for
+// each and the name Python declares, and the pair has to agree. Only one of the
+// two is exercised by the exchange below, so without this a profile that served
+// one language and not the other would pass here on a real cluster.
+//
 // Who it became is read from the access token's own `sub` claim rather than
 // asked. There is no "who am I" at account level: SCIM's Me is 405 there, and
 // the workspace one answers "Unable to load OAuth Config" for an account token.
@@ -274,9 +279,14 @@ section=$(awk -v p="[$1]" '$0==p{f=1;next} /^\[/{f=0} f' "$cfg")
 client=$(echo "$section" | sed -n 's/^client_id *= *//p')
 tokenfile=$(echo "$section" | sed -n 's/^databricks_id_token_filepath *= *//p')
 audience=$(echo "$section" | sed -n 's/^audience *= *//p')
+pytokenfile=$(echo "$section" | sed -n 's/^oidc_token_filepath *= *//p')
+pyaudience=$(echo "$section" | sed -n 's/^token_audience *= *//p')
 test -n "$client"    || { echo "no client_id in profile $1"; exit 1; }
 test -n "$tokenfile" || { echo "no databricks_id_token_filepath in profile $1"; exit 1; }
 test -r "$tokenfile" || { echo "the profile names $tokenfile and there is no such file"; exit 1; }
+test -n "$audience"  || { echo "no audience in profile $1"; exit 1; }
+test "$pytokenfile" = "$tokenfile" || { echo "the token path is $tokenfile under the name Go reads and $pytokenfile under the name Python reads"; exit 1; }
+test "$pyaudience"  = "$audience"  || { echo "the audience is $audience under the name Go reads and $pyaudience under the name Python reads"; exit 1; }
 access=$(curl -sS -X POST "$2/oidc/accounts/$3/v1/token" \
   -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
   -d subject_token_type=urn:ietf:params:oauth:token-type:jwt \

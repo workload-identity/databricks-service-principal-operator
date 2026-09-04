@@ -416,8 +416,18 @@ operator:
 auth_type = file-oidc
 client_id = 11111111-1111-1111-1111-111111111111
 databricks_id_token_filepath = /var/run/secrets/databricks/ops-a/databricks-account/token
+oidc_token_filepath = /var/run/secrets/databricks/ops-a/databricks-account/token
 audience = databricks
+token_audience = databricks
 ```
+
+**Two values are there twice, and both spellings are yours to ignore.** The SDKs
+do not agree on what to call them in a profile — Go reads
+`databricks_id_token_filepath` and `audience`, Python reads `oidc_token_filepath`
+and `token_audience` — and this operator cannot see which one your image
+contains, so it writes both. Whichever SDK you use reads the pair it knows and
+drops the other without a word. Their environment variables do agree, which is
+why the split only shows here.
 
 An identity asked for under a named key is named by that name instead, and its
 profile is `[reader]`: [docs/several-identities.md](docs/several-identities.md).
@@ -540,13 +550,13 @@ one.
 
 ## When something is wrong
 
-| Look at                                 | Answers                                                             |
-|-----------------------------------------|---------------------------------------------------------------------|
-| `DatabricksAccount` `Ready`             | Whether this Databricks account was reached and read                |
-| `DatabricksAccount` `Prepared`          | Whether the operator can issue anything at all                      |
-| `DatabricksServiceAccount` `Ready`      | Whether the operator is getting this identity to where it should be |
-| `DatabricksServiceAccount` `Equipped`   | Whether its pods carry what they need to reach Databricks           |
-| `IssuedDatabricksServicePrincipal`      | The same answers, on the object the operator actually acts on       |
+| Look at                               | Answers                                                             |
+|---------------------------------------|---------------------------------------------------------------------|
+| `DatabricksAccount` `Ready`           | Whether this Databricks account was reached and read                |
+| `DatabricksAccount` `Prepared`        | Whether the operator can issue anything at all                      |
+| `DatabricksServiceAccount` `Ready`    | Whether the operator is getting this identity to where it should be |
+| `DatabricksServiceAccount` `Equipped` | Whether its pods carry what they need to reach Databricks           |
+| `IssuedDatabricksServicePrincipal`    | The same answers, on the object the operator actually acts on       |
 
 `DatabricksAccount` Ready does not mean the operator can create anything —
 verification is a read. If it is Ready and an identity says `Denied`, the
@@ -571,10 +581,10 @@ which:
 | `Denied`              | The operator lacks a Databricks permission. No retry supplies it                                                                                                                                                 |
 | `AwaitingRecord`      | The record was just written and has not been acted on yet                                                                                                                                                        |
 | `NotConfigured`       | There is no usable `DatabricksAccount` yet                                                                                                                                                                       |
-| `TokenUnreadable`     | The operator cannot read its own projected token, so it does not know the issuer to write or the audience to give. Its Deployment's `serviceAccountToken` projection is where to look, not this object            |
-| `Rejected`            | Databricks refused the request itself as invalid. Something has to change in what is being sent; restoring or re-pointing anything does not answer it                                                             |
-| `MalformedRecord`     | An id this operator wrote into `status` can no longer be read as one. It is in the status, not in any spec, so there is nothing in the spec to correct                                                            |
-| `NotFound`            | Databricks looked and the thing named is not there. Something has to be restored or re-pointed                                                                                                                    |
-| `AccountUnknown`      | The record names a service principal and not the account it was made in, so a "not found" cannot be told from a lookup in the wrong place. Nothing is done for it and nothing about it is concluded               |
+| `TokenUnreadable`     | The operator cannot read its own projected token, so it does not know the issuer to write or the audience to give. Its Deployment's `serviceAccountToken` projection is where to look, not this object           |
+| `Rejected`            | Databricks refused the request itself as invalid. Something has to change in what is being sent; restoring or re-pointing anything does not answer it                                                            |
+| `MalformedRecord`     | An id this operator wrote into `status` can no longer be read as one. It is in the status, not in any spec, so there is nothing in the spec to correct                                                           |
+| `NotFound`            | Databricks looked and the thing named is not there. Something has to be restored or re-pointed                                                                                                                   |
+| `AccountUnknown`      | The record names a service principal and not the account it was made in, so a "not found" cannot be told from a lookup in the wrong place. Nothing is done for it and nothing about it is concluded              |
 | `LookupFailed`        | The call did not go through. Nothing has been concluded from it and it is retried                                                                                                                                |
 | `RevokeFailed`        | Deletion is being held because the service principal is still there. This is reported on the record, in the operator's namespace                                                                                 |

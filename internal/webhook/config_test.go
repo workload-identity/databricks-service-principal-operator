@@ -93,3 +93,42 @@ func TestAnIdentityDatabricksHasNotAnsweredForContributesNoProfile(t *testing.T)
 		t.Errorf("profile %q resolves client_id %q", "writer", got)
 	}
 }
+
+// TestEitherSdkFindsANameItReads is what makes the profile usable by a workload
+// written in either language.
+//
+// One value, two names. The Go SDK declares the token path as
+// databricks_id_token_filepath and the audience as audience; the Python SDK
+// declares them as oidc_token_filepath and token_audience. A reader drops the
+// name it does not declare without saying so, so a profile written for one is
+// not something the other partly understands: it is one that fails as "default
+// auth: cannot configure default credentials" for naming no path it knows, or
+// resolves cleanly having never been told what its token was minted for.
+//
+// Asserted against the text because there is no Python here to resolve it with.
+// What the Go SDK makes of this same profile, the names meant for the other one
+// included, is TestWhatThePodIsGivenIsWhatTheSdkReads.
+func TestEitherSdkFindsANameItReads(t *testing.T) {
+	t.Parallel()
+	rendered := Configuration([]dbxv1alpha1.ProjectedIdentity{{
+		Profile:  testOperator,
+		Operator: testOperator,
+		ClientID: testClientID,
+		Audience: testAudience,
+	}})
+
+	for _, line := range []string{
+		"databricks_id_token_filepath = " + TokenPathFor(testOperator),
+		"oidc_token_filepath = " + TokenPathFor(testOperator),
+		"audience = " + testAudience,
+		"token_audience = " + testAudience,
+	} {
+		// Anchored on both sides, because "audience = databricks" is a substring
+		// of the token_audience line and each of these has to be its own.
+		if !strings.Contains(rendered, "\n"+line+"\n") {
+			t.Errorf("the configuration is %q and does not carry %q on a line of its own; the "+
+				"SDK that reads that name is left holding a profile it cannot complete",
+				rendered, line)
+		}
+	}
+}

@@ -69,12 +69,12 @@ func identity(namespace, name string) *dbxv1alpha1.DatabricksServiceAccount {
 // resolvedProfile is what the Databricks SDK makes of one profile in what this
 // webhook rendered, read by the SDK's own config package.
 //
-// Asserting on the text is the wrong question, and this file used to ask it. The
-// SDK matches a profile's keys against the names in its own struct tags and
-// drops one it does not recognise without a word, so a line being present says
-// nothing about whether anything read it -- which is how "token_audience"
-// survived: written into every pod, in no resolved configuration, with the
-// profile resolving cleanly either way.
+// Asserting on the text is a different question. The SDK matches a profile's
+// keys against the names in its own struct tags and drops one it does not
+// recognise without a word, so a line being present says nothing about whether
+// anything read it. That gap is concrete here rather than theoretical: the
+// profile carries the two names the Python SDK reads as well, and this one
+// resolves cleanly having dropped both.
 //
 // Only the file is loaded. The SDK's default loaders read the environment first,
 // so a developer with DATABRICKS_* set would be testing their own shell.
@@ -476,16 +476,18 @@ func TestTheProfileNamesNoWorkspace(t *testing.T) {
 	}
 }
 
-// TestWhatThePodIsGivenIsWhatTheSdkReads is the assertion this file used to make
-// against the text of the configuration, and text was the wrong thing to ask.
+// TestWhatThePodIsGivenIsWhatTheSdkReads asks the SDK what it made of the
+// profile rather than asking the text what it says.
 //
-// It asserted that "token_audience = " appeared, saying the profile would not
-// resolve without it. Both halves were false: the SDK's own name for that field
-// is "audience" -- config.Config declares TokenAudience with name:"audience" --
-// so what this webhook wrote was dropped without a word, and the profile
-// resolved cleanly all the same, carrying no audience at all. Measured against
-// v0.176.0 with the profile below: as token_audience the SDK resolves
-// TokenAudience="", as audience it resolves "databricks".
+// This profile is where those two questions come apart: it carries the names the
+// Python SDK reads as well, and this SDK drops them without a word and resolves
+// cleanly regardless. A key's spelling is the whole of whether it is read.
+// Measured against v0.176.0, where config.Config declares TokenAudience with
+// name:"audience": under token_audience alone the SDK resolves TokenAudience="",
+// under audience it resolves "databricks".
+//
+// TestEitherSdkFindsANameItReads is the other half of it -- that the names this
+// SDK drops are the ones the other SDK has nothing without.
 func TestWhatThePodIsGivenIsWhatTheSdkReads(t *testing.T) {
 	t.Parallel()
 	i := newInjector(t, identity(testNamespace, testAccount))

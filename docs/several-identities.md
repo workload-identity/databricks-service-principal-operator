@@ -247,14 +247,22 @@ naming all of them:
 auth_type = file-oidc
 client_id = 11111111-1111-1111-1111-111111111111
 databricks_id_token_filepath = /var/run/secrets/databricks/reader/token
+oidc_token_filepath = /var/run/secrets/databricks/reader/token
 audience = databricks
+token_audience = databricks
 
 [writer]
 auth_type = file-oidc
 client_id = 22222222-2222-2222-2222-222222222222
 databricks_id_token_filepath = /var/run/secrets/databricks/writer/token
+oidc_token_filepath = /var/run/secrets/databricks/writer/token
 audience = databricks
+token_audience = databricks
 ```
+
+The token path and the audience are each written under both spellings the SDKs
+use, which is [What is actually in the pod](../README.md#what-is-actually-in-the-pod)
+and holds here per profile.
 
 One path segment per identity, named the same as the profile. The identity asked
 for with the bare key is the one exception, because its profile name is the

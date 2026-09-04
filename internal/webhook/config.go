@@ -64,17 +64,31 @@ func Configuration(identities []dbxv1alpha1.ProjectedIdentity) string {
 		// the token path marks another, and it will not choose between them.
 		rendered.WriteString("auth_type = file-oidc\n")
 		rendered.WriteString("client_id = " + identity.ClientID + "\n")
-		rendered.WriteString("databricks_id_token_filepath = " + TokenPathFor(identity.Profile) + "\n")
 
-		// "audience", not "token_audience". The SDK looks a profile's keys up by
-		// the name in its own struct tag, and Config.TokenAudience is tagged
-		// name:"audience"; a key it does not know is dropped without a word.
-		// Measured against v0.176.0 with the profile above: as token_audience it
-		// resolved TokenAudience="", as audience it resolves "databricks".
-		// Nothing said so for as long as the wrong name was written, because a
-		// profile missing the audience resolves cleanly -- the audience was
-		// simply not in what the workload got.
+		// The two values below are each written twice, because the SDKs do not
+		// agree on what to call them in a profile and this operator cannot see
+		// which one the workload uses. Go reads databricks_id_token_filepath and
+		// audience; Python reads oidc_token_filepath and token_audience. Their
+		// environment variables do agree -- DATABRICKS_OIDC_TOKEN_FILEPATH and
+		// DATABRICKS_TOKEN_AUDIENCE on both -- so the profile is the only place
+		// the split shows, which is why it is easy to miss.
+		//
+		// Writing all four is safe in both directions, and that is a measured
+		// fact rather than a general one: Go looks up each field it declares by
+		// the name in its struct tag and never sees the rest, and Python assigns
+		// every key in the section and reads only the ones it declared. Neither
+		// says which ones it dropped.
+		//
+		// That silence is the reason to write both rather than pick. A profile
+		// carrying auth_type = file-oidc and no path its reader knows fails as
+		// "default auth: cannot configure default credentials", which names
+		// nothing that is wrong; and one carrying no audience its reader knows
+		// resolves cleanly, having simply never been told what the token it
+		// names was minted for.
+		rendered.WriteString("databricks_id_token_filepath = " + TokenPathFor(identity.Profile) + "\n")
+		rendered.WriteString("oidc_token_filepath = " + TokenPathFor(identity.Profile) + "\n")
 		rendered.WriteString("audience = " + identity.Audience + "\n")
+		rendered.WriteString("token_audience = " + identity.Audience + "\n")
 	}
 	return rendered.String()
 }
