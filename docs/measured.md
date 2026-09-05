@@ -3,11 +3,25 @@
 For somebody deciding whether to adopt this operator: every claim it rests on,
 what was asked, what came back, and what follows from it.
 
-None of this is read off the SDK's type definitions. Each entry was established
-against a live Databricks account, because the questions are ones only Databricks
-can answer. Several have an executable form in `internal/databricks/live_test.go`
-and `test/e2e/e2e_suite_test.go`; the rest were measured by hand and are recorded
-here because they are recorded nowhere else.
+None of this is read off the SDK's type definitions. Almost every entry was
+established against a live Databricks account, because the questions are ones
+only Databricks can answer. Several have an executable form in
+`internal/databricks/live_test.go` and `test/e2e/e2e_suite_test.go`; the rest
+were measured by hand and are recorded here because they are recorded nowhere
+else.
+
+**Every entry ends with the day the answer was obtained, and with how it was
+obtained.** The date is there because this page describes another company's API,
+and that API changes without telling anybody here: an undated finding cannot be
+re-checked, and being re-checkable is the only reason to write any of this down.
+A reader deciding whether an entry still holds starts from how old it is.
+
+*Measured against a live account* and *read in the Databricks documentation* are
+two different kinds of knowing, and the tag says which. A measured entry is what
+the account did on the day it was asked. A documented entry is what Databricks
+says it does — worth exactly what the documentation is worth, and nothing here
+has watched it happen. [Still not established](#still-not-established) carries
+no date at all, because nothing was obtained on any day.
 
 ## How to repeat any of this
 
@@ -55,46 +69,52 @@ scope              = all-apis
 ```
 
 Anybody debugging a workload's first exchange will lose a day to that error
-message otherwise, because everything it names is correct.
+message otherwise, because everything it names is correct. *(Measured
+2026-09-01, against a live account.)*
 
-**An unset audience is the account id, not "no audience".** The SDK falls back to
-the account id when `DATABRICKS_TOKEN_AUDIENCE` is empty. So a federation policy
-written for the audience `databricks` cannot be satisfied by a workload that
-never set one — the two sides disagree and neither says so. The operator sets the
-policy's audience and the workload's from one place, so they agree by
+**An unset audience is the account id, not "no audience".** The SDK falls back
+to the account id when `DATABRICKS_TOKEN_AUDIENCE` is empty. So a federation
+policy written for the audience `databricks` cannot be satisfied by a workload
+that never set one — the two sides disagree and neither says so. The operator
+sets the policy's audience and the workload's from one place, so they agree by
 construction; anybody writing a policy by hand has to decide which of the two
-they are matching. See [what the pod gets](what-the-pod-gets.md).
+they are matching. See [what the pod gets](what-the-pod-gets.md). *(Measured
+2026-09-01, against a live account.)*
 
 **The audience is enforced by name, and the one a pod gets by default is refused
 by name.** One ServiceAccount's token was exchanged three times, changing only
 the audience it was minted for. The audience the policy names is exchanged; any
-other is refused with `invalid_grant` and `TOKEN_AUDIENCE_INVALID (Token audience
-'<what was sent>' invalid)`, and the message goes on to name the issuer and
-audience the policy will accept. `https://kubernetes.default.svc` — what kubelet
-mints when a projected volume asks for no audience — is refused like any other.
-That is the measurement behind the claim that the token every pod in the cluster
-already carries can never be exchanged for anything.
+other is refused with `invalid_grant` and `TOKEN_AUDIENCE_INVALID (Token
+audience '<what was sent>' invalid)`, and the message goes on to name the issuer
+and audience the policy will accept. `https://kubernetes.default.svc` — what
+kubelet mints when a projected volume asks for no audience — is refused like any
+other. That is the measurement behind the claim that the token every pod in the
+cluster already carries can never be exchanged for anything. *(Measured
+2026-09-02, against a live account.)*
 
 **The two ways a workload fails here give different messages.** A missing
 `client_id` gives `TOKEN_INVALID (Ensure a valid federation policy has been
 configured)`; a wrong audience gives `TOKEN_AUDIENCE_INVALID`. Worth knowing
 before writing anything that reads them, and worth knowing before reading one at
-3am — see [when something is wrong](when-something-is-wrong.md).
+3am — see [when something is wrong](when-something-is-wrong.md). *(Measured
+2026-09-02, against a live account.)*
 
 **An exchange with no `client_id` is refused even when a policy matching the
 token exists.** The per-service-principal policies are not searched by subject.
 The request says which service principal it wants, and the policy on that one is
 what is checked. Everything under [federation policies](#federation-policies)
 about two service principals trusting one subject follows from this: there is
-nothing for Databricks to disambiguate.
+nothing for Databricks to disambiguate. *(Measured 2026-09-02, against a live
+account.)*
 
 **A workload that holds nothing is refused with 403, not 401.** The exchanged
 token is a real, authenticated identity from the first moment; it simply has no
 permissions. This is the operator's promise made observable — whoever debugs a
 workload tells "the token is wrong" from "nobody granted this anything" by the
-status code alone, without asking anyone. It is also the reason
-[issuing an identity is not granting a permission](identity-not-permission.md) is
-a claim you can check rather than one you have to believe.
+status code alone, without asking anyone. It is also the reason [issuing an
+identity is not granting a permission](identity-not-permission.md) is a claim
+you can check rather than one you have to believe. *(Measured 2026-09-01,
+against a live account.)*
 
 ## Federation policies
 
@@ -102,29 +122,31 @@ a claim you can check rather than one you have to believe.
 written, not when a token is first exchanged.** An unreachable issuer is refused
 outright: *"Unable to load valid OpenID configuration for issuer"*. So a cluster
 whose issuer is not published fails on its first reconcile, one pass in, rather
-than silently later at the first exchange. For anybody evaluating this, that is a
-prerequisite to check before adopting and not a failure mode to discover: the
+than silently later at the first exchange. For anybody evaluating this, that is
+a prerequisite to check before adopting and not a failure mode to discover: the
 cluster's issuer has to be publicly resolvable from Databricks. See
-[installing](installing.md).
+[installing](installing.md). *(Measured 2026-09-01, against a live account.)*
 
 **Writing the same policy twice leaves one policy and does not error.** The
 controller makes this call on every pass, at least once a minute per identity
 forever. If a repeat were an error, every converged identity would report itself
 broken; if it were a second policy, the account would accumulate one per
-reconcile.
+reconcile. *(Measured 2026-09-01, against a live account.)*
 
 **A second, different policy joins the first rather than replacing it.** The
 operator never writes two, but it does not own the account — somebody can point
 another cluster at a service principal this one made. A replace would have
-silently ended the first workload's access.
+silently ended the first workload's access. *(Measured 2026-09-01, against a
+live account.)*
 
 **Two service principals may each hold a policy for one issuer, subject and
 audience.** The second write is accepted, one token exchanges for either, and
 which one comes back is decided entirely by the `client_id` in the request.
 Deleting one takes only its own policy; the other goes on exchanging. This is
 what makes recreating a ServiceAccount safe: the new pods are injected with the
-new client id, the old identity being alive for a moment changes nothing, and the
-two records need no ordering between them.
+new client id, the old identity being alive for a moment changes nothing, and
+the two records need no ordering between them. *(Measured 2026-09-02, against a
+live account.)*
 
 It also sharpens what an orphan is. Inheritance is not passive — a new occupant
 does not fall into an old identity, they have to name it. But naming it is all it
@@ -137,14 +159,15 @@ checks nothing about the subject — a policy naming a namespace and a
 ServiceAccount that have never existed is written and read back intact. Two
 things follow. There is no ordering to get right, so a policy can be written
 before any pod exists. And a policy goes on trusting a name after the
-ServiceAccount is gone, which is why deleting the service principal has to be the
-whole of revocation.
+ServiceAccount is gone, which is why deleting the service principal has to be
+the whole of revocation. *(Measured 2026-09-01, against a live account.)*
 
 **Deleting a service principal takes its federation policies with it.** Asking
 for them afterwards fails with *"Invalid service principal id"*, which is the
 same answer from here. That is what makes deletion the whole of revocation, and
 it is why [the three objects](the-three-objects.md) treats deleting the identity
-as the only complete withdrawal.
+as the only complete withdrawal. *(Measured 2026-09-01, against a live
+account.)*
 
 **`policy_id` is chosen by the caller.** Documented as "if unspecified, the id
 will be assigned by Databricks", constrained to lowercase alphanumeric, hyphens
@@ -153,6 +176,9 @@ caller-derived ids, none refused, every later read finding the policy under the
 name it was given. A policy is scoped to its service principal — the resource is
 `accounts/<a>/servicePrincipals/<sp>/federationPolicies/<id>` — which is what
 lets two service principals each carry one for the same subject.
+*(The constraints and the resource name were read 2026-09-05 in the Databricks
+documentation; the caller-chosen ids were verified 2026-09-05 against a live
+account.)*
 
 Account-level federation policies are a separate collection and cannot replace
 these. They match the token's subject claim against a Databricks username, so
@@ -160,35 +186,43 @@ they assume the identity provider already knows Databricks names. A Kubernetes
 token's subject is `system:serviceaccount:...`, fixed by Kubernetes, and a
 service principal's identifier is assigned by Databricks. Neither side can be
 chosen, so nothing matches. Only a per-service-principal policy can express an
-arbitrary external subject mapping to a chosen identity.
+arbitrary external subject mapping to a chosen identity. *(Measured 2026-09-01,
+against a live account: the account held zero account-level policies while a
+per-service-principal one worked. That the two are separate collections was read
+2026-09-05 in the Databricks documentation. How an account-level policy matches
+a subject carries no date — neither source covers it, and nothing here measured
+it.)*
 
 ## The SCIM API
 
 **`externalId` is capped at 36 characters, and an oversized one creates the
 service principal and then returns an error.** 36 accepted, 37 refused with
 *"Azure object id cannot be over 36 characters"*. Six service principals were
-left in a real account learning that, because the call reported failure after the
-create had already happened. Anything that cleans up after a failed create has to
-clean up by display name, not by the id it never received. It is also why the
-federation policy rather than `externalId` carries the record of which cluster
-and which subject an identity belongs to: a Kubernetes subject does not fit in 36
-characters, and there is no other writable field.
+left in a real account learning that, because the call reported failure after
+the create had already happened. Anything that cleans up after a failed create
+has to clean up by display name, not by the id it never received. It is also why
+the federation policy rather than `externalId` carries the record of which
+cluster and which subject an identity belongs to: a Kubernetes subject does not
+fit in 36 characters, and there is no other writable field. *(Measured
+2026-09-01, against a live account.)*
 
 **The listing filters on `displayName`; a filter on `externalId` is a 400.**
 `filter=displayName eq "..."` answers on `/api/2.0`; the same filter on
-`externalId` is refused outright, and `/api/2.1` refuses any parameter at all. So
-a service principal can be found by the name this operator gives it and cannot be
-found by anything written in `externalId`. The lookup is therefore filter, then
-fall back: the display-name filter as the fast path, and when it matches nothing,
-an unfiltered listing compared client-side. The expensive path runs only in the
-case that would otherwise answer "not found" wrongly.
+`externalId` is refused outright, and `/api/2.1` refuses any parameter at all.
+So a service principal can be found by the name this operator gives it and
+cannot be found by anything written in `externalId`. The lookup is therefore
+filter, then fall back: the display-name filter as the fast path, and when it
+matches nothing, an unfiltered listing compared client-side. The expensive path
+runs only in the case that would otherwise answer "not found" wrongly.
+*(Measured 2026-09-01, against a live account.)*
 
 **The marker written at create comes back on a read and on a listing.** The
 resource returns `active,applicationId,displayName,externalId,id,schemas`. An
 identity created by a pass that then crashed is found again, which is the only
-way it is ever deleted.
+way it is ever deleted. *(Measured 2026-09-05, against a live account.)*
 
-**`externalId` can be cleared, but only by a full PUT.**
+**`externalId` can be cleared, but only by a full PUT.** *(Measured 2026-09-05,
+against a live account.)*
 
 | attempt                            | result                                  |
 |------------------------------------|-----------------------------------------|
@@ -206,26 +240,28 @@ and `active` were sent and survived.
 created.** Nothing is left behind — the opposite of `externalId` on the same
 call, which creates and then refuses. Two fields, one request, validated in
 different orders, so measuring one says nothing about the other. Assume nothing
-about a third.
+about a third. *(Measured 2026-09-01, against a live account.)*
 
 **Two service principals may share a display name.** Databricks enforces no
-uniqueness on it. That is what makes truncating to 100 characters safe, and it is
-also why a display name can never identify one — the marker is what tells two
+uniqueness on it. That is what makes truncating to 100 characters safe, and it
+is also why a display name can never identify one — the marker is what tells two
 apart when a namespace or a ServiceAccount has been recreated under the same
-name.
+name. *(Measured 2026-09-01, against a live account.)*
 
 **A create returns both the numeric id and the applicationId, and they are
 different values.** The numeric id is what federation policies hang off and what
 deletion takes; the applicationId is what the workload presents at token
 exchange. Neither can be derived from the other, so the operator records both.
+*(Measured 2026-09-01, against a live account.)*
 
 ## Timing
 
 **A write or a delete becomes visible to a read when it does, and how long that
-takes varies by an order of magnitude.** Measured across two days on one account:
-235ms, 245ms, 273ms, 1.5s and 2.2s — the longest and one of the shortest on the
-same day — and **7.6s** for the same call with ten of these tests running at
-once.
+takes varies by an order of magnitude.** Measured across two days on one
+account: 235ms, 245ms, 273ms, 1.5s and 2.2s — the longest and one of the
+shortest on the same day — and **7.6s** for the same call with ten of these
+tests running at once. *(Measured 2026-09-01 and 2026-09-02, against a live
+account.)*
 
 Two things follow, and the second is the one nobody measures.
 
@@ -246,7 +282,8 @@ that decides how long such an assertion has to hold for is the loaded one.
 against the account: the new service principal was found on the first attempt,
 868ms to 1.29s after the create began. The lag runs in one direction only, so an
 argument that assumes a create might not be visible yet is arguing from a
-measurement that was never taken.
+measurement that was never taken. *(Measured 2026-09-03, against a live
+account.)*
 
 ## The SDK
 
@@ -254,33 +291,39 @@ All of this was measured with one Kubernetes token, one config file holding two
 profiles, and one process authenticating twice. Each profile produced an access
 token whose `sub` was its own applicationId, and both profiles named the same
 token file. **One Kubernetes token is as many Databricks identities as there are
-profiles** — see [several identities](several-identities.md).
+profiles** — see [several identities](several-identities.md). *(Measured
+2026-09-02, against a live account.)*
 
 Four things came out of doing it that the SDK's types do not say.
 
 **A profile needs `auth_type = file-oidc`.** Without it the SDK refuses to
 resolve at all, reporting *"more than one authorization method configured"*:
-`client_id` alone marks the oauth family and `databricks_id_token_filepath` marks
-file-oidc. It is a required line, not a redundant one.
+`client_id` alone marks the oauth family and `databricks_id_token_filepath`
+marks file-oidc. It is a required line, not a redundant one. *(Measured
+2026-09-02, against a live account.)*
 
 **The ini names are not the environment names.** The token path is
 `databricks_id_token_filepath` in a profile and `DATABRICKS_OIDC_TOKEN_FILEPATH`
-in the environment. Nothing warns you when you use the wrong one.
+in the environment. Nothing warns you when you use the wrong one. *(Measured
+2026-09-02, against a live account.)*
 
 **A profile name may contain a slash.** `[ops-a/databricks-account]` resolves,
 which is what lets a profile be the operator's reference verbatim rather than
-something transformed into it and back.
+something transformed into it and back. *(Measured 2026-09-02, against a live
+account.)*
 
-**Naming no profile is not a default.** With a config file present and no profile
-named, the SDK falls through to its default credential search and fails; a
-profile that does not exist fails by name. Neither falls back silently, so the
-variable naming the profile is not optional.
+**Naming no profile is not a default.** With a config file present and no
+profile named, the SDK falls through to its default credential search and fails;
+a profile that does not exist fails by name. Neither falls back silently, so the
+variable naming the profile is not optional. *(Measured 2026-09-02, against a
+live account.)*
 
 And the one the whole injection design rests on:
 
 **An environment variable beats a profile, silently.** With a profile selected
 and `DATABRICKS_CLIENT_ID` set to another identity's, the SDK authenticated as
-the environment's. Nothing reports a conflict.
+the environment's. Nothing reports a conflict. *(Measured 2026-09-02, against a
+live account.)*
 
 That is why nothing this operator writes into a pod is a name the SDK reads.
 Setting any such variable is not adding a value — it is overruling whatever the
@@ -294,7 +337,7 @@ See [what the pod gets](what-the-pod-gets.md).
 bytes read, newlines and blank lines intact, through a downwardAPI volume
 selecting `metadata.annotations['...']`. That is the delivery mechanism for a
 config file the operator renders, and it needs no object in the tenant's
-namespace to hold it.
+namespace to hold it. *(Measured 2026-09-01, against a live account.)*
 
 ## Still not established
 
