@@ -307,6 +307,42 @@ func TestThePolicyIsNamedAfterTheIssuerAndTheSubject(t *testing.T) {
 	}
 }
 
+// TestThePolicyIdFitsWhatDatabricksWillTake covers the one limit on a policy id
+// that is documented rather than measured: "Constraints: [ 2 .. 63 ] characters"
+// -- https://docs.databricks.com/api/account/serviceprincipalfederationpolicy/create
+//
+// Measured off the constant rather than off any name below. What could carry an
+// id past the ceiling is not an issuer or a subject: every id is the prefix and
+// two hashes, so its width is federationPolicyIDPart's alone, and the two
+// issuings here are what says so. A part widened to 32 would pass every other
+// test in this file and be refused by Databricks on every create, for every
+// identity, the moment the change reached an account.
+func TestThePolicyIdFitsWhatDatabricksWillTake(t *testing.T) {
+	t.Parallel()
+	width := len(federationPolicyIDPrefix) + 2*federationPolicyIDPart
+
+	// The widest a cluster can present: two DNS labels at their limit, under an
+	// issuer as long as a cloud provider writes them.
+	label := strings.Repeat("a", 63)
+	for _, tc := range []struct{ what, issuer, subject string }{
+		{"an ordinary issuing", testIssuer, testSubject},
+		{"the widest one a cluster can present",
+			"https://container.googleapis.com/v1/projects/a-long-project-name/locations/" +
+				"europe-west4/clusters/a-long-cluster-name", SubjectFor(label, label)},
+	} {
+		if got := len(FederationPolicyIDFor(tc.issuer, tc.subject)); got != width {
+			t.Errorf("%s is named in %d characters and the constants say %d; an id that grew "+
+				"with what it names is one this test would stop measuring", tc.what, got, width)
+		}
+	}
+
+	if width < federationPolicyIDFloor || width > federationPolicyIDCeiling {
+		t.Errorf("a policy id is %d characters and Databricks takes %d..%d; every create would "+
+			"be refused and no identity could be issued at all",
+			width, federationPolicyIDFloor, federationPolicyIDCeiling)
+	}
+}
+
 // TestAConvergedIdentityIsOneReadAndNoWrite covers the pass that finds nothing
 // to do, which is almost every pass.
 //
@@ -438,22 +474,26 @@ func TestAPolicyUnderTheNameThatIsNotThisOneIsRestated(t *testing.T) {
 	}
 }
 
-// TestAPolicyDatabricksNamedGoesWhenTheNamedOneIsWritten covers the account as
-// it is rather than as it would be if this operator had always named its
-// policies.
+// TestWritingTheNamedPolicyReadsNoListing covers the pass that first writes an
+// identity's policy, which is the only pass a listing was ever read on.
 //
-// A service principal issued before then carries a policy under a name
-// Databricks chose, saying what the named one says. Left there it is the
-// duplicate a name exists to prevent, on every identity that was ever issued,
-// and nobody would ever clean one up.
-func TestAPolicyDatabricksNamedGoesWhenTheNamedOneIsWritten(t *testing.T) {
+// It is read on none now. The account this operator writes into holds nothing a
+// sweep would find -- no version that named its policies has been anywhere but a
+// development cluster, whose identities are destroyed and remade by every e2e
+// run -- and a sweep here would have exactly one chance at each identity: once
+// the named policy stands, every later pass takes the road that returns before
+// reaching it. A delete that failed would leave a duplicate for ever with
+// nothing saying so.
+//
+// So a service principal issued before the name existed keeps the policy
+// Databricks gave it and carries the named one beside it. Both say the same
+// thing, and RemoveFederationPolicies takes both.
+func TestWritingTheNamedPolicyReadsNoListing(t *testing.T) {
 	t.Parallel()
 	server := &stubAccount{t: t, policies: &policyAccount{
 		caughtUp: true,
 		held: policiesHeld(
-			trusting(assignedPolicyPrefix+"1", testIssuer, testSubject, testAudience),
-			trusting("another-cluster", "https://oidc.example/other", testSubject, testAudience),
-		),
+			trusting(assignedPolicyPrefix+"1", testIssuer, testSubject, testAudience)),
 	}}
 	c := server.clients()
 
@@ -461,9 +501,17 @@ func TestAPolicyDatabricksNamedGoesWhenTheNamedOneIsWritten(t *testing.T) {
 		testIssuer, testSubject, testAudience); err != nil {
 		t.Fatal(err)
 	}
-	if got := server.policies.names(); !slices.Equal(got, []string{"another-cluster", testPolicyID}) {
-		t.Errorf("the service principal carries %v; the policy this cluster wrote for this "+
-			"subject before it named its own has to go, and another cluster's has to stay", got)
+
+	if n := server.made("GET", federationPoliciesAPI("7788")); n != 0 {
+		t.Errorf("listed the policies on the service principal %d times; the name answers the "+
+			"whole question, and a listing on the create path is what this call is written "+
+			"to do without", n)
+	}
+	want := []string{assignedPolicyPrefix + "1", testPolicyID}
+	if got := server.policies.names(); !slices.Equal(got, want) {
+		t.Errorf("the service principal carries %v, want %v -- the policy Databricks named "+
+			"stays until the identity is removed, and the named one is written beside it",
+			got, want)
 	}
 }
 

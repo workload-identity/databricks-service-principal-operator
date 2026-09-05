@@ -210,7 +210,29 @@ const federationPolicyIDPrefix = "k8s-"
 // externalId holds, a Databricks limit this has nothing to do with, and the day
 // that limit were measured again would be the day every policy already written
 // stopped answering to its name.
+//
+// The limit this one does answer to is policy_id's own, which is documented
+// rather than measured: "The identifier must contain only lowercase alphanumeric
+// characters, numbers, hyphens, and slashes. If unspecified, the id will be
+// assigned by Databricks. Constraints: [ 2 .. 63 ] characters".
+// https://docs.databricks.com/api/account/serviceprincipalfederationpolicy/create
+// A four-character prefix and two parts make 28, so there is room to widen this
+// -- but not by much, and nothing about widening it would look wrong from here.
 const federationPolicyIDPart = 12
+
+// federationPolicyIDFloor and federationPolicyIDCeiling are the bounds quoted
+// above, in code because prose is not what a widened part would be measured
+// against.
+//
+// Nothing derives from them: the id is 28 characters and every policy id this
+// operator writes is that length whatever it is naming. They exist to be
+// asserted against, because a part widened past the ceiling would pass every
+// other test here and be refused by Databricks on every create, for every
+// identity, at the moment the change reached an account.
+const (
+	federationPolicyIDFloor   = 2
+	federationPolicyIDCeiling = 63
+)
 
 // FederationPolicyIDFor names the policy that says this cluster trusts one
 // subject on one service principal.
@@ -403,14 +425,15 @@ func (c *clients) DeleteServicePrincipal(ctx context.Context, servicePrincipalID
 
 // EnsureFederationPolicy makes the token exchange work for one subject.
 //
-// The policy is named rather than looked for. FederationPolicyIDFor derives its
-// id from the issuer and the subject, so the trust in one subject on one service
-// principal has one name and a second call writes that name again instead of
-// making a second policy. No listing decides whether to create: the controller
-// writes status twice on a first convergence, so the second pass arrives
-// milliseconds after the first and reads a listing that does not yet carry what
-// the first one wrote -- and a create decided from that listing is a duplicate
-// on every identity this operator issues.
+// The policy is named rather than looked for, and no listing is read on any
+// road through this. FederationPolicyIDFor derives the id from the issuer and
+// the subject, so the trust in one subject on one service principal has one
+// name and a second call writes that name again instead of making a second
+// policy. A listing could not decide this anyway: the controller writes status
+// twice on a first convergence, so the second pass arrives milliseconds after
+// the first and reads a listing that does not yet carry what the first one
+// wrote -- and a create decided from that listing is a duplicate on every
+// identity this operator issues.
 //
 // Three answers, and each of them is this call's promise kept. The named policy
 // is there and says what it should, so nothing is written. It is not there, so
@@ -420,8 +443,25 @@ func (c *clients) DeleteServicePrincipal(ctx context.Context, servicePrincipalID
 // answered the same way.
 //
 // Several service principals may trust the same subject -- verified -- so this
-// says nothing about any other. A policy id names a policy under one service
-// principal, so two of them carrying the same name is two policies.
+// says nothing about any other. The id is scoped to the service principal it
+// hangs off: a policy's resource name is
+// accounts/<account-id>/servicePrincipals/<service-principal-id>/federationPolicies/<policy-id>,
+// and an account-level policy is a different collection altogether
+// (accounts/<account-id>/federationPolicies/<policy-id>), which nothing here
+// writes. Two service principals carrying one name is therefore two policies,
+// which is what lets one subject be trusted on both.
+// https://docs.databricks.com/api/account/serviceprincipalfederationpolicy/get
+//
+// An identity issued before this operator named its policies keeps the name
+// Databricks gave that policy, and this writes a second one beside it under the
+// name chosen here. Both say the same thing, so the trust is right and the
+// duplicate is only a duplicate; RemoveFederationPolicies takes both, by name
+// and then by the listing it reads for exactly this. Nothing sweeps the
+// Databricks-named one earlier than that. A sweep here would run on the pass
+// that first writes the name and on no pass after it -- so a delete that failed
+// would leave the duplicate standing for ever with nothing anywhere saying so
+// -- and it would put a listing back on the create path, which is the one path
+// through this call that reads none.
 func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID, issuer, subject, audience string) error {
 	numeric, err := strconv.ParseInt(servicePrincipalID, 10, 64)
 	if err != nil {
@@ -474,23 +514,6 @@ func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID
 		return fmt.Errorf("trusting %s on service principal %s: %w", subject, servicePrincipalID, err)
 	}
 
-	// Whatever else this cluster wrote for this subject goes with the naming of
-	// it. A service principal can carry a policy Databricks named -- an account
-	// holds what earlier operators put in it -- and that one answers to no name
-	// this can ask for, so the listing is the only thing that finds it. Left
-	// beside the named one it is a second policy saying what the first says, on
-	// that identity, for as long as the identity lives.
-	//
-	// Only on the road where the name was not already standing, so the listing
-	// is read on the pass that first writes the name and on no pass after it.
-	// The alternative is one listing per identity per pass, for ever.
-	//
-	// Its failure is not this call's. The trust this promises is in place by the
-	// time this runs, and reporting a cleanup that could not be finished as a
-	// failed write would take an identity that works and report it broken. What
-	// is left instead is a policy saying what the named one says, which the
-	// removal takes with the rest.
-	_ = c.removeListedPolicies(ctx, numeric, servicePrincipalID, issuer, subject, policyID)
 	return nil
 }
 
@@ -502,6 +525,11 @@ func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID
 // the subject, so a policy found under this name and differing from what would
 // be written for it differs in the audience or in nothing -- which is what the
 // mask names, and why it names nothing else.
+//
+// update_mask takes comma-separated field names, and "*" means replace the whole
+// policy. oidc_policy is the documented way to restate that one field, so the
+// mask here is a field name and not a description of one.
+// https://docs.databricks.com/api/account/serviceprincipalfederationpolicy/update
 func (c *clients) restateFederationPolicy(ctx context.Context, numeric int64,
 	servicePrincipalID, policyID, issuer, subject, audience string) error {
 	_, err := c.accountClient.ServicePrincipalFederationPolicy.Update(ctx,
@@ -540,6 +568,16 @@ func federationPolicyFor(issuer, subject, audience string) oauth2.FederationPoli
 // there first. The SDK maps ALREADY_EXISTS and RESOURCE_ALREADY_EXISTS onto the
 // same sentinel it maps a bare 409 onto, so one test answers for the error code
 // and for the status alike.
+//
+// That a create under a taken name is refused this way is assumed and not
+// verified: the documentation says the id is the caller's to choose and says
+// nothing about a second create carrying one already there. The assumption is
+// made in the direction that fails loudly. Another status, or an error code the
+// SDK maps elsewhere, is not this -- it falls to the caller's default branch and
+// is reported as a failed write on that pass, which the controller retries and a
+// person can read. An answer that created a second policy under a name
+// Databricks chose is caught by the name the create returns, and reported too.
+// What cannot happen is a duplicate written quietly.
 //
 // Not a FailureKind. A kind is what a controller branches on, and no controller
 // has anything to do about this that is not done where it is caught.
