@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 	dbx "github.com/workload-identity/databricks-service-principal-operator/internal/databricks"
@@ -190,6 +191,40 @@ func TestAccountReportsTheSubjectEvenWhenRefused(t *testing.T) {
 	}
 }
 
+// TestAnAccountThatCouldNotReachDatabricksIsHandedBackToTheWorkqueue is the
+// other half of the test above, and the two together are the whole of what
+// separates the two kinds of failure.
+//
+// A refusal is answered by a person writing a policy in Databricks, so the
+// account waits on its own interval and nothing is counted against it. Nobody
+// answers an outage, so it goes back as an error: the workqueue backs the
+// account off instead of asking again every minute for the length of it, the
+// manager logs it, and reconcile_errors_total is the number somebody alerts on.
+// Without the return, the whole of an outage is a condition on one object.
+func TestAnAccountThatCouldNotReachDatabricksIsHandedBackToTheWorkqueue(t *testing.T) {
+	t.Parallel()
+	unreachable := errors.New("dial tcp: lookup accounts.cloud.databricks.com: no such host")
+	r, c, _ := newDatabricksAccountReconciler(t,
+		writeToken(t, testSubject, "databricks"),
+		func() error { return unreachable },
+		databricksAccountNamed(databricksAccountName))
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName},
+	})
+	if !errors.Is(err, unreachable) {
+		t.Errorf("the pass returned %v, want %v -- nothing counts a reconcile error and nothing "+
+			"backs the account off, so an outage is silent everywhere but on this object",
+			err, unreachable)
+	}
+
+	ready := databricksAccountCondition(t, c, databricksAccountName)
+	if ready == nil || ready.Status == metav1.ConditionTrue || ready.Reason != reasonDatabricksUnavailable {
+		t.Fatalf("Ready is %v, want %s and not True; the condition is written whichever way the "+
+			"pass returns", ready, reasonDatabricksUnavailable)
+	}
+}
+
 // TestAccountFailureKeepsWorkingClients is the safety property.
 //
 // Everything the operator does resolves through these clients. Dropping them
@@ -216,7 +251,7 @@ func TestAccountFailureKeepsWorkingClients(t *testing.T) {
 	}
 
 	fail = true
-	reconcileDatabricksAccount(t, r, databricksAccountName)
+	_ = databricksAccountPass(t, r, databricksAccountName)
 
 	if !accountInUse.Configured() {
 		t.Error("one failed account call withdrew the clients every other object depends on")
@@ -601,7 +636,7 @@ func TestRepointingAtAnAccountThatFailsClearsTheOldOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifies = failing
-	reconcileDatabricksAccount(t, r, databricksAccountName)
+	_ = databricksAccountPass(t, r, databricksAccountName)
 
 	if accountInUse.Configured() {
 		t.Error("the clients built from the old declaration are still installed; every " +
@@ -643,7 +678,7 @@ func TestOneBadCallDoesNotClearAWorkingAccount(t *testing.T) {
 	}
 
 	verifies = errors.New("the service is temporarily unavailable")
-	reconcileDatabricksAccount(t, r, databricksAccountName)
+	_ = databricksAccountPass(t, r, databricksAccountName)
 
 	if !accountInUse.Configured() {
 		t.Error("one failed check took the account away; every identity in the cluster is out " +

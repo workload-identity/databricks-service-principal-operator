@@ -18,6 +18,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -35,9 +36,9 @@ import (
 // status decides whether a declaration is reported as wrong: NotConfigured and
 // Denied are Unknown because nothing was checked, and False there would blame a
 // spec nobody has looked at. The reason is what people match and alert on. And
-// which of Result and Err is set decides how the object comes back -- a fixed
-// delay for anything a person has to fix in Databricks, the workqueue's
-// exponential backoff for the one case where trying again sooner is right.
+// Err decides how the object comes back -- its controller's fixed interval for
+// anything a person has to fix in Databricks, the workqueue's exponential
+// backoff for the one case where trying again sooner is right.
 //
 // Swapping any of the three leaves every other test in this package green: the
 // controllers pass whatever this returns straight through.
@@ -115,23 +116,12 @@ func TestEveryFailureIsAnsweredByTheOneItCallsFor(t *testing.T) {
 					t.Error("no error was returned, so this never reaches the workqueue's " +
 						"backoff and never counts as a reconcile failure")
 				}
-				if got.Result.RequeueAfter != 0 {
-					t.Errorf("RequeueAfter is %v; a fixed delay is the wrong way back from "+
-						"something that may recover on its own, and it is the only branch "+
-						"here where trying again sooner and sooner is right",
-						got.Result.RequeueAfter)
-				}
 				return
 			}
 			if got.Err != nil {
 				t.Errorf("returned %v; this goes back on the workqueue's exponential backoff, "+
 					"which reports a thing only a person can fix as though Databricks were "+
 					"down and hides it behind an ever-longer wait", got.Err)
-			}
-			if got.Result.RequeueAfter != servicePrincipalRetryAfterAwaited {
-				t.Errorf("RequeueAfter is %v, want %v; what fixes this raises no event here, "+
-					"so a fixed delay is the only way to notice it landing",
-					got.Result.RequeueAfter, servicePrincipalRetryAfterAwaited)
 			}
 		})
 	}
@@ -161,5 +151,68 @@ func TestAnObjectNobodyIsWaitingOnIsAskedAboutLessOften(t *testing.T) {
 	if got := retryAfterFor(metav1.ConditionTrue, awaited, settled); got != settled {
 		t.Errorf("True waits %v, want %v -- a working identity would be asked about at the "+
 			"rate meant for a broken one", got, settled)
+	}
+}
+
+// TestOnlyAnUnreachableDatabricksIsHandedBackToTheWorkqueue covers what a
+// controller does with the decision outcomeFor made.
+//
+// The condition is the whole of what a person sees, and it is written whichever
+// kind of failure this was. What the two kinds do not share is the return: an
+// unreachable Databricks goes back as an error, so the record is backed off
+// exponentially and counted as a reconcile failure -- which is the only thing
+// that puts an outage in the manager's log or in a metric somebody alerts on. A
+// refusal is returned as no failure at all, because it is fixed by a person in
+// Databricks and backing off from it delays noticing the moment they do.
+func TestOnlyAnUnreachableDatabricksIsHandedBackToTheWorkqueue(t *testing.T) {
+	t.Parallel()
+	for _, failure := range []struct {
+		what     string
+		gave     error
+		returned bool
+		reason   string
+	}{
+		{
+			what:     "Databricks did not answer",
+			gave:     errors.New("dial tcp: lookup accounts.cloud.databricks.com: no such host"),
+			returned: true,
+			reason:   reasonDatabricksUnavailable,
+		},
+		{
+			what:     "Databricks refused the operator",
+			gave:     fmt.Errorf("writing the policy: %w", apierr.ErrPermissionDenied),
+			returned: false,
+			reason:   reasonDenied,
+		},
+	} {
+		t.Run(failure.what, func(t *testing.T) {
+			t.Parallel()
+			serviceAccount := asking(testNamespace, testName)
+			c := newControllers(t, &stubClients{policyErr: failure.gave},
+				mintingNamespace(testNamespace), serviceAccount)
+			c.settle(t)
+
+			issued := c.issuedOf(t, serviceAccount)
+			if issued == nil {
+				t.Fatal("nothing was issued, so no pass reached Databricks")
+			}
+			ready := readyOf(t, c.Client, issued)
+			if ready == nil || ready.Status == metav1.ConditionTrue || ready.Reason != failure.reason {
+				t.Fatalf("Ready is %v, want %s and not True; whatever else a failure does, the "+
+					"person reading the object has to be told about it", ready, failure.reason)
+			}
+
+			passes := c.recordPasses(t)
+			if failure.returned && len(passes) == 0 {
+				t.Error("the pass returned nothing, so nothing counts a reconcile error, nothing " +
+					"backs the record off, and an outage that lasts hours is a condition on an " +
+					"object and silence everywhere else")
+			}
+			if !failure.returned && len(passes) != 0 {
+				t.Errorf("the pass returned %v; a refusal only a person can lift is then retried "+
+					"on an ever-longer backoff and counted against an operator that is working "+
+					"correctly", passes)
+			}
+		})
 	}
 }

@@ -20,24 +20,26 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/workload-identity/databricks-service-principal-operator/internal/databricks"
 )
 
 // outcome is what one step of a pass amounts to, whether it asked Databricks or
-// only the cluster: how to say it in a condition, and when to come back.
+// only the cluster: how to say it in a condition, and whether the failure is one
+// to hand back to the workqueue.
 //
-// Both fields put the object back in the queue; they differ in how. Result asks
-// for it after a fixed delay. Err hands it to the rate limiter instead, which
-// counts a failure, backs off exponentially, and records it as a reconcile
-// error -- right when Databricks may recover on its own, wrong when the answer
-// will not change until a person acts.
+// Err is what separates a failure the operator can do nothing about from one
+// that may pass on its own. Set, the controller returns it, which counts a
+// reconcile error, backs the object off exponentially, and puts the failure in
+// the manager's own log -- right when Databricks is unreachable and may come
+// back. Unset, the pass ends cleanly and the object comes back on its
+// controller's awaited interval, which is what a failure waiting on a person
+// wants: no backoff away from the moment they fix it, no error counted against
+// an operator that is working correctly, and the condition to read.
 type outcome struct {
 	Status  metav1.ConditionStatus
 	Reason  string
 	Message string
-	Result  ctrl.Result
 	Err     error
 }
 
@@ -45,7 +47,6 @@ type outcome struct {
 // mapping lives: a new kind of failure is handled by extending this switch, and
 // no controller has to be told about it.
 func outcomeFor(err error) outcome {
-	const retryAfter = servicePrincipalRetryAfterAwaited
 	message := databricks.Reason(err)
 	switch databricks.KindOf(err) {
 	case databricks.NotFound:
@@ -54,7 +55,6 @@ func outcomeFor(err error) outcome {
 		// raises an event of its own.
 		return outcome{
 			Status: metav1.ConditionFalse, Reason: reasonNotFound, Message: message,
-			Result: ctrl.Result{RequeueAfter: retryAfter},
 		}
 	case databricks.Rejected:
 		// Databricks refused the request itself rather than what it named, and
@@ -64,7 +64,6 @@ func outcomeFor(err error) outcome {
 		// request acceptable.
 		return outcome{
 			Status: metav1.ConditionFalse, Reason: reasonRejected, Message: message,
-			Result: ctrl.Result{RequeueAfter: retryAfter},
 		}
 	case databricks.Malformed:
 		// The request was never made: a value will not parse as the coordinate
@@ -75,7 +74,6 @@ func outcomeFor(err error) outcome {
 		// in it.
 		return outcome{
 			Status: metav1.ConditionFalse, Reason: reasonMalformedRecord, Message: message,
-			Result: ctrl.Result{RequeueAfter: retryAfter},
 		}
 	case databricks.NotConfigured:
 		// Unknown, and pointedly not False: nothing has been checked, so saying
@@ -87,7 +85,6 @@ func outcomeFor(err error) outcome {
 		// clients, so the normal path is an event, not a wait.
 		return outcome{
 			Status: metav1.ConditionUnknown, Reason: reasonNotConfigured, Message: message,
-			Result: ctrl.Result{RequeueAfter: retryAfter},
 		}
 	case databricks.Denied:
 		// Not this object's fault, so it is not reported as one. What fixes it
@@ -96,7 +93,6 @@ func outcomeFor(err error) outcome {
 		// way to notice it landing.
 		return outcome{
 			Status: metav1.ConditionUnknown, Reason: reasonDenied, Message: message,
-			Result: ctrl.Result{RequeueAfter: retryAfter},
 		}
 	default:
 		// Unknown rather than False: the thing may be perfectly fine, and saying

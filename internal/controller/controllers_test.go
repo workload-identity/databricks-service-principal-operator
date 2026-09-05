@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -111,28 +113,67 @@ func (c *controllers) project(t *testing.T, namespace, name string) {
 }
 
 // records runs the record controller over every record there is.
+//
+// A pass that returns a failure this test put in the stub is what is supposed to
+// happen: an unreachable Databricks is handed back as an error so the workqueue
+// backs the record off and counts it. Anything else ends the test, which is what
+// this is for -- an API error from the fake cluster, or a failure nobody
+// arranged, would otherwise be read as the outage the test is about.
 func (c *controllers) records(t *testing.T) {
+	t.Helper()
+	for _, failed := range c.recordPasses(t) {
+		if !c.arranged(failed) {
+			t.Fatalf("reconciling a record: %v", failed)
+		}
+	}
+}
+
+// arranged reports whether a failure is one this test put in the stub.
+func (c *controllers) arranged(err error) bool {
+	for _, injected := range []error{c.Stub.err, c.Stub.deleteErr, c.Stub.policyErr} {
+		if injected != nil && errors.Is(err, injected) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordPasses runs the same passes and hands back what each one returned, for
+// the test that is about the returning rather than about what it reports.
+func (c *controllers) recordPasses(t *testing.T) []error {
 	t.Helper()
 	var list dbxv1alpha1.IssuedDatabricksServicePrincipalList
 	if err := c.Client.List(context.Background(), &list); err != nil {
 		t.Fatal(err)
 	}
+	var failed []error
 	for i := range list.Items {
 		if _, err := c.Issued.Reconcile(context.Background(), reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(&list.Items[i]),
 		}); err != nil {
-			t.Fatalf("reconciling record %s: %v", list.Items[i].Name, err)
+			failed = append(failed, fmt.Errorf("record %s: %w", list.Items[i].Name, err))
 		}
 	}
+	return failed
 }
 
 func reconcileDatabricksAccount(t *testing.T, r *DatabricksAccountReconciler, name string) {
 	t.Helper()
-	if _, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: name},
-	}); err != nil {
+	if err := databricksAccountPass(t, r, name); err != nil {
 		t.Fatalf("reconciling %s: %v", name, err)
 	}
+}
+
+// databricksAccountPass is the same pass for a test that has arranged a failure
+// Databricks cannot answer: those are handed back as errors so the workqueue
+// backs the account off and counts them, and a test about one is a test where
+// the pass returns something.
+func databricksAccountPass(t *testing.T, r *DatabricksAccountReconciler, name string) error {
+	t.Helper()
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: name},
+	})
+	return err
 }
 
 // issuedOf returns the record for one ServiceAccount, or nil if there is none.
