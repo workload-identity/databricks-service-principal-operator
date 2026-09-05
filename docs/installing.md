@@ -93,8 +93,25 @@ what the operator is. That is why it does not grant, and will not:
 ## 2. Deploy
 
 ```sh
-make deploy IMG=<registry>/databricks-service-principal-operator:<tag>
+kubectl apply -f https://github.com/workload-identity/databricks-service-principal-operator/releases/download/v0.14.0/install.yaml
 ```
+
+That manifest is built from the tag it is attached to and names the image
+published under the same tag. It carries the three CRDs, the operator's
+Deployment, its RBAC, both admission webhooks, and the cert-manager Certificate
+and Issuer that serve them — everything in `config/default`, rendered once.
+
+It installs into `dbxsp-operator-system`. To run the operator somewhere else, or
+to run a second one for a second Databricks account, build the manifest yourself
+against your own kustomization rather than editing the rendered one:
+
+```sh
+make build-installer IMG=weidaolee/databricks-service-principal-operator:v0.14.0
+```
+
+To run an image you built yourself — a fork, or a patch you have not published —
+`make deploy IMG=<your registry>/<image>:<tag>` applies the same manifest with
+your image in it. Nothing is written back into the repository either way.
 
 ## 3. Point it at the account
 

@@ -111,8 +111,11 @@ kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
 2. Deploy ([step 2](docs/installing.md#2-deploy)):
 
    ```sh
-   make deploy IMG=<registry>/databricks-service-principal-operator:<tag>
+   kubectl apply -f https://github.com/workload-identity/databricks-service-principal-operator/releases/download/v0.14.0/install.yaml
    ```
+
+   One manifest: the three CRDs, the operator, its RBAC, the two webhooks and
+   the certificate they are served with.
 
 3. Point it at the account ([step 3](docs/installing.md#3-point-it-at-the-account)):
 
