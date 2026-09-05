@@ -8,6 +8,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -87,8 +88,17 @@ jobs:
     - name: helm
       run: make helm-lint
 
+  # Ten minutes, against three for the job above, because it builds an image and
+  # stands a cluster up. So it does not run on a draft pull request: while a
+  # change is being worked on, waiting ten minutes for every push buys nothing
+  # that the fast job has not already said. Marking the pull request ready runs
+  # it, and `gh workflow run ci.yml --ref <branch>` runs it whenever you want.
+  #
+  # It still runs on every push to main, which is where a regression that slipped
+  # past a draft gets caught.
   cluster:
     name: kind
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
