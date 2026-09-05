@@ -6,8 +6,10 @@ Secret, nothing to rotate, nothing to leak.
 You annotate a ServiceAccount, naming the operator to ask:
 
 ```sh
+OPERATOR=dbxsp-operator-system/databricks-account
+
 kubectl -n team-a annotate serviceaccount etl \
-  databricks.workload-identity.io/service-principal=ops-a/databricks-account
+  databricks.workload-identity.io/service-principal=$OPERATOR
 ```
 
 A Databricks service principal is created for `team-a/etl` (`<namespace>/<name>`),
