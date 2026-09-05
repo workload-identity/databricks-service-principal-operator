@@ -219,12 +219,22 @@ func (c *clients) CreateServicePrincipal(ctx context.Context, issuing Issuing) (
 // principal nothing names. This is how the second is matched to the first
 // instead of being left behind.
 //
-// Two fields, because neither is enough alone. The display name can be filtered
-// on and identifies nothing: it is truncated at 100 characters and its hyphens
-// are ambiguous, so two different subjects can share one. The marker names the
-// cluster and the issuing exactly and cannot be filtered on at all -- Databricks
-// answers a filter naming externalId with a 400. So the name narrows the list
-// and the marker decides.
+// The marker decides and the display name only narrows what has to be read. The
+// name identifies nothing: it is truncated at 100 characters and its hyphens are
+// ambiguous, so two different subjects can share one. It is also editable by
+// anybody with access to the account, and the operator never writes it again
+// after the create, so a service principal somebody renamed answers no filter
+// naming it.
+//
+// Hence two listings rather than one. The filtered listing is what an ordinary
+// lookup costs, and it answers for as long as the name is the one created. When
+// nothing it returns carries the marker, the account is listed whole and the
+// marker compared over all of it -- the only way left to ask, because Databricks
+// answers a filter naming externalId with a 400. That listing is the expensive
+// one and it runs in exactly the case where stopping at the first would report
+// "not found" about something that exists: one caller acts on that answer by
+// creating a second service principal for the same subject, and the other by
+// releasing the finalizer on the only record of the first.
 func (c *clients) FindServicePrincipal(ctx context.Context, issuing Issuing) (
 	id, clientID string, found bool, err error) {
 	if strings.TrimSpace(issuing.Issuer) == "" {
@@ -232,6 +242,8 @@ func (c *clients) FindServicePrincipal(ctx context.Context, issuing Issuing) (
 	}
 
 	display := DisplayNameFor(issuing.Namespace, issuing.Name, issuing.Identity)
+	marker := MarkerFor(issuing)
+
 	namesakes, err := c.accountClient.ServicePrincipalsV2.ListAll(ctx, iam.ListAccountServicePrincipalsRequest{
 		Filter: fmt.Sprintf("displayName eq %q", display),
 	})
@@ -239,12 +251,20 @@ func (c *clients) FindServicePrincipal(ctx context.Context, issuing Issuing) (
 		return "", "", false, fmt.Errorf("looking for a service principal named %s: %w", display, err)
 	}
 
-	marker := MarkerFor(issuing)
-	var candidates []iam.AccountServicePrincipal
-	for _, principal := range namesakes {
-		if principal.ExternalId == marker {
-			candidates = append(candidates, principal)
+	candidates := carrying(namesakes, marker)
+	if len(candidates) == 0 {
+		everything, listErr := c.accountClient.ServicePrincipalsV2.ListAll(ctx,
+			iam.ListAccountServicePrincipalsRequest{})
+		if listErr != nil {
+			// Named after the account rather than after a name, which is the
+			// difference between the two failures: above, Databricks would not
+			// answer about a name; here, it would not say what is in the account
+			// at all.
+			return "", "", false, fmt.Errorf(
+				"listing this account's service principals to find the one marked %s for %s: %w",
+				marker, issuing.Subject(), listErr)
 		}
+		candidates = carrying(everything, marker)
 	}
 
 	switch len(candidates) {
@@ -257,11 +277,30 @@ func (c *clients) FindServicePrincipal(ctx context.Context, issuing Issuing) (
 		// second, so this is a duplicate somebody else made or one left by a
 		// create whose record was lost twice over; adopting either would be a
 		// guess.
+		//
+		// The display name is named above and not here. Through the second
+		// listing these two need not share one, and naming what they were
+		// created with would send a reader looking for rows the console no
+		// longer has.
 		return "", "", false, fmt.Errorf(
-			"%d service principals in this account are named %s and carry this cluster's marker; "+
-				"which of them belongs to %s cannot be told from here",
-			len(candidates), display, issuing.Subject())
+			"%d service principals in this account carry %s, which is %s's marker; "+
+				"which of them belongs to it cannot be told from here",
+			len(candidates), marker, issuing.Subject())
 	}
+}
+
+// carrying is the whole of what says a service principal is one issuing's. Both
+// listings are read through it, because which of them turned one up says nothing
+// about whether it is the one: the filter is a way of reading less, not a second
+// test of identity.
+func carrying(principals []iam.AccountServicePrincipal, marker string) []iam.AccountServicePrincipal {
+	var carried []iam.AccountServicePrincipal
+	for _, principal := range principals {
+		if principal.ExternalId == marker {
+			carried = append(carried, principal)
+		}
+	}
+	return carried
 }
 
 // ServicePrincipalExists reports whether the service principal with this id is

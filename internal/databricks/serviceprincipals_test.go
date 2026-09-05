@@ -627,10 +627,19 @@ func TestTheConsoleCanTellTwoIdentitiesApart(t *testing.T) {
 	}
 }
 
-// found is one service principal as Databricks returns it in a list.
+// found is one service principal as Databricks returns it in a list, still under
+// the name it was created with.
 func found(id, marker string) string {
+	return namedAs(id, marker, DisplayNameFor("team-a", "etl", ""))
+}
+
+// namedAs is the same with whatever name the console shows now. Anybody with
+// access to the account can edit a display name and the operator never writes it
+// again, so the name a service principal answers to is not evidence of what it
+// is.
+func namedAs(id, marker, display string) string {
 	return fmt.Sprintf(`{"id":%q,"applicationId":"app-%s","displayName":%q,"externalId":%q}`,
-		id, id, DisplayNameFor("team-a", "etl", ""), marker)
+		id, id, display, marker)
 }
 
 // page is a SCIM page holding all of them. The paging fields are what end the
@@ -646,6 +655,19 @@ var lookedFor = Issuing{
 	Issuer: testIssuer, Namespace: "team-a", Name: "etl",
 	ServiceAccountUID: "uid-etl", Operator: "ops-a/databricks-account",
 }
+
+// onTheName is the filter the narrowed listing carries, spelled here the way the
+// lookup spells it. A lookup that stopped filtering, or filtered on something
+// else, would stop matching this key and answer from the account-wide entry
+// instead, which is what the assertions below would then be reading.
+var onTheName = fmt.Sprintf("displayName eq %q", DisplayNameFor("team-a", "etl", ""))
+
+// byName and wholeAccount are the two answer keys a lookup can reach: the
+// listing narrowed to the name, and the listing of everything.
+var (
+	byName       = narrowedTo(servicePrincipalsAPI, onTheName)
+	wholeAccount = "GET " + servicePrincipalsAPI
+)
 
 // TestTheMarkerDecidesWhichOfTheNamesakesIsTaken covers the second half of the
 // lookup, which is the half that identifies anything.
@@ -698,6 +720,132 @@ func TestTwoCarryingOneMarkerIsRefusedRatherThanGuessed(t *testing.T) {
 		"GET " + servicePrincipalsAPI: page(
 			found("7788", MarkerFor(lookedFor)),
 			found("9900", MarkerFor(lookedFor)),
+		),
+	}}
+	c := server.clients()
+
+	id, clientID, ok, err := c.FindServicePrincipal(context.Background(), lookedFor)
+	if err == nil {
+		t.Fatalf("adopted id=%q of two carrying one marker; which of them belongs to %s cannot "+
+			"be told from here", id, lookedFor.Subject())
+	}
+	if ok || id != "" || clientID != "" {
+		t.Errorf("reported found=%v id=%q clientId=%q alongside the refusal", ok, id, clientID)
+	}
+}
+
+// TestARenamedServicePrincipalIsStillFound is the reason there are two
+// listings.
+//
+// A display name is editable by anybody with access to the account and the
+// operator never writes it again after the create, so the filter can answer
+// nothing about a service principal that is sitting right there. Answering "not
+// found" then is not a missed optimisation: one caller creates a second service
+// principal for a subject that already has one, and the other releases the
+// finalizer on the only record naming the first, which leaves an identity in the
+// account that nothing in the cluster can reach or delete.
+func TestARenamedServicePrincipalIsStillFound(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, answer: map[string]string{
+		byName: page(),
+		wholeAccount: page(
+			namedAs("7788", MarkerFor(lookedFor), "renamed-by-somebody-in-the-console"),
+		),
+	}}
+	c := server.clients()
+
+	id, clientID, ok, err := c.FindServicePrincipal(context.Background(), lookedFor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatalf("found nothing; %q is in the account carrying this issuing's marker, under a "+
+			"name somebody changed", "7788")
+	}
+	if id != "7788" || clientID != "app-7788" {
+		t.Errorf("adopted id=%q clientId=%q, want the one carrying %q", id, clientID, MarkerFor(lookedFor))
+	}
+}
+
+// TestTheNarrowedListingAnswersOnItsOwn is the other half of the same claim.
+//
+// The account-wide listing is a page of every service principal there is, read
+// on every reconcile of every object. It is affordable because it happens only
+// when the narrowed listing turned up nothing, and nothing but this says so: a
+// later change that dropped the filter, or moved the fallback out of its guard,
+// would leave every test above passing while every lookup read the account.
+func TestTheNarrowedListingAnswersOnItsOwn(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, answer: map[string]string{
+		byName: page(found("7788", MarkerFor(lookedFor))),
+	}}
+	c := server.clients()
+
+	if _, _, ok, err := c.FindServicePrincipal(context.Background(), lookedFor); err != nil || !ok {
+		t.Fatalf("found=%v err=%v; the narrowed listing holds the one carrying the marker", ok, err)
+	}
+	if server.listed(servicePrincipalsAPI, onTheName) == 0 {
+		t.Errorf("no listing carried %s, so the lookup narrows by something else now and the "+
+			"assertion below is no longer about the cheap path", onTheName)
+	}
+	if n := server.listed(servicePrincipalsAPI, ""); n != 0 {
+		t.Errorf("listed the whole account %d times after the narrowed listing had answered; "+
+			"every lookup now costs a page of every service principal in it", n)
+	}
+}
+
+// TestTheFallbackDoesNotInventAMatch covers the answer the second listing must
+// still be able to give.
+//
+// It reads every service principal in the account, which is every namesake and
+// every stranger, and the only thing separating them from this issuing's is the
+// marker. Loosening that -- matching the name again, or taking the sole namesake
+// -- would make the fallback hand back somebody else's identity in precisely the
+// case the first listing already refused to.
+func TestTheFallbackDoesNotInventAMatch(t *testing.T) {
+	t.Parallel()
+	elsewhere := Issuing{Issuer: "https://oidc.example/another", Namespace: "team-a", Name: "etl",
+		ServiceAccountUID: "uid-etl", Operator: "ops-a/databricks-account"}
+	otherOperator := lookedFor
+	otherOperator.Operator = "ops-b/databricks-account"
+
+	server := &stubAccount{t: t, answer: map[string]string{
+		byName: page(found("1100", MarkerFor(elsewhere))),
+		wholeAccount: page(
+			found("1100", MarkerFor(elsewhere)),
+			namedAs("9900", MarkerFor(otherOperator), "k8s-team-b-loader"),
+		),
+	}}
+	c := server.clients()
+
+	id, clientID, ok, err := c.FindServicePrincipal(context.Background(), lookedFor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Errorf("adopted id=%q clientId=%q; nothing in the account carries %q, and a namesake "+
+			"carrying somebody else's marker is somebody else's", id, clientID, MarkerFor(lookedFor))
+	}
+	if server.listed(servicePrincipalsAPI, "") == 0 {
+		t.Error("the whole account was never listed; the narrowed listing turned up a namesake " +
+			"carrying somebody else's marker, which is not an answer to look no further on")
+	}
+}
+
+// TestTwoCarryingOneMarkerIsRefusedThroughTheFallbackToo is the refusal above,
+// reached the other way.
+//
+// Two carrying one marker is the same fact whichever listing turned them up, and
+// through this one they need not even share a name. The judgement is one place
+// for that reason: a fallback that decided for itself could adopt what the
+// narrowed listing refuses to.
+func TestTwoCarryingOneMarkerIsRefusedThroughTheFallbackToo(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, answer: map[string]string{
+		byName: page(),
+		wholeAccount: page(
+			namedAs("7788", MarkerFor(lookedFor), "renamed-once"),
+			namedAs("9900", MarkerFor(lookedFor), "renamed-twice"),
 		),
 	}}
 	c := server.clients()

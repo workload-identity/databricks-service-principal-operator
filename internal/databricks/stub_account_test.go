@@ -32,6 +32,14 @@ type call struct {
 	method string
 	path   string
 	body   string
+
+	// filter is the SCIM filter the request carried, empty when it carried
+	// none. It is kept apart from the rest of the query because it is the one
+	// part that changes what the answer is allowed to be: a listing narrowed to
+	// a name and a listing of the whole account are two questions, and a test
+	// asserting that the cheap one sufficed has to be able to say which was
+	// asked.
+	filter string
 }
 
 // stubAccount is a Databricks account that answers from a table and remembers
@@ -82,7 +90,10 @@ func (r *stubAccount) clients() *clients {
 			return
 		}
 		route := req.Method + " " + req.URL.Path
-		r.calls = append(r.calls, call{method: req.Method, path: req.URL.Path, body: string(body)})
+		filter := req.URL.Query().Get("filter")
+		r.calls = append(r.calls, call{
+			method: req.Method, path: req.URL.Path, body: string(body), filter: filter,
+		})
 		w.Header().Set("Content-Type", "application/json")
 
 		// A paginated list works out the next page from what the last one said
@@ -107,7 +118,10 @@ func (r *stubAccount) clients() *clients {
 			_, _ = w.Write([]byte(body))
 			return
 		}
-		answer, ok := r.answer[route]
+		answer, ok := r.answer[narrowedTo(req.URL.Path, filter)]
+		if !ok {
+			answer, ok = r.answer[route]
+		}
 		if start := req.URL.Query().Get("startIndex"); ok && start != "" && start != "1" {
 			ok = false
 		}
@@ -148,11 +162,33 @@ func federationPoliciesAPI(servicePrincipalID string) string {
 	return accountRoot + "/servicePrincipals/" + servicePrincipalID + "/federationPolicies"
 }
 
+// narrowedTo is the answer key for a listing carrying this filter, which is a
+// finer route than the collection alone. A path with no entry under it answers
+// whatever the filter, so a fixture stays one line until a test needs the
+// narrowed listing and the whole one to say different things.
+func narrowedTo(path, filter string) string { return "GET " + path + "?filter=" + filter }
+
 // made counts the calls to one path.
 func (r *stubAccount) made(method, path string) int {
 	n := 0
 	for _, c := range r.calls {
 		if c.method == method && c.path == path {
+			n++
+		}
+	}
+	return n
+}
+
+// listed counts the GETs of path that carried exactly this filter, so a test can
+// assert that the whole account was never asked for.
+//
+// One listing is more than one request whenever it pages -- the last one is the
+// empty page that ends it -- so what this number answers is whether the question
+// was put, not how many times.
+func (r *stubAccount) listed(path, filter string) int {
+	n := 0
+	for _, c := range r.calls {
+		if c.method == http.MethodGet && c.path == path && c.filter == filter {
 			n++
 		}
 	}
