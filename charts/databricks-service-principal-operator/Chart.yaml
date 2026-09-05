@@ -1,0 +1,21 @@
+apiVersion: v2
+name: databricks-service-principal-operator
+description: Gives a Kubernetes workload a Databricks identity with no credential anywhere
+type: application
+# The chart's own version, which moves when the chart changes and not when the
+# operator does. appVersion below is the operator.
+version: 0.1.0
+appVersion: "v0.14.0"
+# 1.30, because the ValidatingWebhookConfiguration this chart installs carries
+# matchConditions, and that is what stands in for the namespaceSelector it
+# cannot have. On an older API server the field is dropped rather than refused,
+# and the operator silently lands on the write path of every ServiceAccount in
+# the cluster.
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/workload-identity/databricks-service-principal-operator
+sources:
+- https://github.com/workload-identity/databricks-service-principal-operator
+keywords:
+- databricks
+- workload-identity
+- oidc

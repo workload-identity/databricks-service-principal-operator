@@ -1,0 +1,49 @@
+{{- $ns := include "dbxsp.namespace" . -}}
+{{- $sa := include "dbxsp.serviceAccountName" . -}}
+{{ .Chart.Name }} is installed in {{ $ns }}.
+
+{{ if eq .Values.image.repository "controller" -}}
+image.repository is still "controller", which is the placeholder and names no
+registry. Nothing will pull. Reinstall with:
+
+    --set image.repository=<registry>/databricks-service-principal-operator \
+    --set image.tag=<tag>
+
+{{ end -}}
+It issues nothing yet. Two things have to happen, in this order.
+
+1. The federation policy on the operator's own service principal in Databricks
+   has to name exactly what this release presents:
+
+       subject:   system:serviceaccount:{{ $ns }}:{{ $sa }}
+       audience:  {{ .Values.databricks.tokenAudience }}
+
+   Both are reported back on the DatabricksAccount below even while it is
+   failing, which is when you need them.
+
+2. Write the DatabricksAccount that says which account to act in. This chart
+   does not create one: it carries an account id and a client id, which belong
+   to whoever holds the account.
+
+       apiVersion: databricks.workload-identity.io/v1alpha1
+       kind: DatabricksAccount
+       metadata:
+         name: {{ .Values.databricks.account }}
+         namespace: {{ $ns }}
+       spec:
+         host: https://accounts.cloud.databricks.com
+         accountId: <account id>
+         clientId: <the operator's applicationId>
+         namespaces: []
+
+   Naming no namespaces serves none, and that is the honest default: a namespace
+   goes on the list when you have agreed to spend an account admin credential on
+   it. Read docs/what-the-namespace-list-means.md before you ever shorten it,
+   because shortening it destroys the identities in that namespace.
+
+Then:
+
+    kubectl -n {{ $ns }} get databricksaccount {{ .Values.databricks.account }} -o yaml
+
+Ready means the operator can act. A namespace holder asks for an identity by
+annotating a ServiceAccount, its value being {{ $ns }}/{{ .Values.databricks.account }}.

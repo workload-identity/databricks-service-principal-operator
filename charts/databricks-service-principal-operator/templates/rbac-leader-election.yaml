@@ -1,0 +1,62 @@
+{{- if .Values.leaderElection.enabled }}
+{{/*
+The lease the manager takes so that only one replica acts. Namespaced, because
+the lease is: an operator elects a leader among its own replicas and has nothing
+to say about another operator's.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "dbxsp.fullname" . }}-leader-election-role
+  namespace: {{ include "dbxsp.namespace" . }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "dbxsp.fullname" . }}-leader-election-rolebinding
+  namespace: {{ include "dbxsp.namespace" . }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "dbxsp.fullname" . }}-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "dbxsp.serviceAccountName" . }}
+  namespace: {{ include "dbxsp.namespace" . }}
+{{- end }}

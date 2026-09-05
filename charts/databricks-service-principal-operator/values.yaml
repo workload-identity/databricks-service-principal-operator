@@ -1,0 +1,73 @@
+# Every default here is what config/default renders today, so that a chart
+# templated with no values and the kustomize output say the same thing. That
+# agreement is asserted by TestTheChartAndKustomizeAgree in
+# internal/controller/helm_rendered_test.go, and changing a default here without
+# changing config/ turns it red.
+
+image:
+  # The placeholder config/manager/kustomization.yaml carries, and for the same
+  # reason: a registry hostname names an account, so what is checked in names
+  # nobody and whoever installs passes their own. There is nothing to pull at
+  # this default.
+  repository: controller
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# One. The operator takes a leader lease either way, so a second replica is a
+# warm standby rather than more throughput.
+replicaCount: 1
+
+# Every name in a release is built from the release name. Set this when the
+# release has to be called one thing and its objects another -- a release name
+# longer than 47 characters is refused rather than truncated, because a
+# truncated name is how two operators end up sharing a Service.
+fullnameOverride: ""
+
+# The namespace every object goes in. Empty means the namespace of the release,
+# which is what `helm install --namespace` sets; set this only when the objects
+# must land somewhere other than where the release is recorded.
+namespace: ""
+
+serviceAccount:
+  # Empty derives it from the release. Whatever it ends up being is half of the
+  # subject the operator's federation policy in Databricks has to name --
+  # system:serviceaccount:<namespace>:<name> -- so it is worth pinning here if
+  # that policy was written before the install.
+  name: ""
+  annotations: {}
+
+databricks:
+  # The DatabricksAccount in the operator's namespace that says which Databricks
+  # account to act in. A person writes that object; this only selects it by
+  # name. There is deliberately no value in this chart that creates one: it
+  # carries an account id and a client id, which belong to whoever holds the
+  # account.
+  account: databricks-account
+  # The aud the operator's own token is minted with, and the aud its federation
+  # policy in Databricks has to name. It is set in three places that must agree
+  # -- the projected volume, DATABRICKS_TOKEN_AUDIENCE, and the policy -- and
+  # this value fills the first two.
+  tokenAudience: databricks
+
+leaderElection:
+  # Off means every replica acts on every object. Safe to turn off only at one
+  # replica, and it also drops the Role and RoleBinding that go with it.
+  enabled: true
+
+metrics:
+  # Served over HTTPS and protected by the TokenReview/SubjectAccessReview
+  # grants this chart installs alongside it.
+  bindAddress: ":8443"
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -47,21 +47,7 @@ func rendered(t *testing.T) []map[string]any {
 	if err != nil {
 		t.Fatalf("kustomize build: %v", err)
 	}
-
-	var objects []map[string]any
-	for doc := range strings.SplitSeq(string(out), "\n---\n") {
-		if strings.TrimSpace(doc) == "" {
-			continue
-		}
-		object := map[string]any{}
-		if err := yaml.Unmarshal([]byte(doc), &object); err != nil {
-			t.Fatalf("parsing the rendered manifest: %v", err)
-		}
-		if len(object) > 0 {
-			objects = append(objects, object)
-		}
-	}
-	return objects
+	return documents(t, out)
 }
 
 func only(t *testing.T, objects []map[string]any, kind string) map[string]any {

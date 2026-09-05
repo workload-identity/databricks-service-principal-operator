@@ -1,0 +1,38 @@
+{{/*
+The name the API server dials for the webhook, and the name the certificate
+below has to cover. Both Services are namespaced, so two operators are kept
+apart by their namespaces without anything else being done about it.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dbxsp.fullname" . }}-webhook-service
+  namespace: {{ include "dbxsp.namespace" . }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+spec:
+  ports:
+  - port: 443
+    protocol: TCP
+    targetPort: 9443
+  selector:
+    {{- include "dbxsp.selectorLabels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dbxsp.fullname" . }}-metrics-service
+  namespace: {{ include "dbxsp.namespace" . }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+spec:
+  ports:
+  {{- /* Taken from the flag rather than written twice: a Service pointing at a
+  port the manager stopped listening on is a scrape that fails and nothing else
+  that says why. */}}
+  - name: https
+    port: {{ (splitList ":" .Values.metrics.bindAddress) | last | int }}
+    protocol: TCP
+    targetPort: {{ (splitList ":" .Values.metrics.bindAddress) | last | int }}
+  selector:
+    {{- include "dbxsp.selectorLabels" . | nindent 4 }}

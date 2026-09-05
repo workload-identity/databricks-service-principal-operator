@@ -1,0 +1,43 @@
+{{/*
+A self-signed issuer and one certificate for the webhook's serving TLS.
+
+Self-signed is right here: the only client is the API server, and it is told
+which CA to trust by the caBundle cert-manager injects into both webhook
+configurations. Nothing else ever connects, so there is nobody for a public
+chain to convince.
+
+Both are namespaced -- an Issuer is -- so two operators each get their own
+without any of this being said twice.
+*/}}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "dbxsp.fullname" . }}-selfsigned-issuer
+  namespace: {{ include "dbxsp.namespace" . }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "dbxsp.fullname" . }}-serving-cert
+  namespace: {{ include "dbxsp.namespace" . }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+spec:
+  {{- /* The names the API server dials. A certificate covering something else
+  fails verification rather than failing to connect, and failurePolicy Ignore
+  swallows the difference. */}}
+  dnsNames:
+  - {{ printf "%s-webhook-service.%s.svc" (include "dbxsp.fullname" .) (include "dbxsp.namespace" .) }}
+  - {{ printf "%s-webhook-service.%s.svc.cluster.local" (include "dbxsp.fullname" .) (include "dbxsp.namespace" .) }}
+  issuerRef:
+    kind: Issuer
+    name: {{ include "dbxsp.fullname" . }}-selfsigned-issuer
+  {{- /* Named after the release like everything else. config/default leaves this
+  one unprefixed, which is the single object two releases in one namespace would
+  fight over -- cert-manager would keep rewriting it and each webhook server
+  would serve the other's certificate. */}}
+  secretName: {{ include "dbxsp.fullname" . }}-webhook-server-cert

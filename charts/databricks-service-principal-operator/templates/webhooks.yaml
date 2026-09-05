@@ -1,0 +1,100 @@
+{{/*
+Both configurations are cluster-scoped, so both are named after the release and
+the namespace. Two operators each carry their own copy of both, ask about the
+same objects, and answer only their own -- docs/several-operators.md.
+
+The annotation is what makes either of them work: the API server is the only
+client of this webhook server, and it trusts it only because cert-manager writes
+a caBundle in when this names the Certificate. Left off the validating one, that
+configuration ships with no CA, every call fails the TLS handshake, and
+failurePolicy Ignore swallows it -- so it looks installed and refuses nothing.
+*/}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "dbxsp.clusterPrefix" . }}-databricks-token
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-serving-cert" (include "dbxsp.namespace" .) (include "dbxsp.fullname" .) }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+webhooks:
+- name: podtoken.databricks.workload-identity.io
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  clientConfig:
+    service:
+      name: {{ include "dbxsp.fullname" . }}-webhook-service
+      namespace: {{ include "dbxsp.namespace" . }}
+      path: /mutate-v1-pod
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+  {{- /* Asked again when a later webhook changes the pod. The default is Never,
+  and what that costs is a container added afterwards -- a mesh sidecar, a
+  policy engine -- with no token, in a pod that reports as equipped because the
+  pod-level volume is there. */}}
+  reinvocationPolicy: IfNeeded
+  {{- /* Ignore, deliberately. This stands on the creation path of every pod in an
+  enrolled namespace, so Fail turns an outage of this operator into workloads
+  that cannot start. What Ignore costs is a pod that comes up without its token
+  and fails on its first call to Databricks, which is legible. */}}
+  failurePolicy: Ignore
+  {{- /* inject and not mint: mint is whether new identities may be made, and the
+  two end at different times. Taking mint off leaves the identities already
+  minted working, and the pods that come after still have to be equipped. */}}
+  namespaceSelector:
+    matchLabels:
+      databricks.workload-identity.io/inject: "enabled"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "dbxsp.clusterPrefix" . }}-databricks-request
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-serving-cert" (include "dbxsp.namespace" .) (include "dbxsp.fullname" .) }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+webhooks:
+- name: serviceaccountrequest.databricks.workload-identity.io
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  clientConfig:
+    service:
+      name: {{ include "dbxsp.fullname" . }}-webhook-service
+      namespace: {{ include "dbxsp.namespace" . }}
+      path: /validate-v1-serviceaccount
+  {{- /* UPDATE as well as CREATE, because the annotation is far more often added
+  to a ServiceAccount that already exists than written with one. */}}
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - serviceaccounts
+  {{- /* Ignore, and it weighs more here: this stands on the write path of every
+  ServiceAccount in the cluster, so Fail would stop anybody creating one
+  anywhere during an outage of this operator. */}}
+  failurePolicy: Ignore
+  {{- /* No namespaceSelector, deliberately, and it is the opposite call from the
+  webhook above: the namespaces this exists for are exactly the ones nobody
+  enrolled. A selector would exempt the only case it exists for.
+
+  The filtering is done by the API server instead. matchConditions is CEL, GA
+  since 1.30, and only a ServiceAccount carrying one of this operator's
+  annotation keys is sent here. It reads object and not oldObject, which is what
+  makes taking the annotation off never reach this webhook at all. */}}
+  matchConditions:
+  - name: asks-for-a-service-principal
+    expression: has(object.metadata.annotations) && object.metadata.annotations.exists(k, k.startsWith("databricks.workload-identity.io/service-principal"))

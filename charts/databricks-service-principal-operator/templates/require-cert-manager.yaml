@@ -1,0 +1,18 @@
+{{/*
+cert-manager is a requirement and not a dependency of this chart, so this
+refuses rather than installing it. It is cluster-wide, most clusters already
+have it, and one operator's install is the wrong place to decide how a whole
+cluster issues certificates.
+
+Refusing at all is the point. Everything except the Certificate and the Issuer
+would apply cleanly, and the webhook's failurePolicy is Ignore, so the install
+would look finished while every pod started with no token and nothing said so.
+That is the same refusal `make check-cert-manager` makes, in the same words.
+
+This renders nothing. `helm template` and `helm lint` do not talk to a cluster
+and so cannot see cert-manager either -- pass `--api-versions cert-manager.io/v1`
+to template the chart without one.
+*/}}
+{{- if not (.Capabilities.APIVersions.Has "cert-manager.io/v1") }}
+{{- fail "\n\ncert-manager is not installed in this cluster, so this install is stopping.\n\nThe webhook serves TLS and cert-manager is what issues its certificate.\nInstalling anyway would not fail cleanly: everything lands except the\nCertificate and the Issuer, leaving the webhook installed with nothing\nto serve. Its failurePolicy is Ignore, so from then on pods start with\nno token and nothing reports it.\n\nInstall cert-manager -- any version serving cert-manager.io/v1 -- and\nrun this again.\n" }}
+{{- end }}

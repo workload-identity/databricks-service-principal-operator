@@ -1,5 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
+# The Helm chart, which describes the same objects config/ does.
+CHART ?= charts/databricks-service-principal-operator
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -245,6 +247,21 @@ SHARING_TIMEOUT ?= 30m
 kind: $(LOCALBIN)
 	$(call go-install-tool,$(KIND),sigs.k8s.io/kind,$(KIND_VERSION))
 
+# The chart is a second description of what config/ describes, so what keeps it
+# honest is the comparison in internal/controller/helm_rendered_test.go, which
+# `make test` runs. This target is the other half: whether the chart renders at
+# all.
+#
+# Both lines, and the second is not redundant. `helm lint` reports a template
+# that fails to render as INFO and still exits zero -- measured -- so a chart
+# that cannot be installed passes it. --api-versions because the chart refuses
+# where cert-manager is absent, and neither lint nor template reaches a cluster
+# to see one.
+.PHONY: helm-lint
+helm-lint: ## Lint the Helm chart and render it with its default values.
+	"$(HELM)" lint $(CHART)
+	"$(HELM)" template databricks-service-principal-operator $(CHART) --api-versions cert-manager.io/v1 >/dev/null
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
@@ -379,6 +396,7 @@ $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
 ## Tool Binaries
+HELM ?= helm
 KUBECTL ?= kubectl
 KIND ?= $(LOCALBIN)/kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize

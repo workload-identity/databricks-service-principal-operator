@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dbxsp.fullname" . }}-controller-manager
+  namespace: {{ include "dbxsp.namespace" . }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "dbxsp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "dbxsp.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "dbxsp.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: manager
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /manager
+        args:
+        - --metrics-bind-address={{ .Values.metrics.bindAddress }}
+        {{- if .Values.leaderElection.enabled }}
+        - --leader-elect
+        {{- end }}
+        - --health-probe-bind-address=:8081
+        - --databricks-account={{ .Values.databricks.account }}
+        - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+        env:
+        {{- /* Setting this is what selects the SDK's file-oidc auth type. The
+        operator authenticates by exchanging the token mounted there and holds
+        no key of its own. */}}
+        - name: DATABRICKS_OIDC_TOKEN_FILEPATH
+          value: /var/run/secrets/databricks/token
+        {{- /* Equal to the audience on the projected volume below and to the aud
+        the operator's federation policy names. Changing one alone fails token
+        exchange with an error that blames the policy. */}}
+        - name: DATABRICKS_TOKEN_AUDIENCE
+          value: {{ .Values.databricks.tokenAudience | quote }}
+        {{- /* From the downward API, so that nothing here has to know what the
+        release called the namespace. */}}
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - containerPort: 8081
+          name: health
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - "ALL"
+        volumeMounts:
+        - name: databricks-token
+          mountPath: /var/run/secrets/databricks
+          readOnly: true
+        - name: webhook-certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+      volumes:
+      {{- /* The token the operator presents, on exactly the terms it gives the
+      workloads it serves: kubelet mints it, it expires, and it is never written
+      anywhere this chart controls. There is no credential in this manifest to
+      leak or to rotate. */}}
+      - name: databricks-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              audience: {{ .Values.databricks.tokenAudience | quote }}
+              expirationSeconds: 3600
+      - name: webhook-certs
+        secret:
+          secretName: {{ include "dbxsp.fullname" . }}-webhook-server-cert
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,311 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: databricksaccounts.databricks.workload-identity.io
+spec:
+  group: databricks.workload-identity.io
+  names:
+    kind: DatabricksAccount
+    listKind: DatabricksAccountList
+    plural: databricksaccounts
+    shortNames:
+    - dbxacc
+    singular: databricksaccount
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.host
+      name: Host
+      type: string
+    - jsonPath: .status.subject
+      name: Subject
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          DatabricksAccount is the account this operator acts in.
+
+          The operator uses the one named by its --databricks-account flag, in its own
+          namespace. Which one that is, is therefore a decision made when the operator
+          is deployed rather than by whoever can create an object here, and there is
+          never a question of which of several is live. Any other DatabricksAccount is
+          left alone and says on its own status that it was not selected -- silence
+          would be indistinguishable from an operator that is not running.
+
+          That also makes a change something you can stage: write the new account, see
+          it accepted, then move the flag. Adopting whichever one happened to be present
+          would mean deleting the old one first and being broken in between.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              DatabricksAccountSpec says which Databricks account the operator acts in, and
+              as whom.
+
+              It is the operator's own configuration rather than anything a workload
+              declares, and it is namespaced so that changing it needs write access to the
+              operator's own namespace -- which is already the access that could replace the
+              operator's image or its ServiceAccount. Expressing it as a declaration rather
+              than as startup arguments is what lets the operator answer back: whether the
+              exchange works, and, when it does not, which subject and audience it was
+              presenting.
+
+              Nothing here is a secret, and it is deliberately not stored as one. A host is
+              a URL. An account id is an identifier. clientId is the client_id of an OAuth
+              client that has no client secret -- what gates the exchange is the federation
+              policy in Databricks, naming an issuer, a subject and an audience. Holding
+              these three values without the ability to mint a token from that issuer, for
+              that subject, obtains nothing. Storing them as a Secret would assert they need
+              protecting, and this project's claim is that nothing here does.
+
+              Two values that belong to the operator rather than to the account are not
+              here: where its projected token is mounted, and the audience that token
+              carries. Both are set in the Deployment, because the audience has to agree
+              with the projected volume beside it, and a value that must match its neighbour
+              belongs next to it rather than in a separate object where nothing can compare
+              them.
+            properties:
+              accountId:
+                description: "accountId identifies the Databricks account.\n\n\tdatabricks
+                  account users list -o json | jq -r '.[0].id'  # not this\n\nIt is
+                  in the account console URL, and in the CLI's own profile:\n\n\tdatabricks
+                  auth describe -p <account profile>\n\nIt cannot be changed. A service
+                  principal id means nothing outside the\naccount it was made in,
+                  so an operator pointed at another one would delete\nsomething it
+                  never made, or read the 404 that means \"not here\" as the one\nthat
+                  means \"gone\" -- for every identity in the cluster, in one reconcile\ninterval,
+                  with nothing anywhere reporting an error.\n\nThis is one of three
+                  doors, and closing it alone would not be worth much.\nDeleting the
+                  object and creating another naming a different account is the\nsame
+                  edit with a longer handle, which is what AccountFinalizer refuses,\nand
+                  pointing a running operator at a second object is a third, which
+                  is\nchecked when it starts. Together they make the account this
+                  operator acts\nin fixed for its lifetime, and an id it wrote down
+                  always meaningful."
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: 'accountId is immutable: a service principal id means nothing
+                    outside the account it was made in, so this operator acts in one
+                    Databricks account for its whole life. Delete this object and
+                    create the one you meant, or install a second operator for the
+                    other account.'
+                  rule: self == oldSelf
+              clientId:
+                description: |-
+                  clientId is the applicationId of the service principal the operator acts
+                  as -- not its numeric id, and not its display name.
+
+                  Token exchange without it fails as TOKEN_INVALID with the federation
+                  policy's own description echoed back, which reads as though the policy
+                  were wrong. It is not.
+                minLength: 1
+                type: string
+              host:
+                description: |-
+                  host is the Databricks account console host, such as
+                  https://accounts.cloud.databricks.com.
+
+                  On unified deployments the account and its workspaces share one host, so
+                  this is not always an "accounts." name.
+
+                  It cannot be changed, for the reason accountId cannot: one account has one
+                  host, so an edit here is either a correction or a move, and a move is the
+                  same thing accountId's own immutability refuses.
+                minLength: 1
+                pattern: ^https://
+                type: string
+                x-kubernetes-validations:
+                - message: 'host is immutable: one account has one host, so an edit
+                    here is either a correction or a move to another account, and
+                    a move would leave every id this operator recorded naming nothing.
+                    Delete this object and create the one you meant, or install a
+                    second operator for the other account.'
+                  rule: self == oldSelf
+              namespaces:
+                description: |-
+                  namespaces are the namespaces this operator issues identities in and
+                  manages them in, by name.
+
+                  Taking a namespace off this list destroys every identity this account
+                  issued there. The service principals are deleted in Databricks and every
+                  grant anybody made on them goes with them, the records go, and the client
+                  ids stop resolving to anything. It is not a pause and it cannot be
+                  undone from here.
+
+                  Naming the namespace again is not a restore. It issues new service
+                  principals with new client ids and no grants, and every grant made on the
+                  ones that were destroyed has to be made again by whoever made it.
+
+                  The guarantee is eventual, not instant. The destruction is carried out
+                  against Databricks, so while Databricks cannot be reached the namespace is
+                  off this list and the identities it issued there still exist. The
+                  IdentitiesDestroyed condition on this object says how many are left and in
+                  which namespaces, and it is what says whether the destruction has finished.
+
+                  What the list means, in the three states a namespace can be in: on it,
+                  this account issues identities there and manages them; taken off it, every
+                  identity this account issued there is destroyed; never on it, nothing
+                  there belongs to this account. That buys one thing a person can check --
+                  every service principal carrying this operator's marker is in a namespace
+                  on this list.
+
+                  This is where a platform team says what their account admin credential may
+                  be spent on. It is theirs and nobody else's: the object lives in their own
+                  namespace, and no namespace can add itself to it.
+
+                  Empty serves nothing, and that is the default rather than an oversight. A
+                  permissive default would have an operator installed for one team quietly
+                  answering every ServiceAccount in the cluster that happened to name it.
+                  Emptying a list that had entries in it destroys the identities in every one
+                  of them.
+
+                  The order the destruction is carried out in is the whole of why it is safe
+                  to interrupt. The operator suspends minting in the namespace first -- it
+                  labels the Namespace with its own name, which is a claim no second operator
+                  can take while it is held -- and only then destroys, because a destruction
+                  begun while identities can still be minted there would leave behind the
+                  ones minted after it. Then it lifts the label, and whoever else serves the
+                  namespace goes on minting with nothing for a person to do. A token already
+                  in a running pod is not recalled by any of this -- the pod holds it, and it
+                  stops working because the service principal it names is gone.
+
+                  Names rather than a label selector. Neither is safer -- a namespace coming
+                  into scope still needs the cluster's mint label open and a ServiceAccount
+                  naming this operator -- so the choice is auditability against flexibility.
+                  A list answers "which namespaces does this operator serve" by being read. A
+                  selector answers it only by being evaluated against every namespace in the
+                  cluster, at the moment somebody asks, and the answer changes when somebody
+                  who is not on that team relabels a namespace.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+            required:
+            - accountId
+            - clientId
+            - host
+            type: object
+          status:
+            description: |-
+              DatabricksAccountStatus reports whether the operator can act in this account,
+              and as whom.
+            properties:
+              audience:
+                description: |-
+                  audience is the aud claim on the token the operator presents, which the
+                  federation policy must also name. It comes from the Deployment, not from
+                  the spec above.
+                type: string
+              conditions:
+                description: |-
+                  conditions report whether this account is usable.
+
+                  Ready is true once the operator has exchanged its token and made one
+                  account-level call. Until then no identity can be created, and each one
+                  says so rather than failing in a way that looks like the ServiceAccount
+                  having asked wrongly.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              subject:
+                description: |-
+                  subject is the sub claim the operator presents when it exchanges its
+                  token. The federation policy in Databricks has to name this exact string.
+
+                  It is reported because it cannot be derived by reading anything the
+                  installer has: it is assembled from the operator's namespace and
+                  ServiceAccount name, both of which kustomize rewrites. Getting it wrong
+                  produces a refusal that quotes the federation policy back, sending whoever
+                  reads it to fix a policy that is correct. So the operator states who it is
+                  rather than leaving it to be reconstructed.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

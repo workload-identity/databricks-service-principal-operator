@@ -1,0 +1,320 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: issueddatabricksserviceprincipals.databricks.workload-identity.io
+spec:
+  group: databricks.workload-identity.io
+  names:
+    kind: IssuedDatabricksServicePrincipal
+    listKind: IssuedDatabricksServicePrincipalList
+    plural: issueddatabricksserviceprincipals
+    shortNames:
+    - isdbxsp
+    singular: issueddatabricksserviceprincipal
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.subject
+      name: Subject
+      type: string
+    - jsonPath: .status.clientId
+      name: Client ID
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          IssuedDatabricksServicePrincipal is this operator's record that it created a
+          service principal in Databricks. It is the only one.
+
+          It lives in the operator's own namespace, and that is the whole point. What it
+          records outlives the namespace that asked for it: a service principal is in
+          Databricks, and deleting a Kubernetes namespace does not reach it. A record
+          kept inside that namespace is deleted with it, in an order nothing specifies,
+          and what survives is an identity nothing in the cluster remembers -- which the
+          next occupant of that namespace name inherits, because a federation policy
+          names a subject and a subject is a name that gets reused.
+
+          So this record is not deleted by anything happening in a tenant's namespace.
+          It is asked, every pass, whether the ServiceAccount it was issued to is still
+          there, still asking, and still the same one. When the answer is no it deletes
+          itself, and its finalizer deletes the service principal on the way out.
+          Nothing about that depends on an event having been seen, on which kind a
+          namespace teardown deleted first, or on the operator having been running at
+          the time.
+
+          Deleting this object destroys the identity. That is what it means, and it is
+          the only object here that means it. The DatabricksServiceAccount in the
+          tenant's namespace is a copy of this one: it can be deleted, and it comes
+          back.
+
+          Nobody writes one of these. The name is derived and the spec is immutable.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              IssuedDatabricksServicePrincipalSpec is what was issued and to whom. It is
+              written once, when the record is made, and never changed.
+
+              It is a spec rather than a status because it is not an observation of
+              anything. Nothing recomputes these values and nothing reconciles towards
+              them: they are what was true at the moment this operator created a service
+              principal, and their whole use is to be compared against what is true now.
+            properties:
+              identity:
+                description: |-
+                  identity is what the ServiceAccount called this one, and is empty when it
+                  named none.
+
+                  It is what tells this record from the others issued to the same
+                  ServiceAccount by the same operator. Every pass asks whether the
+                  annotation still names it, and without this that question could only be
+                  asked of the ServiceAccount as a whole -- so dropping one identity would
+                  destroy them all, or none.
+
+                  Empty is a value here, not a missing one: it is the identity asked for by
+                  naming no name, which is what nearly every ServiceAccount does.
+                type: string
+                x-kubernetes-validations:
+                - message: 'identity is immutable: a record names one identity for
+                    its whole life'
+                  rule: self == oldSelf
+              serviceAccount:
+                description: serviceAccount is who this was issued to.
+                properties:
+                  name:
+                    type: string
+                  namespace:
+                    description: |-
+                      namespace and name are the ServiceAccount's, and are what the subject in
+                      Databricks is assembled from.
+                    type: string
+                  namespaceUid:
+                    description: |-
+                      namespaceUid is the namespace's, and nothing decides on it.
+
+                      It is recorded because it answers a question a person asks of a record
+                      that has outlived what it names -- was this namespace recreated, or was it
+                      only this ServiceAccount -- and because it cannot drift: nothing
+                      recomputes it and nothing writes it twice.
+                    type: string
+                  uid:
+                    description: |-
+                      uid is the ServiceAccount's. It is what every comparison is made on: the
+                      name of this record, the marker written into Databricks, and the question
+                      asked every pass of whether the ServiceAccount answering to these names
+                      today is the one this was issued to.
+
+                      One value is enough. A uid is unique across the cluster and across time,
+                      so a namespace recreated under its old name holds ServiceAccounts whose
+                      uids are new whatever their names are.
+                    type: string
+                required:
+                - name
+                - namespace
+                - namespaceUid
+                - uid
+                type: object
+              subject:
+                description: |-
+                  subject is the sub claim written into the federation policy, verbatim.
+
+                  Stored rather than reassembled from the names above. It is what Databricks
+                  holds, and comparing the two sides means comparing what was actually sent,
+                  not what would be sent if it were sent today.
+                type: string
+            required:
+            - serviceAccount
+            - subject
+            type: object
+            x-kubernetes-validations:
+            - message: this records what was issued and cannot be changed; delete
+                the object to destroy the identity
+              rule: self == oldSelf
+          status:
+            description: |-
+              IssuedDatabricksServicePrincipalStatus is what Databricks holds for this
+              record now.
+            properties:
+              accountId:
+                description: |-
+                  accountId is the Databricks account this record was acted on in.
+
+                  It is where somebody reads off which account to search for the service
+                  principal below, and it is the only thing an operator compares at startup:
+                  one of these naming an account other than the one it was told to use is an
+                  operator that refuses to serve, because an id means nothing outside the
+                  account it was made in. Nothing else branches on it -- the account this
+                  operator acts in is fixed for its lifetime, so every record it can see
+                  belongs to it.
+
+                  It is in the status rather than the spec because the account is not known
+                  to whoever writes the record -- the DatabricksServiceAccount controller
+                  knows a ServiceAccount is asking and nothing about Databricks. It is
+                  written before the first call is made, not with the answer, so that a pass
+                  which creates a service principal and then stops has already said where to
+                  look for it. A record that never sent one names no account, which is what
+                  makes an operator that never reached Databricks free to be uninstalled.
+                type: string
+              audience:
+                type: string
+              clientId:
+                description: |-
+                  clientId is the applicationId Databricks assigned, which the workload
+                  presents when it exchanges its token, and which anything granting
+                  permissions to this workload names.
+
+                  It cannot be derived: Databricks generates it and refuses to accept one.
+                type: string
+              conditions:
+                description: |-
+                  conditions report whether the service principal is there and whether a
+                  federation policy trusts this subject.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              issuer:
+                description: |-
+                  issuer and audience are the other two things the federation policy
+                  matches, recorded as they were sent.
+                type: string
+              servicePrincipalCreateSentAt:
+                description: |-
+                  servicePrincipalCreateSentAt is when this operator was about to ask
+                  Databricks for the service principal below. It is written before the call
+                  is made and never cleared.
+
+                  It is the one fact about this record that cannot be worked out again. The
+                  marker, the subject and the display name are all derivable from the spec
+                  at any moment; whether a create was already sent is not. Without it, a
+                  record naming no id cannot be told from one whose create ran and whose
+                  answer never arrived -- and those two permit opposite acts, since the
+                  first may create and may be let go of, and the second may do neither.
+
+                  A moment rather than a flag, because a record waiting for that answer has
+                  to be able to say how long it has been waiting.
+                format: date-time
+                type: string
+              servicePrincipalId:
+                description: |-
+                  servicePrincipalId is the numeric id Databricks assigned. Federation
+                  policies hang off it, and it is what deletes it.
+
+                  Empty for one window only: between the create being sent and its answer
+                  being written down. What closes that window is the marker -- the service
+                  principal carries it from the moment it exists, so one created by a pass
+                  that then crashed is found again rather than left behind.
+
+                  Written once and never cleared, including when Databricks answers that it
+                  is gone. It is the value somebody searches the audit log with to find out
+                  who deleted it, so clearing it would be the evidence of a removal
+                  destroying the evidence it was drawn from.
+
+                  A string rather than an integer because these are int64 and already
+                  approach the largest integer JSON carries exactly.
+                type: string
+              servicePrincipalRemovedAt:
+                description: |-
+                  servicePrincipalRemovedAt is when a get by id answered that the service
+                  principal above is not there.
+
+                  Databricks is where identity is governed. One deleted there was deleted by
+                  somebody entitled to, and making a new one while the annotation still
+                  stands would be this operator overruling them every minute, and winning,
+                  since it never tires. So it is recorded and left.
+
+                  Only the moment, because the id it is about is still in servicePrincipalId
+                  and stays there: that is the value to search Databricks' audit log with,
+                  and it says who deleted it and when. The two together bracket a service
+                  principal's life, which is what makes what this record knows readable off
+                  the status rather than guessed at from which field happens to be empty.
+                format: date-time
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

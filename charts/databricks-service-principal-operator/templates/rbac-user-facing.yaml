@@ -1,0 +1,39 @@
+{{/*
+Roles this operator never uses. They exist so that a cluster admin has something
+to bind a person to, and they are bound to nobody by this chart.
+
+Written as a loop because six near-identical roles hand-copied are six places for
+one of them to be wrong, and the one that would be wrong is the admin tier,
+which grants '*'.
+*/}}
+{{- $tiers := list
+  (dict "name" "admin" "verbs" (list "*"))
+  (dict "name" "editor" "verbs" (list "create" "delete" "get" "list" "patch" "update" "watch"))
+  (dict "name" "viewer" "verbs" (list "get" "list" "watch"))
+}}
+{{- range $kind := list "databricksaccount" "databricksserviceaccount" }}
+{{- range $tier := $tiers }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dbxsp.clusterPrefix" $ }}-{{ $kind }}-{{ $tier.name }}-role
+  labels:
+    {{- include "dbxsp.labels" $ | nindent 4 }}
+rules:
+- apiGroups:
+  - databricks.workload-identity.io
+  resources:
+  - {{ $kind }}s
+  verbs:
+  {{- range $verb := $tier.verbs }}
+  - {{ $verb | quote }}
+  {{- end }}
+- apiGroups:
+  - databricks.workload-identity.io
+  resources:
+  - {{ $kind }}s/status
+  verbs:
+  - get
+{{- end }}
+{{- end }}

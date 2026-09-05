@@ -1,0 +1,54 @@
+{{/*
+What protects the metrics endpoint: the manager asks the API server who is
+calling and whether they may, so /metrics is not open to anything that can reach
+the pod.
+
+metrics-reader grants nothing to this operator. It is the role a cluster admin
+binds a scraper to, and it is bound to nobody here.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dbxsp.clusterPrefix" . }}-metrics-auth-role
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dbxsp.clusterPrefix" . }}-metrics-auth-rolebinding
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "dbxsp.clusterPrefix" . }}-metrics-auth-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "dbxsp.serviceAccountName" . }}
+  namespace: {{ include "dbxsp.namespace" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dbxsp.clusterPrefix" . }}-metrics-reader
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+rules:
+- nonResourceURLs:
+  - "/metrics"
+  verbs:
+  - get

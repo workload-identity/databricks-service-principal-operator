@@ -1,0 +1,137 @@
+{{/*
+The manager's own permissions, in two halves, and the split is the only thing
+that keeps two operators separate.
+
+The operator holds an account admin credential -- the floor Databricks sets for
+writing a federation policy -- so the operator is the trust boundary. Two kinds
+live inside it: the DatabricksAccount that says which account to act in, and the
+records of what was issued. Both are granted namespaced. Cluster-wide on either
+lets one operator read and write another's, which it once did: both stamped
+Ready on the other's account object, forever.
+
+These rules are a second copy of config/rbac/role.yaml, which `make manifests`
+generates. TestTheChartGrantsExactlyWhatKustomizeGrants compares them rule by
+rule in both directions, so a marker changed in the controller and regenerated
+into config/ and not copied here is a red test rather than an operator that
+cannot read its own records.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dbxsp.clusterPrefix" . }}-manager-role
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - serviceaccounts
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - databricks.workload-identity.io
+  resources:
+  - databricksserviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - databricks.workload-identity.io
+  resources:
+  - databricksserviceaccounts/status
+  verbs:
+  - get
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "dbxsp.fullname" . }}-manager-role
+  namespace: {{ include "dbxsp.namespace" . }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - databricks.workload-identity.io
+  resources:
+  - databricksaccounts
+  verbs:
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - databricks.workload-identity.io
+  resources:
+  - databricksaccounts/finalizers
+  - issueddatabricksserviceprincipals/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - databricks.workload-identity.io
+  resources:
+  - databricksaccounts/status
+  - issueddatabricksserviceprincipals/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - databricks.workload-identity.io
+  resources:
+  - issueddatabricksserviceprincipals
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dbxsp.clusterPrefix" . }}-manager-rolebinding
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "dbxsp.clusterPrefix" . }}-manager-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "dbxsp.serviceAccountName" . }}
+  namespace: {{ include "dbxsp.namespace" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "dbxsp.fullname" . }}-manager-rolebinding
+  namespace: {{ include "dbxsp.namespace" . }}
+  labels:
+    {{- include "dbxsp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "dbxsp.fullname" . }}-manager-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "dbxsp.serviceAccountName" . }}
+  namespace: {{ include "dbxsp.namespace" . }}
