@@ -1,3 +1,6 @@
+//go:build cluster
+// +build cluster
+
 /*
 Copyright 2026 Weidao Lee.
 
@@ -14,7 +17,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils
+package cluster
 
 import (
 	"os"
@@ -26,27 +29,27 @@ const (
 	defaultKindCluster = "kind"
 )
 
-// KindCluster is the cluster this run works on, which the Makefile passes so
+// kindCluster is the cluster this run works on, which the Makefile passes so
 // that the name is decided in one place.
-func KindCluster() string {
+func kindCluster() string {
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		return v
 	}
 	return defaultKindCluster
 }
 
-// KindBinary is the kind this run calls, which the Makefile passes so that it is
+// kindBinary is the kind this run calls, which the Makefile passes so that it is
 // the pinned one rather than whatever is on the PATH.
-func KindBinary() string {
+func kindBinary() string {
 	if v, ok := os.LookupEnv("KIND"); ok {
 		return v
 	}
 	return defaultKindBinary
 }
 
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
-func LoadImageToKindClusterWithName(name string) error {
-	cmd := exec.Command(KindBinary(), "load", "docker-image", name, "--name", KindCluster())
-	_, err := Run(cmd)
+// loadImageToKindCluster loads a local docker image to the kind cluster
+func loadImageToKindCluster(name string) error {
+	cmd := exec.Command(kindBinary(), "load", "docker-image", name, "--name", kindCluster())
+	_, err := run(cmd)
 	return err
 }

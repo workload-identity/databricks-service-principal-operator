@@ -1,3 +1,6 @@
+//go:build cluster
+// +build cluster
+
 /*
 Copyright 2026 Weidao Lee.
 
@@ -14,7 +17,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils
+package cluster
 
 import (
 	"fmt"
@@ -27,10 +30,10 @@ const (
 	certmanagerURLTmpl = "https://github.com/cert-manager/cert-manager/releases/download/%s/cert-manager.yaml"
 )
 
-func UninstallCertManager() {
+func uninstallCertManager() {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
 	cmd := exec.Command("kubectl", "delete", "-f", url)
-	if _, err := Run(cmd); err != nil {
+	if _, err := run(cmd); err != nil {
 		warnError(err)
 	}
 
@@ -42,17 +45,17 @@ func UninstallCertManager() {
 	for _, lease := range kubeSystemLeases {
 		cmd = exec.Command("kubectl", "delete", "lease", lease,
 			"-n", "kube-system", "--ignore-not-found", "--force", "--grace-period=0")
-		if _, err := Run(cmd); err != nil {
+		if _, err := run(cmd); err != nil {
 			warnError(err)
 		}
 	}
 }
 
-// InstallCertManager installs the cert manager bundle.
-func InstallCertManager() error {
+// installCertManager installs the cert manager bundle.
+func installCertManager() error {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
 	cmd := exec.Command("kubectl", "apply", "-f", url)
-	if _, err := Run(cmd); err != nil {
+	if _, err := run(cmd); err != nil {
 		return err
 	}
 	// Wait for cert-manager-webhook to be ready, which can take time if cert-manager
@@ -63,13 +66,13 @@ func InstallCertManager() error {
 		"--timeout", "5m",
 	)
 
-	_, err := Run(cmd)
+	_, err := run(cmd)
 	return err
 }
 
-// IsCertManagerCRDsInstalled checks if any Cert Manager CRDs are installed
+// isCertManagerCRDsInstalled checks if any Cert Manager CRDs are installed
 // by verifying the existence of key CRDs related to Cert Manager.
-func IsCertManagerCRDsInstalled() bool {
+func isCertManagerCRDsInstalled() bool {
 	// List of common Cert Manager CRDs
 	certManagerCRDs := []string{
 		"certificates.cert-manager.io",
@@ -82,13 +85,13 @@ func IsCertManagerCRDsInstalled() bool {
 
 	// Execute the kubectl command to get all CRDs
 	cmd := exec.Command("kubectl", "get", "crds")
-	output, err := Run(cmd)
+	output, err := run(cmd)
 	if err != nil {
 		return false
 	}
 
 	// Check if any of the Cert Manager CRDs are present
-	crdList := GetNonEmptyLines(output)
+	crdList := nonEmptyLines(output)
 	for _, crd := range certManagerCRDs {
 		for _, line := range crdList {
 			if strings.Contains(line, crd) {

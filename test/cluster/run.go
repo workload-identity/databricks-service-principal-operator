@@ -1,3 +1,6 @@
+//go:build cluster
+// +build cluster
+
 /*
 Copyright 2026 Weidao Lee.
 
@@ -14,7 +17,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package utils
+package cluster
 
 import (
 	"fmt"
@@ -30,10 +33,10 @@ func warnError(err error) {
 	_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "warning: %v\n", err)
 }
 
-// Run runs cmd from the repository root rather than from the suite's own
+// run runs cmd from the repository root rather than from the suite's own
 // directory, so that a relative path or a `make` target in cmd resolves against
 // the same place whichever suite called it.
-func Run(cmd *exec.Cmd) (string, error) {
+func run(cmd *exec.Cmd) (string, error) {
 	dir, _ := projectDir()
 	cmd.Dir = dir
 
@@ -52,7 +55,7 @@ func Run(cmd *exec.Cmd) (string, error) {
 	return string(output), nil
 }
 
-func GetNonEmptyLines(output string) []string {
+func nonEmptyLines(output string) []string {
 	var res []string
 	elements := strings.SplitSeq(output, "\n")
 	for element := range elements {

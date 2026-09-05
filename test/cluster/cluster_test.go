@@ -33,7 +33,6 @@ import (
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 	dbxwebhook "github.com/workload-identity/databricks-service-principal-operator/internal/webhook"
-	"github.com/workload-identity/databricks-service-principal-operator/test/utils"
 )
 
 // namespace where the project is deployed in
@@ -60,7 +59,7 @@ var _ = Describe("Manager", Ordered, func() {
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found")
-		_, _ = utils.Run(cmd)
+		_, _ = run(cmd)
 	})
 
 	// After each test, check for failures and collect logs, events,
@@ -70,7 +69,7 @@ var _ = Describe("Manager", Ordered, func() {
 		if specReport.Failed() {
 			By("Fetching controller manager pod logs")
 			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-			controllerLogs, err := utils.Run(cmd)
+			controllerLogs, err := run(cmd)
 			if err == nil {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
 			} else {
@@ -79,7 +78,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("Fetching Kubernetes events")
 			cmd = exec.Command("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
-			eventsOutput, err := utils.Run(cmd)
+			eventsOutput, err := run(cmd)
 			if err == nil {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
 			} else {
@@ -88,7 +87,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("Fetching curl-metrics logs")
 			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-			metricsOutput, err := utils.Run(cmd)
+			metricsOutput, err := run(cmd)
 			if err == nil {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
 			} else {
@@ -97,7 +96,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("Fetching controller manager pod description")
 			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", namespace)
-			podDescription, err := utils.Run(cmd)
+			podDescription, err := run(cmd)
 			if err == nil {
 				fmt.Println("Pod description:\n", podDescription)
 			} else {
@@ -123,9 +122,9 @@ var _ = Describe("Manager", Ordered, func() {
 					"-n", namespace,
 				)
 
-				podOutput, err := utils.Run(cmd)
+				podOutput, err := run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve controller-manager pod information")
-				podNames := utils.GetNonEmptyLines(podOutput)
+				podNames := nonEmptyLines(podOutput)
 				g.Expect(podNames).To(HaveLen(1), "expected 1 controller pod running")
 				controllerPodName = podNames[0]
 				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
@@ -135,7 +134,7 @@ var _ = Describe("Manager", Ordered, func() {
 					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
 					"-n", namespace,
 				)
-				output, err := utils.Run(cmd)
+				output, err := run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
 			}
@@ -149,18 +148,18 @@ var _ = Describe("Manager", Ordered, func() {
 			// leftover rather than on anything real.
 			cmd := exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName,
 				"--ignore-not-found")
-			_, _ = utils.Run(cmd)
+			_, _ = run(cmd)
 
 			cmd = exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
 				"--clusterrole=databricks-service-principal-operator-metrics-reader",
 				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
 			)
-			_, err := utils.Run(cmd)
+			_, err := run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
 
 			By("validating that the metrics service is available")
 			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
-			_, err = utils.Run(cmd)
+			_, err = run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
 
 			By("getting the service account token")
@@ -172,7 +171,7 @@ var _ = Describe("Manager", Ordered, func() {
 			verifyControllerPodReady := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "pod", controllerPodName, "-n", namespace,
 					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
-				output, err := utils.Run(cmd)
+				output, err := run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("True"), "Controller pod not ready")
 			}
@@ -181,7 +180,7 @@ var _ = Describe("Manager", Ordered, func() {
 			By("verifying that the controller manager is serving the metrics server")
 			verifyMetricsServerStarted := func(g Gomega) {
 				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-				output, err := utils.Run(cmd)
+				output, err := run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(ContainSubstring("Serving metrics server"),
 					"Metrics server not yet started")
@@ -220,7 +219,7 @@ var _ = Describe("Manager", Ordered, func() {
 						"serviceAccountName": "%s"
 					}
 				}`, token, metricsServiceName, namespace, serviceAccountName))
-			_, err = utils.Run(cmd)
+			_, err = run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 
 			By("waiting for the curl-metrics pod to complete.")
@@ -228,7 +227,7 @@ var _ = Describe("Manager", Ordered, func() {
 				cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
 					"-o", "jsonpath={.status.phase}",
 					"-n", namespace)
-				output, err := utils.Run(cmd)
+				output, err := run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
 			}
@@ -303,7 +302,7 @@ func serviceAccountToken() (string, error) {
 func getMetricsOutput() (string, error) {
 	By("getting the curl-metrics logs")
 	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-	return utils.Run(cmd)
+	return run(cmd)
 }
 
 // tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
@@ -368,7 +367,7 @@ var _ = Describe("Identities", Ordered, func() {
 		cmd := exec.Command("kubectl", "label", "namespace", team,
 			"databricks.workload-identity.io/inject=enabled",
 			"databricks.workload-identity.io/mint=enabled")
-		_, err := utils.Run(cmd)
+		_, err := run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 
 		// The cluster has said this namespace may be served by somebody. It has
@@ -407,7 +406,7 @@ var _ = Describe("Identities", Ordered, func() {
 		Eventually(func() string {
 			cmd := exec.Command("kubectl", "get", "databricksserviceaccount", serviceAccount, "-n", team,
 				"-o", "jsonpath={.status.identities[0].conditions[?(@.type=='Ready')].message}")
-			out, err := utils.Run(cmd)
+			out, err := run(cmd)
 			if err != nil {
 				return ""
 			}
@@ -420,7 +419,7 @@ var _ = Describe("Identities", Ordered, func() {
 		// Ownership rather than a check, which is what makes this true without
 		// anything having to notice. Only a real control plane collects.
 		cmd := exec.Command("kubectl", "delete", "serviceaccount", serviceAccount, "-n", team)
-		_, err := utils.Run(cmd)
+		_, err := run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 
 		Eventually(func() string {
@@ -473,7 +472,7 @@ var _ = Describe("Several identities", Ordered, func() {
 		cmd := exec.Command("kubectl", "label", "namespace", team,
 			"databricks.workload-identity.io/inject=enabled",
 			"databricks.workload-identity.io/mint=enabled")
-		_, err := utils.Run(cmd)
+		_, err := run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 		serveNamespaces(team)
 	})
@@ -577,7 +576,7 @@ var _ = Describe("A key this operator will not act on", Ordered, func() {
 		cmd := exec.Command("kubectl", "label", "namespace", team,
 			"databricks.workload-identity.io/inject=enabled",
 			"databricks.workload-identity.io/mint=enabled")
-		_, err := utils.Run(cmd)
+		_, err := run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 		serveNamespaces(team)
 
@@ -819,7 +818,7 @@ metadata:
 
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
-	_, err := utils.Run(cmd)
+	_, err := run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create the namespace pods are equipped in")
 
 	entries := make([]string, 0, len(identities))
@@ -832,7 +831,7 @@ metadata:
 	cmd = exec.Command("kubectl", "-n", team, "patch", "databricksserviceaccount", serviceAccount,
 		"--subresource", "status", "--type", "merge",
 		"-p", fmt.Sprintf(`{"status":{"identities":[%s]}}`, strings.Join(entries, ",")))
-	_, err = utils.Run(cmd)
+	_, err = run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to write the identities the pod is equipped with")
 }
 
@@ -847,7 +846,7 @@ func awaitOperator() {
 	cmd := exec.Command("kubectl", "wait", "--for=condition=Available",
 		"deployment", "-l", "control-plane=controller-manager",
 		"-n", namespace, "--timeout=3m")
-	_, err := utils.Run(cmd)
+	_, err := run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "the operator never became available")
 }
 
@@ -856,7 +855,7 @@ func awaitOperator() {
 func runPod(team, name, serviceAccount string) {
 	cmd := exec.Command("kubectl", "delete", "pod", name, "-n", team,
 		"--ignore-not-found", "--force", "--grace-period=0")
-	_, _ = utils.Run(cmd)
+	_, _ = run(cmd)
 
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: Pod
@@ -874,7 +873,7 @@ spec:
 
 	cmd = exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
-	_, err := utils.Run(cmd)
+	_, err := run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create the pod")
 }
 
@@ -882,7 +881,7 @@ spec:
 func volumeNames(team, name string) []string {
 	cmd := exec.Command("kubectl", "get", "pod", name, "-n", team,
 		"-o", "jsonpath={.spec.volumes[*].name}")
-	out, err := utils.Run(cmd)
+	out, err := run(cmd)
 	if err != nil {
 		return nil
 	}
@@ -892,7 +891,7 @@ func volumeNames(team, name string) []string {
 // podPhase reads where a pod has got to.
 func podPhase(team, name string) string {
 	cmd := exec.Command("kubectl", "get", "pod", name, "-n", team, "-o", "jsonpath={.status.phase}")
-	out, err := utils.Run(cmd)
+	out, err := run(cmd)
 	if err != nil {
 		return ""
 	}
@@ -905,7 +904,7 @@ func podPhase(team, name string) string {
 // which jsonpath reads as structure.
 func podAnnotation(team, name, key string) string {
 	cmd := exec.Command("kubectl", "get", "pod", name, "-n", team, "-o", "json")
-	out, err := utils.Run(cmd)
+	out, err := run(cmd)
 	if err != nil {
 		return ""
 	}
@@ -927,7 +926,7 @@ func podAnnotation(team, name, key string) string {
 // than what arrived.
 func inPod(team, name, command string) (string, error) {
 	cmd := exec.Command("kubectl", "exec", "-n", team, name, "--", "sh", "-c", command)
-	return utils.Run(cmd)
+	return run(cmd)
 }
 
 // shellQuote wraps a path for the shell inside the pod, where these paths hold
@@ -940,7 +939,7 @@ func shellQuote(path string) string {
 // create straight afterwards does not race the terminating one.
 func removeTeam(team string) {
 	cmd := exec.Command("kubectl", "delete", "namespace", team, "--ignore-not-found", "--wait=true")
-	_, _ = utils.Run(cmd)
+	_, _ = run(cmd)
 }
 
 // operatorRef is how a ServiceAccount names this operator: the namespace it runs
@@ -978,7 +977,7 @@ metadata:
 
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
-	_, err := utils.Run(cmd)
+	_, err := run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create the team namespace and ServiceAccount")
 }
 
@@ -989,7 +988,7 @@ metadata:
 func askForIdentity(team, serviceAccount, identity, operator string) error {
 	cmd := exec.Command("kubectl", "-n", team, "annotate", "serviceaccount", serviceAccount,
 		"--overwrite", dbxv1alpha1.ServicePrincipalAnnotationFor(identity)+"="+operator)
-	_, err := utils.Run(cmd)
+	_, err := run(cmd)
 	return err
 }
 
@@ -1003,7 +1002,7 @@ func askForIdentity(team, serviceAccount, identity, operator string) error {
 func stopAskingForIdentity(team, serviceAccount, identity string) {
 	cmd := exec.Command("kubectl", "-n", team, "annotate", "serviceaccount", serviceAccount,
 		dbxv1alpha1.ServicePrincipalAnnotationFor(identity)+"-")
-	_, err := utils.Run(cmd)
+	_, err := run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to stop asking for identity %q", identity)
 }
 
@@ -1016,7 +1015,7 @@ func stopAskingForIdentity(team, serviceAccount, identity string) {
 func profilesOn(team, serviceAccount string) []string {
 	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", serviceAccount, "-n", team,
 		"-o", "jsonpath={.status.identities[*].profile}")
-	out, err := utils.Run(cmd)
+	out, err := run(cmd)
 	if err != nil {
 		return nil
 	}
@@ -1027,7 +1026,7 @@ func profilesOn(team, serviceAccount string) []string {
 func operatorsOn(team, serviceAccount string) []string {
 	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", serviceAccount, "-n", team,
 		"-o", "jsonpath={.status.identities[*].operator}")
-	out, err := utils.Run(cmd)
+	out, err := run(cmd)
 	if err != nil {
 		return nil
 	}
@@ -1042,7 +1041,7 @@ func operatorsOn(team, serviceAccount string) []string {
 // refusing something has to know the cluster took it first.
 func annotationsOn(team, serviceAccount string) map[string]string {
 	cmd := exec.Command("kubectl", "get", "serviceaccount", serviceAccount, "-n", team, "-o", "json")
-	out, err := utils.Run(cmd)
+	out, err := run(cmd)
 	if err != nil {
 		return nil
 	}
@@ -1068,7 +1067,7 @@ func serveNamespaces(names ...string) {
 	cmd := exec.Command("kubectl", "-n", namespace, "patch",
 		"databricksaccount", "databricks-account", "--type", "merge",
 		"-p", fmt.Sprintf(`{"spec":{"namespaces":%s}}`, list))
-	_, err := utils.Run(cmd)
+	_, err := run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to declare which namespaces the operator serves")
 }
 
@@ -1092,7 +1091,7 @@ spec:
 
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
-	_, err := utils.Run(cmd)
+	_, err := run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to create the DatabricksAccount")
 }
 
@@ -1101,7 +1100,7 @@ spec:
 func recordNames() string {
 	cmd := exec.Command("kubectl", "get", "issueddatabricksserviceprincipal",
 		"-n", namespace, "-o", "jsonpath={.items[*].metadata.name}")
-	out, err := utils.Run(cmd)
+	out, err := run(cmd)
 	if err != nil {
 		return ""
 	}
@@ -1130,7 +1129,7 @@ type records struct {
 func recordsInNamespace() records {
 	cmd := exec.Command("kubectl", "get", "issueddatabricksserviceprincipal",
 		"-n", namespace, "-o", "json")
-	out, err := utils.Run(cmd)
+	out, err := run(cmd)
 	if err != nil {
 		return records{}
 	}
@@ -1202,7 +1201,7 @@ func heldBecause(name string) string {
 func identityNames(namespace string) string {
 	cmd := exec.Command("kubectl", "get", "databricksserviceaccount", "-n", namespace,
 		"-o", "jsonpath={.items[*].metadata.name}")
-	out, err := utils.Run(cmd)
+	out, err := run(cmd)
 	if err != nil {
 		return ""
 	}

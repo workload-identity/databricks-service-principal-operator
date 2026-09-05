@@ -30,8 +30,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/workload-identity/databricks-service-principal-operator/test/utils"
 )
 
 var (
@@ -64,13 +62,13 @@ func TestCluster(t *testing.T) {
 var _ = BeforeSuite(func() {
 	By("building the manager image")
 	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
-	_, err := utils.Run(cmd)
+	_, err := run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
 
 	// TODO(user): If you want to change the test vendor from Kind,
 	// ensure the image is built and available, then remove the following block.
 	By("loading the manager image on Kind")
-	err = utils.LoadImageToKindClusterWithName(managerImage)
+	err = loadImageToKindCluster(managerImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
 
 	configureKubectlKubeRC()
@@ -87,22 +85,22 @@ var _ = BeforeSuite(func() {
 
 	By("creating the manager namespace")
 	cmd = exec.Command("kubectl", "create", "ns", managerNamespace)
-	_, _ = utils.Run(cmd)
+	_, _ = run(cmd)
 
 	By("labeling the namespace to enforce the restricted security policy")
 	cmd = exec.Command("kubectl", "label", "--overwrite", "ns", managerNamespace,
 		"pod-security.kubernetes.io/enforce=restricted")
-	_, err = utils.Run(cmd)
+	_, err = run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to label the manager namespace")
 
 	By("installing CRDs")
 	cmd = exec.Command("make", "install")
-	_, err = utils.Run(cmd)
+	_, err = run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 	By("deploying the controller-manager")
 	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
-	_, err = utils.Run(cmd)
+	_, err = run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 })
 
@@ -113,7 +111,7 @@ var _ = AfterSuite(func() {
 	// it breaks is the next run rather than this one.
 	cmd := exec.Command("kubectl", "delete", "clusterrolebinding",
 		metricsRoleBindingName, "--ignore-not-found")
-	_, _ = utils.Run(cmd)
+	_, _ = run(cmd)
 
 	By("removing the manager namespace")
 	// Ahead of undeploying, which is the opposite of the order it reads in.
@@ -125,11 +123,11 @@ var _ = AfterSuite(func() {
 
 	By("undeploying the controller-manager")
 	cmd = exec.Command("make", "undeploy")
-	_, _ = utils.Run(cmd)
+	_, _ = run(cmd)
 
 	By("uninstalling CRDs")
 	cmd = exec.Command("make", "uninstall")
-	_, _ = utils.Run(cmd)
+	_, _ = run(cmd)
 
 	teardownCertManager()
 
@@ -139,7 +137,7 @@ var _ = AfterSuite(func() {
 	// behind it is a hundred megabytes per run that nobody goes looking for,
 	// on a machine that was not asked.
 	cmd = exec.Command("docker", "rmi", managerImage)
-	_, _ = utils.Run(cmd)
+	_, _ = run(cmd)
 })
 
 // clearManagerNamespace stops the operator and takes its namespace away, records
@@ -165,22 +163,22 @@ var _ = AfterSuite(func() {
 func clearManagerNamespace() {
 	cmd := exec.Command("kubectl", "delete", "deployment", "-n", managerNamespace,
 		"-l", "control-plane=controller-manager", "--ignore-not-found", "--wait=true")
-	_, _ = utils.Run(cmd)
+	_, _ = run(cmd)
 
 	cmd = exec.Command("kubectl", "get", "issueddatabricksserviceprincipal",
 		"-n", managerNamespace, "--ignore-not-found", "-o", "name")
-	records, err := utils.Run(cmd)
+	records, err := run(cmd)
 	if err == nil {
-		for _, record := range utils.GetNonEmptyLines(records) {
+		for _, record := range nonEmptyLines(records) {
 			cmd = exec.Command("kubectl", "patch", record, "-n", managerNamespace,
 				"--type", "merge", "-p", `{"metadata":{"finalizers":null}}`)
-			_, _ = utils.Run(cmd)
+			_, _ = run(cmd)
 		}
 	}
 
 	cmd = exec.Command("kubectl", "delete", "namespace", managerNamespace,
 		"--ignore-not-found", "--wait=true", "--timeout=2m")
-	_, err = utils.Run(cmd)
+	_, err = run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(),
 		"the manager namespace would not go; a run against this cluster cannot deploy until it has")
 }
@@ -199,10 +197,10 @@ func clearManagerNamespace() {
 // wrong cluster, because they are the same commands it meant to run.
 func pinCluster() {
 	By("pinning this run to its own cluster")
-	kubeconfig := filepath.Join(os.TempDir(), "kubeconfig-"+utils.KindCluster())
-	cmd := exec.Command(utils.KindBinary(), "export", "kubeconfig",
-		"--name", utils.KindCluster(), "--kubeconfig", kubeconfig)
-	_, err := utils.Run(cmd)
+	kubeconfig := filepath.Join(os.TempDir(), "kubeconfig-"+kindCluster())
+	cmd := exec.Command(kindBinary(), "export", "kubeconfig",
+		"--name", kindCluster(), "--kubeconfig", kubeconfig)
+	_, err := run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(),
 		"Failed to write a kubeconfig for the cluster this run was given")
 	ExpectWithOffset(1, os.Setenv("KUBECONFIG", kubeconfig)).To(Succeed())
@@ -232,7 +230,7 @@ func setupCertManager() {
 	}
 
 	By("checking if CertManager is already installed")
-	if utils.IsCertManagerCRDsInstalled() {
+	if isCertManagerCRDsInstalled() {
 		_, _ = fmt.Fprintf(GinkgoWriter, "CertManager is already installed. Skipping installation.\n")
 		return
 	}
@@ -241,7 +239,7 @@ func setupCertManager() {
 	shouldCleanupCertManager = true
 
 	By("installing CertManager")
-	Expect(utils.InstallCertManager()).To(Succeed(), "Failed to install CertManager")
+	Expect(installCertManager()).To(Succeed(), "Failed to install CertManager")
 }
 
 // awaitCertManager waits until cert-manager will answer for its own kinds.
@@ -270,7 +268,7 @@ spec:
 	Eventually(func() error {
 		cmd := exec.Command("kubectl", "apply", "--dry-run=server", "-f", "-")
 		cmd.Stdin = strings.NewReader(probe)
-		_, err := utils.Run(cmd)
+		_, err := run(cmd)
 		return err
 	}, 3*time.Minute, 5*time.Second).Should(Succeed(),
 		"cert-manager never became able to admit an Issuer, so nothing this deploys can have a "+
@@ -286,5 +284,5 @@ func teardownCertManager() {
 	}
 
 	By("uninstalling CertManager")
-	utils.UninstallCertManager()
+	uninstallCertManager()
 }
