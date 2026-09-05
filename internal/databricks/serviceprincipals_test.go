@@ -38,7 +38,7 @@ import (
 func TestCreateServicePrincipalTakesBothIdsFromDatabricks(t *testing.T) {
 	t.Parallel()
 	server := &stubAccount{t: t, answer: map[string]string{
-		"POST " + servicePrincipalsAPI: `{"id":"71630475020656","applicationId":"11111111-1111-1111-1111-111111111111"}`,
+		"POST " + servicePrincipalsAPI: `{"id":"70000000000001","applicationId":"11111111-1111-1111-1111-111111111111"}`,
 	}}
 	c := server.clients()
 
@@ -47,7 +47,7 @@ func TestCreateServicePrincipalTakesBothIdsFromDatabricks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "71630475020656" || clientID != "11111111-1111-1111-1111-111111111111" {
+	if id != "70000000000001" || clientID != "11111111-1111-1111-1111-111111111111" {
 		t.Errorf("read id=%q clientId=%q, want both as Databricks gave them", id, clientID)
 	}
 
@@ -668,7 +668,7 @@ func TestTheMarkerFitsWhatDatabricksWillStore(t *testing.T) {
 	for _, issuing := range []Issuing{
 		{Issuer: "https://oidc.example/cluster", Namespace: "team-a", Name: "etl",
 			ServiceAccountUID: "6a5f0d1e-0b2c-4c3d-9e8f-1a2b3c4d5e6f"},
-		{Issuer: "https://oidc.eks.ap-northeast-1.amazonaws.com/id/" + strings.Repeat("A", 200),
+		{Issuer: "https://oidc.eks.us-east-1.amazonaws.com/id/" + strings.Repeat("A", 200),
 			Namespace: strings.Repeat("n", 63), Name: strings.Repeat("s", 253),
 			ServiceAccountUID: strings.Repeat("u", 200)},
 		{},

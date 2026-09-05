@@ -34,7 +34,7 @@ func jwtWith(payload string) string {
 func TestParseTokenClaimsReadsWhatKubernetesWrites(t *testing.T) {
 	t.Parallel()
 	const subject = "system:serviceaccount:probe:budget-puller"
-	const issuer = "https://oidc.eks.ap-northeast-1.amazonaws.com/id/4A36"
+	const issuer = "https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE"
 
 	got, err := parseTokenClaims(jwtWith(
 		`{"iss":"` + issuer + `","sub":"` + subject + `","aud":["databricks"],"exp":1788098161}`))
