@@ -1,7 +1,11 @@
 # Several identities for one ServiceAccount
 
-The README covers one workload, one identity, which is what nearly every
-ServiceAccount asks for. This is the rest of it.
+For whoever holds a namespace and needs one workload to act as more than one
+Databricks service principal.
+
+[Asking for an identity](asking-for-an-identity.md) covers one workload, one
+identity, which is what nearly every ServiceAccount asks for. This is the rest of
+it.
 
 A pod binds exactly one ServiceAccount. A workload that reads from one place and
 writes to another needs an identity for each, and one Databricks account holding
@@ -18,8 +22,8 @@ databricks.workload-identity.io/service-principal.<name>   <operator>
     <operator> ::= <operator namespace>/<DatabricksAccount name>
 ```
 
-Every key's value is the operator being asked, written the way the README's
-[Find the operator you are asking](../README.md#first-find-the-operator-you-are-asking)
+Every key's value is the operator being asked, written the way
+[First, find the operator you are asking](asking-for-an-identity.md#first-find-the-operator-you-are-asking)
 finds it. What differs between the keys is the name after the `.`, and that name
 is what the identity is called everywhere you meet it afterwards.
 
@@ -148,7 +152,8 @@ to use it.
 
 `WORKLOAD_IDENTITY_DATABRICKS_CONFIG_PROFILE` names the identity asked for with
 the bare `service-principal` key, so a workload with one default identity and
-some named extras still writes the one line in the README for the default. A
+some named extras still writes
+[the one line](what-the-pod-gets.md#what-your-workload-writes) for the default. A
 ServiceAccount whose keys are all named has no such default, and its workloads
 should name the profile they want rather than take whichever entry happens to be
 first.
@@ -170,7 +175,7 @@ env:
 ```
 
 Both clients above pick it up. A ConfigMap holding that one value works the same
-way and is worth it when several Deployments share it:
+way and is worth it when several workloads share it:
 
 ```yaml
 envFrom:
@@ -242,32 +247,17 @@ naming all of them:
 └── writer/token
 ```
 
-```ini
-[reader]
-auth_type = file-oidc
-client_id = 11111111-1111-1111-1111-111111111111
-databricks_id_token_filepath = /var/run/secrets/databricks/reader/token
-oidc_token_filepath = /var/run/secrets/databricks/reader/token
-audience = databricks
-token_audience = databricks
-
-[writer]
-auth_type = file-oidc
-client_id = 22222222-2222-2222-2222-222222222222
-databricks_id_token_filepath = /var/run/secrets/databricks/writer/token
-oidc_token_filepath = /var/run/secrets/databricks/writer/token
-audience = databricks
-token_audience = databricks
-```
-
-The token path and the audience are each written under both spellings the SDKs
-use, which is [What is actually in the pod](../README.md#what-is-actually-in-the-pod)
-and holds here per profile.
+`config` holds one profile per identity — `[reader]` and `[writer]` here — each
+carrying that identity's own `client_id` and its own token path. The format of a
+profile, and why the token path and the audience are each written under two
+spellings, are the same whether a ServiceAccount asked for one identity or six:
+[What the pod gets](what-the-pod-gets.md). So is the one line your workload
+writes to read any of it.
 
 One path segment per identity, named the same as the profile. The identity asked
 for with the bare key is the one exception, because its profile name is the
 operator reference: it keeps the `/` and so lands two segments deep, at
-`ops-a/databricks-account/token`.
+`dbxsp-operator-system/databricks-account/token`.
 
 **Two operators serving one workload need not agree on an audience.** Each
 identity's token is minted for whatever its own operator's token carries, and the
@@ -275,7 +265,8 @@ pod holds one token per identity — so nobody has to go round asking the other
 platform teams what theirs is. Both operators are asked about the same pod and
 agree without coordinating: whichever is asked first equips it with every
 identity in the DatabricksServiceAccount, and the second finds its work already
-done.
+done. Why there would be two at all is
+[Two Databricks accounts in one cluster](several-operators.md).
 
 ## Ending one and keeping the rest
 
