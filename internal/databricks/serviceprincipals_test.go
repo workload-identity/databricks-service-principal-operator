@@ -23,6 +23,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/databricks/databricks-sdk-go/service/oauth2"
 )
 
 // TestCreateServicePrincipalTakesBothIdsFromDatabricks covers two ids that look
@@ -216,51 +218,207 @@ const (
 	testAudience = "databricks"
 )
 
-// TestAFederationPolicyIsNotAddedTwice covers the read that makes this
-// idempotent.
+// testPolicyID is what the issuer and subject above are named as, written out
+// rather than computed.
 //
-// Policies live under a service principal and there is no lookup by subject, so
-// the ones on that principal are listed and an exact match ends it. Adding a
-// second policy for a subject already trusted is a duplicate nobody would ever
-// clean up, on every pass, forever.
-func TestAFederationPolicyIsNotAddedTwice(t *testing.T) {
+// The name is written into Databricks by one pass and asked for by another,
+// which may be a later version of this operator running in a different process.
+// A test computing it from the same function it is testing would go on passing
+// through a change to the hash, and every policy already written would answer to
+// nothing.
+const testPolicyID = "k8s-nnz7nnu2azoahcu6xoz5slkn"
+
+// TestTwoPassesOverAnAccountThatHasNotCaughtUpLeaveOnePolicy covers the window
+// the controller opens on every identity it issues.
+//
+// Status is written twice on a first convergence, so the second pass arrives
+// milliseconds after the first and asks an account whose reads have not caught
+// up with what the first one wrote. A create decided from what that account
+// answers is a second policy on every identity, saying exactly what the first
+// says, and nothing ever cleans one up.
+func TestTwoPassesOverAnAccountThatHasNotCaughtUpLeaveOnePolicy(t *testing.T) {
 	t.Parallel()
-	server := &stubAccount{t: t, answer: map[string]string{
-		"GET " + federationPoliciesAPI("7788"): `{"policies":[{"oidc_policy":{
-			"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}}]}`,
-	}}
+	server := &stubAccount{t: t, policies: &policyAccount{}}
 	c := server.clients()
 
-	if err := c.EnsureFederationPolicy(context.Background(), "7788", testIssuer, testSubject, testAudience); err != nil {
-		t.Fatal(err)
+	for pass := range 2 {
+		if err := c.EnsureFederationPolicy(context.Background(), "7788",
+			testIssuer, testSubject, testAudience); err != nil {
+			t.Fatalf("pass %d: %v -- the controller makes this call on every pass", pass+1, err)
+		}
 	}
-	if n := server.made("POST", federationPoliciesAPI("7788")); n != 0 {
-		t.Errorf("added %d policies; this subject is already trusted", n)
+
+	if got := server.policies.names(); !slices.Equal(got, []string{testPolicyID}) {
+		t.Errorf("the service principal carries %v, want just %s; a second policy is the pass "+
+			"that could not see the first one's writing creating instead of writing the same name",
+			got, testPolicyID)
 	}
 }
 
-// TestAPolicyThatIsNotThisOneIsNotAMatch covers the three claims all having to
-// agree, and the audiences having to be the one.
+// TestThePolicyIsNamedAfterTheIssuerAndTheSubject covers the name itself: what
+// it is derived from, and that Databricks will take it.
 //
-// A policy is what makes a token exchangeable, so a near-match that is treated
-// as a match leaves the workload unable to exchange anything, with this operator
+// The pair is what RemoveFederationPolicies takes a policy for one of this
+// cluster's by, so naming a policy after anything else would mean the call that
+// writes one and the call that takes one back disagreeing about which policy
+// they are talking about.
+func TestThePolicyIsNamedAfterTheIssuerAndTheSubject(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, policies: &policyAccount{}}
+	c := server.clients()
+
+	if err := c.EnsureFederationPolicy(context.Background(), "7788",
+		testIssuer, testSubject, testAudience); err != nil {
+		t.Fatal(err)
+	}
+	if _, named := server.policies.held[testPolicyID]; !named {
+		t.Errorf("the account holds %v and not %s; a policy Databricks named is one no later "+
+			"pass can ask for", server.policies.names(), testPolicyID)
+	}
+
+	if same := FederationPolicyIDFor(testIssuer, testSubject); same != testPolicyID {
+		t.Errorf("the same issuer and subject are named %s and %s; a name that moves is a policy "+
+			"written by one version and unreachable by the next", testPolicyID, same)
+	}
+	for _, tc := range []struct{ what, issuer, subject string }{
+		{"another cluster's issuer", "https://oidc.example/other", testSubject},
+		{"another workload's subject", testIssuer, "system:serviceaccount:team-b:loader"},
+	} {
+		if got := FederationPolicyIDFor(tc.issuer, tc.subject); got == testPolicyID {
+			t.Errorf("%s is named %s too; one name is one policy, so two trusts sharing it is "+
+				"one of them overwriting the other", tc.what, got)
+		}
+	}
+
+	// Databricks takes lowercase alphanumerics, hyphens and slashes in a policy
+	// id and refuses the rest, and a name it refuses is a create that fails on
+	// every pass. Read off what the function produces rather than off the
+	// constant, which is what makes this a claim about any name it can give.
+	for _, name := range []string{
+		FederationPolicyIDFor(testIssuer, testSubject),
+		FederationPolicyIDFor("https://oidc.example/other", "system:serviceaccount:team-b:loader"),
+	} {
+		for _, character := range name {
+			if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyz0123456789-", character) {
+				t.Errorf("the name %s carries %q, which Databricks does not take in a policy id",
+					name, character)
+			}
+		}
+	}
+}
+
+// TestAConvergedIdentityIsOneReadAndNoWrite covers the pass that finds nothing
+// to do, which is almost every pass.
+//
+// The controller makes this call once a minute per identity for as long as the
+// identity exists. Reading the policies on the service principal to answer it
+// is a listing per identity per minute for ever, where the named policy answers
+// the whole question by being read; and writing anything at all on a pass that
+// found the trust already in place is a write per identity per minute.
+func TestAConvergedIdentityIsOneReadAndNoWrite(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, policies: &policyAccount{
+		caughtUp: true,
+		held:     policiesHeld(trusting(testPolicyID, testIssuer, testSubject, testAudience)),
+	}}
+	c := server.clients()
+
+	if err := c.EnsureFederationPolicy(context.Background(), "7788",
+		testIssuer, testSubject, testAudience); err != nil {
+		t.Fatal(err)
+	}
+	if n := server.made("GET", federationPoliciesAPI("7788")); n != 0 {
+		t.Errorf("listed the policies on the service principal %d times", n)
+	}
+	if len(server.calls) != 1 {
+		t.Errorf("made %+v, want the one read of the named policy", server.calls)
+	}
+}
+
+// TestACreateRefusedBecauseTheNameIsTakenIsNotAFailure covers what the second of
+// two passes meets when its read is behind and its write is not.
+//
+// The name is derived from the issuer and the subject, so whatever stands under
+// it is what this call was asking for. Reporting the refusal would have every
+// identity report itself broken on the pass that follows the one that built it.
+func TestACreateRefusedBecauseTheNameIsTakenIsNotAFailure(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, policies: &policyAccount{}}
+	c := server.clients()
+	// Held after the reads were taken: the account has the policy and no read
+	// of it says so, which is the pass before this one having got there first.
+	server.policies.held[testPolicyID] = trusting(testPolicyID, testIssuer, testSubject, testAudience)
+
+	if err := c.EnsureFederationPolicy(context.Background(), "7788",
+		testIssuer, testSubject, testAudience); err != nil {
+		t.Errorf("error is %v; the policy this was asking for is the one standing under the "+
+			"name it asked for", err)
+	}
+	if got := server.policies.names(); !slices.Equal(got, []string{testPolicyID}) {
+		t.Errorf("the service principal carries %v, want just %s", got, testPolicyID)
+	}
+}
+
+// TestAnAccountThatWillNotTakeTheNameIsReported covers the one thing this rests
+// on that cannot be checked from here.
+//
+// Databricks documents a create as taking the id it is given, and if it ever
+// assigned its own instead, every pass would look for a name that is not there
+// and create again -- a policy per pass per identity, and no listing read to
+// notice. It is reported at the create rather than discovered by whoever reads
+// the account.
+func TestAnAccountThatWillNotTakeTheNameIsReported(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, policies: &policyAccount{namesPoliciesItself: true}}
+	c := server.clients()
+
+	err := c.EnsureFederationPolicy(context.Background(), "7788", testIssuer, testSubject, testAudience)
+	if err == nil {
+		t.Fatal("a create Databricks named itself came back as done; every pass after it would " +
+			"create another and nothing would say why")
+	}
+	if !strings.Contains(err.Error(), assignedPolicyPrefix) || !strings.Contains(err.Error(), testPolicyID) {
+		t.Errorf("error is %v; it has to name what was asked for and what came back, or nobody "+
+			"reading it can tell this from Databricks being down", err)
+	}
+}
+
+// TestAPolicyUnderTheNameThatIsNotThisOneIsRestated covers the three claims all
+// having to agree, and the audiences having to be the one.
+//
+// A policy is what makes a token exchangeable, so a near-match treated as a
+// match leaves the workload unable to exchange anything with this operator
 // reporting it as ready. The audience list is compared as a list of one: a
 // policy trusting two audiences trusts something this operator did not ask for.
-func TestAPolicyThatIsNotThisOneIsNotAMatch(t *testing.T) {
+//
+// Restated rather than joined by a second policy. The name is the trust in this
+// subject, and there is one of those.
+func TestAPolicyUnderTheNameThatIsNotThisOneIsRestated(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
-		policy string
+		policy *oauth2.OidcFederationPolicy
 	}{
-		{"another subject", `{"issuer":"` + testIssuer + `","subject":"system:serviceaccount:team-b:loader","audiences":["` + testAudience + `"]}`},
-		{"another issuer", `{"issuer":"https://oidc.example/other","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}`},
-		{"another audience", `{"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["something-else"]}`},
-		{"one audience too many", `{"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["` + testAudience + `","other"]}`},
-		{"no oidc policy at all", `null`},
+		{"another subject", &oauth2.OidcFederationPolicy{
+			Issuer: testIssuer, Subject: "system:serviceaccount:team-b:loader",
+			Audiences: []string{testAudience}}},
+		{"another issuer", &oauth2.OidcFederationPolicy{
+			Issuer: "https://oidc.example/other", Subject: testSubject,
+			Audiences: []string{testAudience}}},
+		{"another audience", &oauth2.OidcFederationPolicy{
+			Issuer: testIssuer, Subject: testSubject, Audiences: []string{"something-else"}}},
+		{"one audience too many", &oauth2.OidcFederationPolicy{
+			Issuer: testIssuer, Subject: testSubject,
+			Audiences: []string{testAudience, "other"}}},
+		{"no oidc policy at all", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := &stubAccount{t: t, answer: map[string]string{
-				"GET " + federationPoliciesAPI("7788"): `{"policies":[{"oidc_policy":` + tc.policy + `}]}`,
+			t.Parallel()
+			server := &stubAccount{t: t, policies: &policyAccount{
+				caughtUp: true,
+				held: policiesHeld(oauth2.FederationPolicy{
+					PolicyId: testPolicyID, OidcPolicy: tc.policy,
+				}),
 			}}
 			c := server.clients()
 
@@ -268,35 +426,66 @@ func TestAPolicyThatIsNotThisOneIsNotAMatch(t *testing.T) {
 				testIssuer, testSubject, testAudience); err != nil {
 				t.Fatal(err)
 			}
-			sent := server.wrote(federationPoliciesAPI("7788"))
-			for _, want := range []string{testIssuer, testSubject, testAudience} {
-				if !strings.Contains(sent, want) {
-					t.Errorf("added %s, want it to carry %s", sent, want)
-				}
+			if got := server.policies.names(); !slices.Equal(got, []string{testPolicyID}) {
+				t.Fatalf("the service principal carries %v, want just %s", got, testPolicyID)
+			}
+			stored := server.policies.held[testPolicyID].OidcPolicy
+			if !trusts(stored, testIssuer, testSubject, testAudience) {
+				t.Errorf("the policy says %+v, want the issuer, subject and the one audience "+
+					"this operator hands out", stored)
 			}
 		})
+	}
+}
+
+// TestAPolicyDatabricksNamedGoesWhenTheNamedOneIsWritten covers the account as
+// it is rather than as it would be if this operator had always named its
+// policies.
+//
+// A service principal issued before then carries a policy under a name
+// Databricks chose, saying what the named one says. Left there it is the
+// duplicate a name exists to prevent, on every identity that was ever issued,
+// and nobody would ever clean one up.
+func TestAPolicyDatabricksNamedGoesWhenTheNamedOneIsWritten(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, policies: &policyAccount{
+		caughtUp: true,
+		held: policiesHeld(
+			trusting(assignedPolicyPrefix+"1", testIssuer, testSubject, testAudience),
+			trusting("another-cluster", "https://oidc.example/other", testSubject, testAudience),
+		),
+	}}
+	c := server.clients()
+
+	if err := c.EnsureFederationPolicy(context.Background(), "7788",
+		testIssuer, testSubject, testAudience); err != nil {
+		t.Fatal(err)
+	}
+	if got := server.policies.names(); !slices.Equal(got, []string{"another-cluster", testPolicyID}) {
+		t.Errorf("the service principal carries %v; the policy this cluster wrote for this "+
+			"subject before it named its own has to go, and another cluster's has to stay", got)
 	}
 }
 
 // TestRemovingPoliciesTakesEveryPolicyThisClusterWroteAndLeavesTheRest covers
 // what a removal is allowed to reach.
 //
-// Matched on issuer and subject and not on the audience, which is the one way
-// this differs from the create beside it: a policy naming an audience this
-// operator no longer hands out is still one a token minted for that audience
-// satisfies, so leaving it would leave the exchange open under an older name.
-// Another cluster's issuer and another workload's subject are not this
-// removal's to touch -- somebody put them there deliberately, and the service
-// principal is still theirs to reach.
+// Matched on issuer and subject and not on the audience: a policy naming an
+// audience this operator no longer hands out is still one a token minted for
+// that audience satisfies, so leaving it would leave the exchange open under an
+// older name. Another cluster's issuer and another workload's subject are not
+// this removal's to touch -- somebody put them there deliberately, and the
+// service principal is still theirs to reach.
 func TestRemovingPoliciesTakesEveryPolicyThisClusterWroteAndLeavesTheRest(t *testing.T) {
 	t.Parallel()
-	server := &stubAccount{t: t, answer: map[string]string{
-		"GET " + federationPoliciesAPI("7788"): `{"policies":[
-			{"policy_id":"current","oidc_policy":{"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}},
-			{"policy_id":"older-audience","oidc_policy":{"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["was-the-audience"]}},
-			{"policy_id":"another-cluster","oidc_policy":{"issuer":"https://oidc.example/other","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}},
-			{"policy_id":"another-workload","oidc_policy":{"issuer":"` + testIssuer + `","subject":"system:serviceaccount:team-b:loader","audiences":["` + testAudience + `"]}}
-		]}`,
+	server := &stubAccount{t: t, policies: &policyAccount{
+		caughtUp: true,
+		held: policiesHeld(
+			trusting(testPolicyID, testIssuer, testSubject, testAudience),
+			trusting(assignedPolicyPrefix+"1", testIssuer, testSubject, "was-the-audience"),
+			trusting("another-cluster", "https://oidc.example/other", testSubject, testAudience),
+			trusting("another-workload", testIssuer, "system:serviceaccount:team-b:loader", testAudience),
+		),
 	}}
 	c := server.clients()
 
@@ -304,17 +493,34 @@ func TestRemovingPoliciesTakesEveryPolicyThisClusterWroteAndLeavesTheRest(t *tes
 		t.Fatal(err)
 	}
 
-	var deleted []string
-	for _, made := range server.calls {
-		if made.method == "DELETE" {
-			deleted = append(deleted, strings.TrimPrefix(made.path, federationPoliciesAPI("7788")+"/"))
-		}
+	want := []string{"another-cluster", "another-workload"}
+	if got := server.policies.names(); !slices.Equal(got, want) {
+		t.Errorf("the service principal carries %v, want %v -- anything of this cluster's left is "+
+			"trust it still has, and anything missing is trust somebody else put there", got, want)
 	}
-	slices.Sort(deleted)
-	want := []string{"current", "older-audience"}
-	if !slices.Equal(deleted, want) {
-		t.Errorf("deleted %v, want %v -- anything missing is trust this cluster still has, and "+
-			"anything extra is trust somebody else put there", deleted, want)
+}
+
+// TestAPolicyDatabricksNamedIsStillRemoved covers a service principal issued
+// before this operator named its policies.
+//
+// Its policy answers to no name a removal can ask for, so the listing is the
+// only thing that finds it. A removal that went by name alone would report
+// nothing left while the exchange it was called to end still worked.
+func TestAPolicyDatabricksNamedIsStillRemoved(t *testing.T) {
+	t.Parallel()
+	server := &stubAccount{t: t, policies: &policyAccount{
+		caughtUp: true,
+		held: policiesHeld(
+			trusting(assignedPolicyPrefix+"1", testIssuer, testSubject, testAudience)),
+	}}
+	c := server.clients()
+
+	if err := c.RemoveFederationPolicies(context.Background(), "7788", testIssuer, testSubject); err != nil {
+		t.Errorf("error is %v; the name this cluster would write is not there, which is not a "+
+			"failure of a removal", err)
+	}
+	if got := server.policies.names(); len(got) != 0 {
+		t.Errorf("the service principal carries %v; this cluster can still be exchanged for it", got)
 	}
 }
 
@@ -322,22 +528,19 @@ func TestRemovingPoliciesTakesEveryPolicyThisClusterWroteAndLeavesTheRest(t *tes
 // asked for.
 //
 // A removal that failed partway, or one made twice because the namespace changed
-// hands, finds policies it already deleted. If that were a failure the record
-// would report the removal as unfinished for ever, and the account it left
-// would never say it had let go.
+// hands, finds policies it already deleted -- and a listing goes on naming one
+// after it is gone. If that were a failure the record would report the removal
+// as unfinished for ever, and the account it left would never say it had let go.
 func TestAPolicyThatIsAlreadyGoneIsRemoved(t *testing.T) {
 	t.Parallel()
-	server := &stubAccount{
-		t: t,
-		answer: map[string]string{
-			"GET " + federationPoliciesAPI("7788"): `{"policies":[{"policy_id":"p1","oidc_policy":{
-				"issuer":"` + testIssuer + `","subject":"` + testSubject + `","audiences":["` + testAudience + `"]}}]}`,
-		},
-		status: map[string]int{
-			"DELETE " + federationPoliciesAPI("7788") + "/p1": 404,
-		},
-	}
+	server := &stubAccount{t: t, policies: &policyAccount{
+		held: policiesHeld(
+			trusting(assignedPolicyPrefix+"1", testIssuer, testSubject, testAudience)),
+	}}
 	c := server.clients()
+	// Deleted after the reads were taken, so the listing goes on naming a policy
+	// the account no longer has.
+	delete(server.policies.held, assignedPolicyPrefix+"1")
 
 	if err := c.RemoveFederationPolicies(context.Background(), "7788", testIssuer, testSubject); err != nil {
 		t.Errorf("error is %v; the trust is gone, which is what was asked for", err)

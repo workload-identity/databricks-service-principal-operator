@@ -20,10 +20,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/databricks/databricks-sdk-go/apierr"
 	"github.com/databricks/databricks-sdk-go/service/iam"
 	"github.com/databricks/databricks-sdk-go/service/oauth2"
 )
@@ -183,10 +185,60 @@ func MarkerFor(issuing Issuing) string {
 func ClusterMarker(issuer string) string { return part(issuer) }
 
 // part is 12 characters of a hash, which is 60 bits.
-func part(of string) string {
+func part(of string) string { return truncatedHash(of, markerLimit/3) }
+
+// truncatedHash is the first characters of a hash, in base32 because externalId
+// and a policy id both hold text and neither holds every byte.
+//
+// The width is the caller's, and each caller has its own reason for the one it
+// asks for. A value written into Databricks and looked for by a later pass stops
+// being findable the day its width changes, so no two of them may be made to
+// move together.
+func truncatedHash(of string, width int) string {
 	sum := sha256.Sum256([]byte(of))
-	return base32.StdEncoding.WithPadding(base32.NoPadding).
-		EncodeToString(sum[:])[:markerLimit/3]
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])[:width]
+}
+
+// federationPolicyIDPrefix says a policy id was chosen here rather than assigned
+// by Databricks, for a person reading an account's policies. Databricks assigns
+// something opaque, so a policy carrying this is one that something on this side
+// can name again.
+const federationPolicyIDPrefix = "k8s-"
+
+// federationPolicyIDPart is 12 characters of a hash, which is 60 bits. It is
+// spelled here rather than taken from part's width: that one is a third of what
+// externalId holds, a Databricks limit this has nothing to do with, and the day
+// that limit were measured again would be the day every policy already written
+// stopped answering to its name.
+const federationPolicyIDPart = 12
+
+// FederationPolicyIDFor names the policy that says this cluster trusts one
+// subject on one service principal.
+//
+// A name is what makes writing the policy twice writing one policy. A create
+// carrying it either makes that policy or is refused because it is already
+// there, and both answers are the one the caller wanted -- where a create that
+// first asks a listing whether to create makes a second policy every time the
+// listing has not caught up, which is every first convergence, because the
+// controller writes status twice and the second pass arrives in milliseconds.
+//
+// Keyed on the issuer and the subject and deliberately not on the audience,
+// which is the pair RemoveFederationPolicies matches on and for its reason: a
+// policy naming an audience this operator no longer hands out is still one that
+// a token minted for that audience satisfies, so the two are one policy and not
+// two. Keying the name on the audience as well would make a reissued operator
+// token write a second policy beside the first rather than restate the one that
+// is there -- the duplicate this exists to end, arriving by another road.
+//
+// Hashed, because neither part can be spelled in an id: Databricks takes
+// lowercase alphanumerics, hyphens and slashes, and a subject is
+// "system:serviceaccount:ns:name" while an issuer is a URL. Lower cased for the
+// same reason, base32 being upper. The issuer's part comes first and alone, for
+// the reason it does in MarkerFor: what every policy one cluster wrote shares is
+// then a prefix somebody reading a service principal's policies can pick out.
+func FederationPolicyIDFor(issuer, subject string) string {
+	return federationPolicyIDPrefix + strings.ToLower(
+		truncatedHash(issuer, federationPolicyIDPart)+truncatedHash(subject, federationPolicyIDPart))
 }
 
 // CreateServicePrincipal makes one for a subject and returns its numeric id and
@@ -351,43 +403,147 @@ func (c *clients) DeleteServicePrincipal(ctx context.Context, servicePrincipalID
 
 // EnsureFederationPolicy makes the token exchange work for one subject.
 //
-// Policies live under a service principal and there is no account-level lookup
-// by subject, so this lists the ones on that principal and adds nothing if the
-// subject is already trusted. Several service principals may trust the same
-// subject -- verified -- so this says nothing about any other.
+// The policy is named rather than looked for. FederationPolicyIDFor derives its
+// id from the issuer and the subject, so the trust in one subject on one service
+// principal has one name and a second call writes that name again instead of
+// making a second policy. No listing decides whether to create: the controller
+// writes status twice on a first convergence, so the second pass arrives
+// milliseconds after the first and reads a listing that does not yet carry what
+// the first one wrote -- and a create decided from that listing is a duplicate
+// on every identity this operator issues.
+//
+// Three answers, and each of them is this call's promise kept. The named policy
+// is there and says what it should, so nothing is written. It is not there, so
+// it is created. It is there naming another audience -- the operator's own token
+// was reissued for one -- so it is restated to name this one. A create refused
+// because the name is taken is the third of those reached by another road, and
+// answered the same way.
+//
+// Several service principals may trust the same subject -- verified -- so this
+// says nothing about any other. A policy id names a policy under one service
+// principal, so two of them carrying the same name is two policies.
 func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID, issuer, subject, audience string) error {
 	numeric, err := strconv.ParseInt(servicePrincipalID, 10, 64)
 	if err != nil {
 		return &ErrMalformedCoordinate{Field: "servicePrincipalId", Value: servicePrincipalID, Cause: err}
 	}
+	policyID := FederationPolicyIDFor(issuer, subject)
 
-	existing, err := c.accountClient.ServicePrincipalFederationPolicy.ListByServicePrincipalId(ctx, numeric)
-	if err != nil {
-		return fmt.Errorf("listing the federation policies on service principal %s: %w", servicePrincipalID, err)
-	}
-	for _, policy := range existing.Policies {
-		if trusts(policy.OidcPolicy, issuer, subject, audience) {
+	standing, err := c.accountClient.ServicePrincipalFederationPolicy.
+		GetByServicePrincipalIdAndPolicyId(ctx, numeric, policyID)
+	switch {
+	case err == nil:
+		if trusts(standing.OidcPolicy, issuer, subject, audience) {
 			return nil
 		}
+		return c.restateFederationPolicy(ctx, numeric, servicePrincipalID, policyID, issuer, subject, audience)
+	case KindOf(err) != NotFound:
+		return fmt.Errorf("looking for policy %s, which is what trusts %s on service principal %s: %w",
+			policyID, subject, servicePrincipalID, err)
 	}
 
-	_, err = c.accountClient.ServicePrincipalFederationPolicy.Create(ctx,
+	created, err := c.accountClient.ServicePrincipalFederationPolicy.Create(ctx,
 		oauth2.CreateServicePrincipalFederationPolicyRequest{
 			ServicePrincipalId: numeric,
-			Policy: oauth2.FederationPolicy{
-				Description: "Kubernetes workload " + subject,
-				OidcPolicy: &oauth2.OidcFederationPolicy{
-					Issuer:    issuer,
-					Subject:   subject,
-					Audiences: []string{audience},
-				},
-			},
+			PolicyId:           policyID,
+			Policy:             federationPolicyFor(issuer, subject, audience),
+		})
+	switch {
+	case err == nil:
+		// Databricks named the policy something else, so it did not take the
+		// name it was given and nothing here can address what it made. Reported
+		// rather than carried on with: every pass after this one would look for
+		// a name that is not there and create again, which is a policy per pass
+		// per identity with nothing saying so.
+		//
+		// Read only when Databricks says something. An answer carrying no
+		// policy_id says nothing about the name, and refusing on that would
+		// refuse every create.
+		if created.PolicyId != "" && created.PolicyId != policyID {
+			return fmt.Errorf(
+				"the policy trusting %s on service principal %s was asked to be named %s "+
+					"and Databricks named it %s, so nothing here can find it again",
+				subject, servicePrincipalID, policyID, created.PolicyId)
+		}
+	case alreadyExists(err):
+		if err := c.restateFederationPolicy(
+			ctx, numeric, servicePrincipalID, policyID, issuer, subject, audience); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("trusting %s on service principal %s: %w", subject, servicePrincipalID, err)
+	}
+
+	// Whatever else this cluster wrote for this subject goes with the naming of
+	// it. A service principal can carry a policy Databricks named -- an account
+	// holds what earlier operators put in it -- and that one answers to no name
+	// this can ask for, so the listing is the only thing that finds it. Left
+	// beside the named one it is a second policy saying what the first says, on
+	// that identity, for as long as the identity lives.
+	//
+	// Only on the road where the name was not already standing, so the listing
+	// is read on the pass that first writes the name and on no pass after it.
+	// The alternative is one listing per identity per pass, for ever.
+	//
+	// Its failure is not this call's. The trust this promises is in place by the
+	// time this runs, and reporting a cleanup that could not be finished as a
+	// failed write would take an identity that works and report it broken. What
+	// is left instead is a policy saying what the named one says, which the
+	// removal takes with the rest.
+	_ = c.removeListedPolicies(ctx, numeric, servicePrincipalID, issuer, subject, policyID)
+	return nil
+}
+
+// restateFederationPolicy writes what the named policy should say over what it
+// says now.
+//
+// The audience is the only thing that can have drifted. The issuer and the
+// subject are what the name is derived from and the description is derived from
+// the subject, so a policy found under this name and differing from what would
+// be written for it differs in the audience or in nothing -- which is what the
+// mask names, and why it names nothing else.
+func (c *clients) restateFederationPolicy(ctx context.Context, numeric int64,
+	servicePrincipalID, policyID, issuer, subject, audience string) error {
+	_, err := c.accountClient.ServicePrincipalFederationPolicy.Update(ctx,
+		oauth2.UpdateServicePrincipalFederationPolicyRequest{
+			ServicePrincipalId: numeric,
+			PolicyId:           policyID,
+			UpdateMask:         "oidc_policy",
+			Policy:             federationPolicyFor(issuer, subject, audience),
 		})
 	if err != nil {
-		return fmt.Errorf("trusting %s on service principal %s: %w", subject, servicePrincipalID, err)
+		return fmt.Errorf("restating policy %s, which is what trusts %s on service principal %s, "+
+			"to name audience %q: %w", policyID, subject, servicePrincipalID, audience, err)
 	}
 	return nil
 }
+
+// federationPolicyFor is the whole of what this operator says a policy is,
+// spelled once so that a create and a restatement cannot come to say different
+// things about the same name.
+func federationPolicyFor(issuer, subject, audience string) oauth2.FederationPolicy {
+	return oauth2.FederationPolicy{
+		Description: "Kubernetes workload " + subject,
+		OidcPolicy: &oauth2.OidcFederationPolicy{
+			Issuer:    issuer,
+			Subject:   subject,
+			Audiences: []string{audience},
+		},
+	}
+}
+
+// alreadyExists is a create refused because the name it asked for is taken.
+//
+// It is not a failure of the call that made it. The name is derived from the
+// issuer and the subject, so whatever stands under it is what this was asking
+// for, and a create is refused this way exactly when the pass before it got
+// there first. The SDK maps ALREADY_EXISTS and RESOURCE_ALREADY_EXISTS onto the
+// same sentinel it maps a bare 409 onto, so one test answers for the error code
+// and for the status alike.
+//
+// Not a FailureKind. A kind is what a controller branches on, and no controller
+// has anything to do about this that is not done where it is caught.
+func alreadyExists(err error) bool { return errors.Is(err, apierr.ErrResourceConflict) }
 
 // RemoveFederationPolicies takes back the one thing a cluster can take back.
 //
@@ -397,44 +553,64 @@ func (c *clients) EnsureFederationPolicy(ctx context.Context, servicePrincipalID
 // may be exchanged at all -- and with it, the exchange. The service principal
 // stays, and so does everything granted to it.
 //
-// Matched on issuer and subject, where the create beside it also compares the
-// audience. A policy naming an audience this operator no longer hands out is
-// still one that a token minted for that audience satisfies, so matching the
-// current audience would leave the exchange open under an older name.
+// The named policy goes first and without being looked for, because a name can
+// be deleted whether or not anything has listed it yet. A namespace that stops
+// being served moments after an identity was issued is a removal reading a
+// listing that has not caught up, and a removal taking its whole answer from one
+// reports success over trust still standing.
 //
-// Every page is read, where EnsureFederationPolicy takes the first one.
-// Returning nil here claims that nothing of this cluster's is left on that
-// service principal, and a policy past a page boundary would make the claim
-// false while the call reported success. Ensure's worst case at the same
-// boundary is a second policy saying what the first says, which this removes.
-//
-// A policy already gone is not a failure. A removal that lost its namespace
-// partway through and is retried finds some of its policies already deleted, and
-// that is the answer it wanted, not an error to report over work that is done.
+// Then the listing, for everything else this cluster wrote for the subject. A
+// policy Databricks named answers to no name this can ask for, and an account
+// holds what earlier operators put in it, so nothing but a listing finds one.
+// Returning nil claims that nothing of this cluster's is left on that service
+// principal, and it takes both reads to make the claim true.
 func (c *clients) RemoveFederationPolicies(ctx context.Context, servicePrincipalID, issuer, subject string) error {
 	numeric, err := strconv.ParseInt(servicePrincipalID, 10, 64)
 	if err != nil {
 		return &ErrMalformedCoordinate{Field: "servicePrincipalId", Value: servicePrincipalID, Cause: err}
 	}
 
-	existing, err := c.accountClient.ServicePrincipalFederationPolicy.ListAll(ctx,
+	named := FederationPolicyIDFor(issuer, subject)
+	if err := c.forgetPolicy(ctx, numeric, named); err != nil {
+		return fmt.Errorf("removing the trust in %s on service principal %s: %w",
+			subject, servicePrincipalID, err)
+	}
+	return c.removeListedPolicies(ctx, numeric, servicePrincipalID, issuer, subject, named)
+}
+
+// removeListedPolicies deletes every policy on this service principal that names
+// this issuer and this subject, except the one already dealt with by name.
+//
+// What counts as one of this cluster's policies for a subject is decided here
+// and nowhere else, and the call that writes a policy and the call that takes
+// one back read it the same way. The two disagreeing would mean one of them
+// reaching a policy the other would not.
+//
+// Matched on issuer and subject, and not on the audience. A policy naming an
+// audience this operator no longer hands out is still one that a token minted
+// for that audience satisfies, so matching the current audience would leave the
+// exchange open under an older name. Another cluster's issuer and another
+// workload's subject are not this operator's to touch -- somebody put them there
+// deliberately, and the service principal is still theirs to reach.
+//
+// Every page is read. Returning nil claims that nothing of this cluster's is
+// left, and a policy past a page boundary would make the claim false while the
+// call reported success.
+func (c *clients) removeListedPolicies(ctx context.Context, numeric int64,
+	servicePrincipalID, issuer, subject, except string) error {
+	listed, err := c.accountClient.ServicePrincipalFederationPolicy.ListAll(ctx,
 		oauth2.ListServicePrincipalFederationPoliciesRequest{ServicePrincipalId: numeric})
 	if err != nil {
 		return fmt.Errorf("listing the federation policies on service principal %s: %w",
 			servicePrincipalID, err)
 	}
 
-	for _, policy := range existing {
-		if policy.OidcPolicy == nil ||
+	for _, policy := range listed {
+		if policy.PolicyId == except || policy.OidcPolicy == nil ||
 			policy.OidcPolicy.Issuer != issuer || policy.OidcPolicy.Subject != subject {
 			continue
 		}
-		err := c.accountClient.ServicePrincipalFederationPolicy.Delete(ctx,
-			oauth2.DeleteServicePrincipalFederationPolicyRequest{
-				ServicePrincipalId: numeric,
-				PolicyId:           policy.PolicyId,
-			})
-		if err != nil && KindOf(err) != NotFound {
+		if err := c.forgetPolicy(ctx, numeric, policy.PolicyId); err != nil {
 			// Stopped at the first one that did not go, rather than carried on
 			// and summarised. The caller reports this as trust still in place,
 			// which is true of the one that failed and of everything after it,
@@ -442,6 +618,22 @@ func (c *clients) RemoveFederationPolicies(ctx context.Context, servicePrincipal
 			return fmt.Errorf("removing the trust in %s on service principal %s: %w",
 				subject, servicePrincipalID, err)
 		}
+	}
+	return nil
+}
+
+// forgetPolicy deletes one policy by name.
+//
+// A policy already gone is not a failure. A removal that lost its namespace
+// partway through and is retried finds some of its policies already deleted, and
+// a removal by a name nothing ever wrote finds nothing at all. Both are the
+// answer that was wanted, not an error to report over work that is done or was
+// never there to do.
+func (c *clients) forgetPolicy(ctx context.Context, numeric int64, policyID string) error {
+	if err := c.accountClient.ServicePrincipalFederationPolicy.
+		DeleteByServicePrincipalIdAndPolicyId(ctx, numeric, policyID); err != nil &&
+		KindOf(err) != NotFound {
+		return err
 	}
 	return nil
 }

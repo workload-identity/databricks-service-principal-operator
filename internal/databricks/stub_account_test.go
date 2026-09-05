@@ -17,14 +17,19 @@ limitations under the License.
 package databricks
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/databricks/databricks-sdk-go"
 	"github.com/databricks/databricks-sdk-go/config"
+	"github.com/databricks/databricks-sdk-go/service/oauth2"
 )
 
 // call is one request the operator made.
@@ -65,6 +70,16 @@ type stubAccount struct {
 	// else would be tested against a server that only ever says one thing.
 	status map[string]int
 
+	// policies is the federation policies on the service principals, served
+	// from a store rather than from the table above. Nil unless a test sets
+	// one, and everything else goes on being answered from the table.
+	//
+	// A table cannot answer what these calls are about. What they promise is
+	// that two of them leave one policy, and a route answering the same string
+	// however often it is asked cannot tell the promise kept from the promise
+	// broken -- it says one policy is there whether the calls made one or three.
+	policies *policyAccount
+
 	calls []call
 }
 
@@ -77,11 +92,18 @@ type stubAccount struct {
 var refusals = map[int]string{
 	403: `{"error_code":"PERMISSION_DENIED","message":"the caller is not permitted to do this"}`,
 	404: `{"error_code":"RESOURCE_DOES_NOT_EXIST","message":"not there"}`,
+	409: `{"error_code":"ALREADY_EXISTS","message":"a policy with this id is already there"}`,
 	500: `{"error_code":"INTERNAL_ERROR","message":"an invariant on our side was broken"}`,
 }
 
 func (r *stubAccount) clients() *clients {
 	r.t.Helper()
+	if r.policies != nil {
+		if r.policies.held == nil {
+			r.policies.held = map[string]oauth2.FederationPolicy{}
+		}
+		r.policies.visible = maps.Clone(r.policies.held)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		body, _ := io.ReadAll(req.Body)
 		if strings.Contains(req.URL.Path, "well-known") {
@@ -116,6 +138,10 @@ func (r *stubAccount) clients() *clients {
 			}
 			w.WriteHeader(code)
 			_, _ = w.Write([]byte(body))
+			return
+		}
+		if r.policies != nil && strings.Contains(req.URL.Path, "/federationPolicies") {
+			r.policies.serve(r.t, w, req, string(body))
 			return
 		}
 		answer, ok := r.answer[narrowedTo(req.URL.Path, filter)]
@@ -209,4 +235,150 @@ func (r *stubAccount) wrote(path string) string {
 		r.t.Fatalf("made %d writes to %s, want 1: %+v", len(bodies), path, r.calls)
 	}
 	return bodies[0]
+}
+
+// assignedPolicyPrefix begins the names this account gives a policy whose create
+// asked for none, which is what every policy written before this operator named
+// its own carries.
+const assignedPolicyPrefix = "databricks-assigned-"
+
+// policyAccount is the federation policies on a service principal, held the way
+// an account holds them: under the name the create gave, one policy to a name.
+//
+// Keyed by name rather than kept in a list, because the name is the whole of
+// what these calls rest on. A fixture that appended would hold two policies
+// after one name was written twice and could not tell that from the account
+// refusing the second, which is the difference every test here is about.
+type policyAccount struct {
+	// held is what the account has. Every write lands here at once.
+	held map[string]oauth2.FederationPolicy
+
+	// visible is what a read answers from: what was held before the test wrote
+	// anything. Reads being behind writes is the account the controller's second
+	// pass meets, milliseconds after its first, and the reason a policy is named
+	// rather than looked for.
+	//
+	// caughtUp puts the two back together, for the tests whose subject is not
+	// that window.
+	visible  map[string]oauth2.FederationPolicy
+	caughtUp bool
+
+	// namesPoliciesItself makes the account ignore the name a create asks for
+	// and assign one, as it does for a create that asks for none. It is the one
+	// thing this design rests on that cannot be checked from here, so it is
+	// arranged instead: what the operator does when Databricks does not take the
+	// name is something a test can say.
+	namesPoliciesItself bool
+
+	assigned int
+}
+
+// serve answers the federation policy calls against the store.
+//
+// The whole request body replaces what is held, where Databricks would apply the
+// update mask. The two agree here because this operator states every field a
+// policy has whenever it writes one; a caller that sent part of a policy would
+// be testing against an account that does not exist.
+func (p *policyAccount) serve(t *testing.T, w http.ResponseWriter, req *http.Request, body string) {
+	_, name, addressed := strings.Cut(req.URL.Path, "/federationPolicies/")
+	switch {
+	case req.Method == http.MethodPost:
+		asked := req.URL.Query().Get("policy_id")
+		if asked == "" || p.namesPoliciesItself {
+			p.assigned++
+			asked = fmt.Sprintf("%s%d", assignedPolicyPrefix, p.assigned)
+		}
+		if _, taken := p.held[asked]; taken {
+			refuse(w, http.StatusConflict)
+			return
+		}
+		p.held[asked] = policyFrom(t, body, asked)
+		answer(t, w, p.held[asked])
+	case addressed && req.Method == http.MethodGet:
+		policy, there := p.readable()[name]
+		if !there {
+			refuse(w, http.StatusNotFound)
+			return
+		}
+		answer(t, w, policy)
+	case addressed && req.Method == http.MethodPatch:
+		if _, there := p.held[name]; !there {
+			refuse(w, http.StatusNotFound)
+			return
+		}
+		p.held[name] = policyFrom(t, body, name)
+		answer(t, w, p.held[name])
+	case addressed && req.Method == http.MethodDelete:
+		if _, there := p.held[name]; !there {
+			refuse(w, http.StatusNotFound)
+			return
+		}
+		delete(p.held, name)
+		answer(t, w, struct{}{})
+	case req.Method == http.MethodGet:
+		// Sorted, so that a test naming what was deleted first is naming
+		// something the fixture decides rather than something the map does.
+		listing := oauth2.ListFederationPoliciesResponse{}
+		for _, held := range slices.Sorted(maps.Keys(p.readable())) {
+			listing.Policies = append(listing.Policies, p.readable()[held])
+		}
+		answer(t, w, listing)
+	default:
+		t.Errorf("nothing here answers %s %s", req.Method, req.URL.Path)
+	}
+}
+
+// readable is what a read sees, which is not what the account holds until it has
+// caught up.
+func (p *policyAccount) readable() map[string]oauth2.FederationPolicy {
+	if p.caughtUp {
+		return p.held
+	}
+	return p.visible
+}
+
+// names is what the account holds, in order, for a test to compare against.
+func (p *policyAccount) names() []string { return slices.Sorted(maps.Keys(p.held)) }
+
+// trusting is one policy as the account holds it, built through the same
+// function the operator writes one with so that a fixture cannot say a policy is
+// there in a shape the operator would never have written.
+func trusting(name, issuer, subject, audience string) oauth2.FederationPolicy {
+	policy := federationPolicyFor(issuer, subject, audience)
+	policy.PolicyId = name
+	return policy
+}
+
+// policiesHeld keys policies by their name, which is how an account holds them.
+func policiesHeld(policies ...oauth2.FederationPolicy) map[string]oauth2.FederationPolicy {
+	held := make(map[string]oauth2.FederationPolicy, len(policies))
+	for _, policy := range policies {
+		held[policy.PolicyId] = policy
+	}
+	return held
+}
+
+func policyFrom(t *testing.T, body, name string) oauth2.FederationPolicy {
+	var policy oauth2.FederationPolicy
+	if err := json.Unmarshal([]byte(body), &policy); err != nil {
+		t.Errorf("the request body is not a federation policy: %v: %s", err, body)
+	}
+	policy.PolicyId = name
+	return policy
+}
+
+func answer(t *testing.T, w http.ResponseWriter, body any) {
+	written, err := json.Marshal(body)
+	if err != nil {
+		t.Errorf("the fixture cannot say %+v: %v", body, err)
+		return
+	}
+	_, _ = w.Write(written)
+}
+
+// refuse answers with the body that goes with the status, for the reason
+// refusals gives: the SDK reads the error code before the status.
+func refuse(w http.ResponseWriter, code int) {
+	w.WriteHeader(code)
+	_, _ = w.Write([]byte(refusals[code]))
 }

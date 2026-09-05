@@ -77,6 +77,10 @@ type Clients interface {
 
 	// EnsureFederationPolicy makes a subject's token exchangeable for that
 	// service principal's, adding nothing if it already is.
+	//
+	// The policy carries a name derived from the issuer and the subject, so a
+	// second call for one subject writes that name again rather than a second
+	// policy, whatever a listing says; see FederationPolicyIDFor.
 	EnsureFederationPolicy(ctx context.Context, servicePrincipalID, issuer, subject, audience string) error
 
 	// RemoveFederationPolicies makes it unexchangeable again, and is the only
