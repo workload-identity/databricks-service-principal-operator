@@ -165,12 +165,20 @@ func clearManagerNamespace() {
 		"-l", "control-plane=controller-manager", "--ignore-not-found", "--wait=true")
 	_, _ = run(cmd)
 
-	cmd = exec.Command("kubectl", "get", "issueddatabricksserviceprincipal",
-		"-n", managerNamespace, "--ignore-not-found", "-o", "name")
-	records, err := run(cmd)
-	if err == nil {
-		for _, record := range nonEmptyLines(records) {
-			cmd = exec.Command("kubectl", "patch", record, "-n", managerNamespace,
+	// Both kinds this operator holds with a finalizer. A record's is what the
+	// comment above is about; the DatabricksAccount's holds the object for as
+	// long as any record still names that account, and with the operator
+	// stopped nothing is left to decide that none do. Either one left held keeps
+	// the namespace terminating for as long as the cluster lives.
+	for _, kind := range []string{"issueddatabricksserviceprincipal", "databricksaccount"} {
+		cmd = exec.Command("kubectl", "get", kind,
+			"-n", managerNamespace, "--ignore-not-found", "-o", "name")
+		held, err := run(cmd)
+		if err != nil {
+			continue
+		}
+		for _, object := range nonEmptyLines(held) {
+			cmd = exec.Command("kubectl", "patch", object, "-n", managerNamespace,
 				"--type", "merge", "-p", `{"metadata":{"finalizers":null}}`)
 			_, _ = run(cmd)
 		}
@@ -178,7 +186,7 @@ func clearManagerNamespace() {
 
 	cmd = exec.Command("kubectl", "delete", "namespace", managerNamespace,
 		"--ignore-not-found", "--wait=true", "--timeout=2m")
-	_, err = run(cmd)
+	_, err := run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(),
 		"the manager namespace would not go; a run against this cluster cannot deploy until it has")
 }
