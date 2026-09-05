@@ -45,6 +45,7 @@ var conditionTypes = map[string]string{
 	"conditionPrepared":            "Prepared",
 	"conditionRecordsReleased":     "RecordsReleased",
 	"conditionIdentitiesDestroyed": "IdentitiesDestroyed",
+	"conditionRequestsServed":      "RequestsServed",
 }
 
 var conditionReasons = map[string]string{
@@ -71,10 +72,12 @@ var conditionReasons = map[string]string{
 	"reasonIdentitiesDestroyed":      "IdentitiesDestroyed",
 	"reasonDestroyingIdentities":     "DestroyingIdentities",
 	"reasonAwaitingServicePrincipal": "AwaitingServicePrincipal",
+	"reasonRequestsServed":           "RequestsServed",
+	"reasonRequestsNotServed":        "RequestsNotServed",
 }
 
 // TestEveryConditionTypeAndReasonIsTheStringItWas holds the published spelling
-// of all 28 constants against an accidental edit.
+// of all 31 constants against an accidental edit.
 func TestEveryConditionTypeAndReasonIsTheStringItWas(t *testing.T) {
 	t.Parallel()
 	declared := conditionConstantsIn(t, "conditions.go")
@@ -106,8 +109,8 @@ func TestEveryConditionTypeAndReasonIsInTheTable(t *testing.T) {
 	t.Parallel()
 	declared := conditionConstantsIn(t, "conditions.go")
 
-	if len(conditionTypes) != 5 || len(conditionReasons) != 23 {
-		t.Errorf("the table holds %d condition types and %d reasons, want 5 and 23",
+	if len(conditionTypes) != 6 || len(conditionReasons) != 25 {
+		t.Errorf("the table holds %d condition types and %d reasons, want 6 and 25",
 			len(conditionTypes), len(conditionReasons))
 	}
 	if len(declared) != len(conditionTypes)+len(conditionReasons) {

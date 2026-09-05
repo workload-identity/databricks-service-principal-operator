@@ -101,6 +101,37 @@ const (
 	// account nobody can reach is visible: the promise this list makes is
 	// eventual, and this is what says how far from kept it is.
 	conditionIdentitiesDestroyed = "IdentitiesDestroyed"
+
+	// conditionRequestsServed, on a DatabricksAccount, says whether every request
+	// this operator can see is in a namespace this account names.
+	//
+	// It is the only place a request this account does not serve is visible at
+	// all. A ServiceAccount annotated in a namespace spec.namespaces does not
+	// name gets no DatabricksServiceAccount, no condition and no event, and that
+	// silence is deliberate -- an operator that wrote an object into every
+	// namespace that ever named it would be writing into namespaces nobody gave
+	// it. What the silence costs falls on both sides at once: the team that asked
+	// has nothing to read, and whoever holds this account cannot see that anybody
+	// is asking.
+	//
+	// The second half is what this is for. Taking a namespace off the list
+	// destroys the identities in it, so a team that wants one back is asking for
+	// something only an edit here grants -- and without this, that edit is made
+	// against a list nothing anywhere argues with.
+	//
+	// Not conditionIdentitiesDestroyed, which reports the other fact about the
+	// same namespaces: identities this account issued there and is destroying.
+	// These were never issued. Folded together they would make a namespace being
+	// emptied indistinguishable from one that was never served, which are
+	// answered by opposite edits.
+	//
+	// It says nothing about MintLabel. A namespace this account names whose
+	// Namespace object carries no mint label is refused by the cluster and not by
+	// this account, and that refusal is given to every operator serving the
+	// namespace at once -- so reporting it here would put this account's name on
+	// somebody else's decision, on a status only this account's holder can act
+	// on.
+	conditionRequestsServed = "RequestsServed"
 )
 
 // Condition reasons. They are part of the status API -- people match on them and
@@ -228,6 +259,19 @@ const (
 	// not, with the message naming which and how many identities are left in it.
 	reasonIdentitiesDestroyed  = "IdentitiesDestroyed"
 	reasonDestroyingIdentities = "DestroyingIdentities"
+
+	// reasonRequestsServed is every ServiceAccount asking this operator being in
+	// a namespace this account names; reasonRequestsNotServed is at least one
+	// that is not, with the message naming each namespace and how many are asking
+	// in it.
+	//
+	// Neither is a failure and neither is retried. Nothing this operator does
+	// moves it: what ends it is a namespace named in spec.namespaces, or whoever
+	// wrote the annotation taking it off, and both are people. So the account's
+	// own interval is left alone while it is False -- coming back sooner would
+	// re-read a cluster to say the same sentence again.
+	reasonRequestsServed    = "RequestsServed"
+	reasonRequestsNotServed = "RequestsNotServed"
 
 	// reasonAwaitingServicePrincipal is a DatabricksServiceAccount whose record
 	// exists and has not been acted on yet. It is the ordinary first moment of an

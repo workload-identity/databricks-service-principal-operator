@@ -803,3 +803,204 @@ func TestNotKnowingIsNotAnAnswerAboutANamespace(t *testing.T) {
 		})
 	}
 }
+
+// requestsServedCondition is what the account says about the requests it can see
+// and is not serving.
+func requestsServedCondition(t *testing.T, c client.Client) *metav1.Condition {
+	t.Helper()
+	var got dbxv1alpha1.DatabricksAccount
+	if err := c.Get(context.Background(), testOperatorRef, &got); err != nil {
+		t.Fatal(err)
+	}
+	return meta.FindStatusCondition(got.Status.Conditions, conditionRequestsServed)
+}
+
+// TestARequestThisAccountDoesNotServeIsCountedAndNamed covers the silence this
+// condition exists to end.
+//
+// A ServiceAccount annotated in a namespace spec.namespaces does not name
+// produces no DatabricksServiceAccount, no condition and no event: the team that
+// asked has nothing to read, and until this line existed neither did whoever
+// holds the account. Taking a namespace off that list destroys the identities in
+// it, so the team that wants one back has to be asking somebody -- and this is
+// the only place the asking arrives.
+func TestARequestThisAccountDoesNotServeIsCountedAndNamed(t *testing.T) {
+	t.Parallel()
+	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testSubject, testAudience),
+		func() error { return nil },
+		databricksAccountServing(),
+		mintingNamespace("team-b"),
+		asking("team-b", "etl"),
+		asking("team-b", "loader"))
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	served := requestsServedCondition(t, c)
+	if served == nil || served.Status != metav1.ConditionFalse {
+		t.Fatalf("RequestsServed is %v, want False: two ServiceAccounts are asking and nothing "+
+			"anywhere else says so", served)
+	}
+	if served.Reason != reasonRequestsNotServed {
+		t.Errorf("reason is %q, want %q", served.Reason, reasonRequestsNotServed)
+	}
+	if !strings.Contains(served.Message, "team-b (2)") {
+		t.Errorf("message is %q, want the namespace named and the count of who is asking there -- "+
+			"spec.namespaces takes a name, so a count without one is not something anybody can "+
+			"act on", served.Message)
+	}
+	// Both ways out, because they belong to different people: this account's
+	// holder names the namespace, and whoever annotated the ServiceAccount takes
+	// the annotation off.
+	if !strings.Contains(served.Message, "spec.namespaces") {
+		t.Errorf("message is %q, want the edit that serves them", served.Message)
+	}
+	if !strings.Contains(served.Message, dbxv1alpha1.ServicePrincipalAnnotation) {
+		t.Errorf("message is %q, want the annotation whoever asked would take off", served.Message)
+	}
+}
+
+// TestARequestInANamespaceThisAccountNamesIsNothingToReport covers the True side
+// and the one refusal that is deliberately not counted.
+//
+// The namespace is served and carries no mint label, so nothing is minted there
+// either -- and that is the cluster's answer to the team, made by somebody with
+// cluster-wide access and given to every operator serving the namespace at once.
+// Reporting it here would put this account's name on a decision its holder
+// cannot make and cannot undo.
+func TestARequestInANamespaceThisAccountNamesIsNothingToReport(t *testing.T) {
+	t.Parallel()
+	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testSubject, testAudience),
+		func() error { return nil },
+		databricksAccountServing(testNamespace),
+		namespaceNamed(testNamespace),
+		asking(testNamespace, testName))
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	served := requestsServedCondition(t, c)
+	if served == nil || served.Status != metav1.ConditionTrue {
+		t.Fatalf("RequestsServed is %v, want True: the namespace is named, and a namespace with no "+
+			"mint label is the cluster refusing rather than this account", served)
+	}
+	if served.Reason != reasonRequestsServed {
+		t.Errorf("reason is %q, want %q", served.Reason, reasonRequestsServed)
+	}
+	if strings.Contains(served.Message, testNamespace) {
+		t.Errorf("message is %q, want it to name no namespace: there is nothing here for anybody "+
+			"to act on", served.Message)
+	}
+	// True says what was checked rather than nothing. A condition whose True
+	// message is empty is one a reader cannot tell from one that has never run.
+	if !strings.Contains(served.Message, "spec.namespaces") {
+		t.Errorf("message is %q, want it to say what it checked against", served.Message)
+	}
+}
+
+// TestARequestNamingAnotherOperatorIsNotThisAccountsToReport is why the
+// annotations are read through RequestsFor rather than by matching keys.
+//
+// A cluster holds more than one of these operators, each with its own account
+// admin credential. A ServiceAccount asking one of them is not a request the
+// others are refusing, and counting it here would send this account's holder to
+// add a namespace on behalf of a team that never asked them.
+func TestARequestNamingAnotherOperatorIsNotThisAccountsToReport(t *testing.T) {
+	t.Parallel()
+	elsewhere := types.NamespacedName{Namespace: "other-operators", Name: "other-account"}
+	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testSubject, testAudience),
+		func() error { return nil },
+		databricksAccountServing(),
+		mintingNamespace("team-b"),
+		askingOf("team-b", "etl", elsewhere.String()))
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	served := requestsServedCondition(t, c)
+	if served == nil || served.Status != metav1.ConditionTrue {
+		t.Fatalf("RequestsServed is %v, want True: the one ServiceAccount asking names %s, and "+
+			"this account is not refusing anybody", served, elsewhere)
+	}
+	if strings.Contains(served.Message, "team-b") {
+		t.Errorf("message is %q, want another operator's request left out of it", served.Message)
+	}
+}
+
+// TestUnservedRequestsAreNotTheIdentitiesBeingDestroyed keeps the two conditions
+// about the same namespaces from becoming one.
+//
+// A namespace taken off the list and still holding identities is reported by
+// IdentitiesDestroyed: those exist, and they are on their way out. Nobody is
+// asking there any more, so there is nothing for this condition to say -- and if
+// it said something anyway, a namespace being emptied would be indistinguishable
+// from one that was never served, which are answered by opposite edits.
+func TestUnservedRequestsAreNotTheIdentitiesBeingDestroyed(t *testing.T) {
+	t.Parallel()
+	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testSubject, testAudience),
+		func() error { return nil },
+		databricksAccountServing(),
+		mintingNamespace(testNamespace),
+		identityMadeIn("etl", testAccountID))
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	destroyed := identitiesDestroyedCondition(t, c)
+	if destroyed == nil || destroyed.Status != metav1.ConditionFalse {
+		t.Fatalf("IdentitiesDestroyed is %v, want False: an identity this account issued is still "+
+			"in a namespace it no longer names", destroyed)
+	}
+	if !strings.Contains(destroyed.Message, testNamespace) {
+		t.Errorf("IdentitiesDestroyed says %q, want the namespace it is emptying", destroyed.Message)
+	}
+
+	served := requestsServedCondition(t, c)
+	if served == nil || served.Status != metav1.ConditionTrue {
+		t.Fatalf("RequestsServed is %v, want True: a record is not a request, and nobody in %s is "+
+			"asking", served, testNamespace)
+	}
+
+	// And when somebody there is asking, the two say different things about the
+	// same namespace: one identity being destroyed, one request never honoured.
+	if err := c.Create(context.Background(), asking(testNamespace, "loader")); err != nil {
+		t.Fatal(err)
+	}
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	served = requestsServedCondition(t, c)
+	if served == nil || served.Status != metav1.ConditionFalse {
+		t.Fatalf("RequestsServed is %v, want False once a ServiceAccount there asks", served)
+	}
+	if !strings.Contains(served.Message, testNamespace+" (1)") {
+		t.Errorf("message is %q, want the one ServiceAccount asking, not the record beside it",
+			served.Message)
+	}
+	if !strings.Contains(served.Message, conditionIdentitiesDestroyed) {
+		t.Errorf("message is %q, want it to say which of the two it is not -- both are False on "+
+			"the same object, about the same namespace, and a reader has to be able to tell them "+
+			"apart", served.Message)
+	}
+}
+
+// TestUnservedNamespacesAreReportedInSortedOrder is what makes the message
+// readable twice.
+//
+// Namespaces are collected out of a map, and a message whose order changes every
+// pass is one nobody can diff against the last time they looked -- so a
+// namespace joining the list is invisible among four that only moved.
+func TestUnservedNamespacesAreReportedInSortedOrder(t *testing.T) {
+	t.Parallel()
+	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testSubject, testAudience),
+		func() error { return nil },
+		databricksAccountServing(),
+		mintingNamespace("team-z"),
+		mintingNamespace("team-b"),
+		asking("team-z", "etl"),
+		asking("team-b", "etl"))
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	served := requestsServedCondition(t, c)
+	if served == nil || served.Status != metav1.ConditionFalse {
+		t.Fatalf("RequestsServed is %v, want False", served)
+	}
+	first, second := strings.Index(served.Message, "team-b"), strings.Index(served.Message, "team-z")
+	if first < 0 || second < 0 {
+		t.Fatalf("message is %q, want both namespaces named", served.Message)
+	}
+	if first > second {
+		t.Errorf("message is %q, want them sorted", served.Message)
+	}
+}

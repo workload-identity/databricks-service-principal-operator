@@ -116,6 +116,14 @@ type DatabricksAccountReconciler struct {
 // only: this controller writes none of them.
 // +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksserviceaccounts,verbs=get;list;watch
 
+// Every ServiceAccount in the cluster, to count the ones asking this operator in
+// a namespace this account does not name. Cluster-wide because that set is
+// exactly the namespaces outside this account's reach. Read only, and the same
+// rule the DatabricksServiceAccount controller already holds -- stated here
+// anyway, so that narrowing that controller's permission cannot silently take
+// this one's away.
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
+
 // The only object this operator writes that it does not own -- the
 // DatabricksServiceAccounts beside it are its own kind, which it makes and
 // deletes. What it writes is one label key of its own, saying it is destroying
@@ -227,6 +235,14 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// for as long as Databricks happens to be unreachable.
 	destroyed, err := r.destroyIdentitiesIn(ctx, &databricksAccount, records)
 	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Before the account is contacted for the same reason: it is read entirely
+	// out of the cluster, and an unreachable Databricks must not be able to stop
+	// this account's holder from seeing who is asking. That is at its most
+	// valuable exactly when something is wrong.
+	if err := r.reportUnservedRequests(ctx, &databricksAccount); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -603,6 +619,86 @@ func (r *DatabricksAccountReconciler) destroyIdentitiesIn(ctx context.Context,
 	return false, nil
 }
 
+// reportUnservedRequests says which requests this operator can see and is not
+// serving: a ServiceAccount asking it for an identity, in a namespace this
+// account does not name.
+//
+// It reports and does nothing. Serving one is an edit to spec.namespaces, made
+// by a person who has decided to spend an account admin credential there, and an
+// operator that took an annotation as that decision would be letting anybody who
+// can write a ServiceAccount make it.
+//
+// Cluster-wide, and it has to be. The namespaces worth reporting are exactly the
+// ones this account does not name, so a listing narrowed to what it serves would
+// answer only the question nobody asks.
+//
+// Read through RequestsFor rather than by matching keys, because a cluster holds
+// more than one operator and a request addressed to another one is not a request
+// this account is refusing. Its Refused keys are not counted either: a value that
+// does not parse names no operator, so counting one here would put a typo
+// somebody else has to fix on this account's status as a namespace it could
+// serve.
+func (r *DatabricksAccountReconciler) reportUnservedRequests(ctx context.Context,
+	databricksAccount *dbxv1alpha1.DatabricksAccount) error {
+	var serviceAccounts corev1.ServiceAccountList
+	if err := r.List(ctx, &serviceAccounts); err != nil {
+		return err
+	}
+
+	// Counted per namespace rather than listed one by one, because the edit this
+	// informs is per namespace: spec.namespaces takes a namespace or does not,
+	// and naming forty ServiceAccounts would bury the four names somebody acts
+	// on.
+	asking := map[string]int{}
+	for i := range serviceAccounts.Items {
+		serviceAccount := &serviceAccounts.Items[i]
+		if databricksAccount.Spec.Serves(serviceAccount.Namespace) {
+			continue
+		}
+		requested := dbxv1alpha1.RequestsFor(serviceAccount.Annotations, r.DatabricksAccountNamespacedName)
+		if len(requested.Understood) == 0 {
+			continue
+		}
+		asking[serviceAccount.Namespace]++
+	}
+
+	if len(asking) == 0 {
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionRequestsServed,
+			metav1.ConditionTrue, reasonRequestsServed,
+			"every ServiceAccount asking this operator for an identity is in a namespace "+
+				"spec.namespaces names. One in a namespace it does not name is refused here and "+
+				"nowhere else: nothing is written in the namespace it came from, so this is where "+
+				"such a request would be counted.")
+		return nil
+	}
+
+	namespaces := make([]string, 0, len(asking))
+	for namespace := range asking {
+		namespaces = append(namespaces, namespace)
+	}
+	slices.Sort(namespaces)
+
+	counted := make([]string, 0, len(namespaces))
+	for _, namespace := range namespaces {
+		counted = append(counted, fmt.Sprintf("%s (%d)", namespace, asking[namespace]))
+	}
+
+	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionRequestsServed,
+		metav1.ConditionFalse, reasonRequestsNotServed,
+		fmt.Sprintf("ServiceAccounts in %s ask this operator for an identity and are in namespaces "+
+			"spec.namespaces does not name, counted as <namespace> (<how many ask there>). Nothing "+
+			"is being made for them and nothing in their own namespace says so -- there is no "+
+			"DatabricksServiceAccount to carry a condition and no event on anything -- so this line "+
+			"is the whole of what anybody can read about it. Either name the namespace in "+
+			"spec.namespaces, which issues new service principals with new client ids and no "+
+			"grants, or have whoever wrote the %s annotation take it off. None of these was ever "+
+			"issued, which is what tells them from the ones %s counts: those exist and are being "+
+			"destroyed.",
+			strings.Join(counted, ", "), dbxv1alpha1.ServicePrincipalAnnotation,
+			conditionIdentitiesDestroyed))
+	return nil
+}
+
 // namespacesClaimedForDestruction is every namespace this operator has suspended
 // minting in, read from the cluster.
 //
@@ -847,6 +943,24 @@ func (r *DatabricksAccountReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dbxv1alpha1.DatabricksAccount{}).
+		// Every ServiceAccount event, mapped onto this one object, because an
+		// annotation written in a namespace this account does not name changes
+		// no record, no DatabricksServiceAccount and no Namespace -- so nothing
+		// else here would ever wake for it, and the count would be as old as the
+		// last pass on the account's own interval.
+		//
+		// That staleness is the failure worth spending a watch on: the count is
+		// read to decide whether to put a namespace back on spec.namespaces, and
+		// a count minutes behind is one somebody edits the list wrongly on.
+		//
+		// The manager's cache already holds ServiceAccounts for the
+		// DatabricksServiceAccount controller, so this is an event handler and
+		// not a second informer, and the workqueue collapses a cluster's worth of
+		// events onto the single key this maps to.
+		Watches(&corev1.ServiceAccount{}, handler.EnqueueRequestsFromMapFunc(
+			func(context.Context, client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: r.DatabricksAccountNamespacedName}}
+			})).
 		Named("databricksaccount").
 		Complete(r)
 }
