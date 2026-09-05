@@ -8,6 +8,16 @@ key is the request, and it is also the whole of what you withdraw to end it: an
 identity lasts exactly as long as the key naming it. That is why asking and
 ending are one page — the second half is the first half read backwards.
 
+An annotation on a ServiceAccount is the shape the cloud providers converged on
+for this job — `iam.gke.io/gcp-service-account`, `eks.amazonaws.com/role-arn`,
+`azure.workload.identity/client-id` — so it is the one a reader already knows.
+What differs is the value. Each of those names an identity that already exists,
+and this operator has nothing like it to name, because the identity does not
+exist until the key asks for it. So the value names the operator to ask, and the
+key carries the rest of the meaning. Databricks has the federation mechanism this
+rests on and nothing that drives it from Kubernetes, which is why the usual way
+to reach it from a workload is a personal access token in a Secret.
+
 The annotation is a request, not a permission. Two other people have to have said
 yes before it does anything, neither yes is yours to give, and neither is visible
 from your namespace: [Three people have to say yes](who-says-yes.md). One of the

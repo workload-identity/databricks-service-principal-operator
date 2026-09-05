@@ -58,9 +58,10 @@ decided in Databricks.
   and yet no name this operator sets is a name any SDK reads, so a workload that
   brought its own configuration keeps it, and writes one line rather than none
   ([What the pod gets](docs/what-the-pod-gets.md)).
-- **One ServiceAccount can hold several identities, chosen by name.** Read with
-  one and write with another, in one pod; no cloud provider's workload identity
-  does this ([Several identities](docs/several-identities.md)).
+- **One ServiceAccount can hold several identities, chosen by name.** One key per
+  identity, so a workload that reads with one service principal and writes with
+  another asks for both by name and picks between them in code
+  ([Several identities](docs/several-identities.md)).
 - **It issues identities and grants them nothing, deliberately.** The operator has
   to be an account admin, so the account cannot prove from permissions alone that
   it does not grant — the only thing left to read is the code, and there is no
