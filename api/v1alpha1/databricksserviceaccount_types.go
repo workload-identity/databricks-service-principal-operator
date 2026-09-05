@@ -129,8 +129,9 @@ const (
 
 	// DestroyingIdentitiesLabel on a Namespace suspends minting there while one
 	// operator destroys the identities it issued there, which is what taking the
-	// namespace off its account's list means. Its value names the holder, as
-	// <the operator's namespace>.<its DatabricksAccount's name>.
+	// namespace off its account's list means. Its value is that operator's own
+	// namespace, and DestroyingIdentitiesAccountAnnotation beside it carries the
+	// rest of its name.
 	//
 	// One key for every operator on the cluster, so that only one of them
 	// destroys identities in a namespace at a time. Server-side apply is what
@@ -150,19 +151,53 @@ const (
 	// this key any longer would only stop everybody else.
 	//
 	// A value rather than a bare presence because losing is only useful if the
-	// loser can say who won. A label value cannot hold "/", which is why the
-	// holder is spelled with a "." where every other reference to an operator in
-	// this API uses "/".
+	// loser can say who won. It carries the namespace half of the winner's name
+	// and only that half: a label value holds 63 bytes, and a namespace is a DNS
+	// label, so nothing anybody can write makes this value too long to store.
 	DestroyingIdentitiesLabel = "databricks.workload-identity.io/destroying-identities"
+
+	// DestroyingIdentitiesAccountAnnotation is the DatabricksAccount of the
+	// operator holding DestroyingIdentitiesLabel. The two are written in one
+	// apply, read back as one namespaced name, and removed together.
+	//
+	// Apart from the label because it is the half nothing bounds. A
+	// DatabricksAccount's name is metadata.name, a DNS subdomain, up to 253
+	// characters, and the two written as one value were refused together past 63
+	// -- measured against a real API server: an operator in a 21-character
+	// namespace, an account name of 42, and the apply rejected as
+	// metadata.labels: Invalid value: must be no more than 63 bytes. What is
+	// refused there is the claim itself, so a namespace taken off spec.namespaces
+	// is never claimed and nothing in it is ever destroyed, while the account goes
+	// on reporting IdentitiesDestroyed=False -- which is also what it reports
+	// while a destruction is merely slow.
+	//
+	// It is part of the exclusion and not only of the message. Two operators in
+	// one namespace apply the same label value, which server-side apply co-owns
+	// rather than refuses -- measured against a real API server, what the second
+	// one gets back is one conflict and it is on this key.
+	//
+	// An annotation rather than a second label because nothing selects on it. The
+	// question asked of the cluster is which namespaces this operator claimed, and
+	// the label answers it; the account name only tells two operators sharing one
+	// namespace apart, and that is a comparison made on what the List returned.
+	// The alternative was capping a person's object name at 63 characters to keep
+	// it selectable, which is this operator's encoding charging rent on their API.
+	//
+	// It also ends a question the single value carried: <namespace>.<name> could
+	// be taken apart only because a namespace may not hold a "." while a name may,
+	// and nothing has to know that any more.
+	DestroyingIdentitiesAccountAnnotation = "databricks.workload-identity.io/destroying-identities-account"
 
 	// DestroyingIdentitiesSinceAnnotation is when the holder of
 	// DestroyingIdentitiesLabel last said it was still there, RFC3339. It makes
-	// the label a lease: past a threshold the operator that wants it may take it,
+	// the claim a lease: past a threshold the operator that wants it may take it,
 	// so that an operator killed partway through does not leave a namespace
 	// unable to mint for ever.
 	//
-	// An annotation and not part of the label value, because a label value holds
-	// 63 characters and a namespace, a name and a timestamp do not fit in them.
+	// An annotation and not a label at all, because RFC3339 spells a time with
+	// ":" and a label value may not hold one. Nothing selects on it either: it is
+	// read off a namespace already in hand, by the operator that has just been
+	// refused the claim on it.
 	//
 	// Rewritten on every pass, not written once when the claim was made.
 	// Measured against a live cluster: managedFields[].time moves only when the
@@ -172,9 +207,10 @@ const (
 	// threshold a slow holder and a dead one would read the same.
 	DestroyingIdentitiesSinceAnnotation = "databricks.workload-identity.io/destroying-identities-since"
 
-	// Enabled is the value the two Namespace labels must carry. The labels
-	// switch an action on -- minting, injecting -- and are written by somebody
-	// with cluster-wide access.
+	// Enabled is the value MintLabel and InjectLabel must carry. Those two switch
+	// an action on -- minting, injecting -- and are written by somebody with
+	// cluster-wide access. DestroyingIdentitiesLabel is not one of them: an
+	// operator writes it, and its value names that operator.
 	//
 	// Anything else means the same as absent: "false", "no", an empty value, and
 	// a typo are not permission to mint and not an instruction to inject.

@@ -622,6 +622,13 @@ var _ = Describe("A namespace taken off the account's list", Ordered, func() {
 			NotTo(ContainSubstring(dbxv1alpha1.DestroyingIdentitiesLabel),
 				"%s is still claimed for a destruction that has finished, so no operator serving "+
 					"it can mint there and only this one can end that", team)
+		// The other half of the holder's name, given back in the same apply. One
+		// left behind names an operator that is holding nothing, and it is what
+		// somebody reads to find out who to go and ask.
+		Expect(kubectlOut("get", "namespace", team, "-o", "jsonpath={.metadata.annotations}")).
+			NotTo(ContainSubstring(dbxv1alpha1.DestroyingIdentitiesAccountAnnotation),
+				"%s still names the account that was destroying identities there, after the "+
+					"destruction finished", team)
 	})
 
 	It("leaves nothing in the account carrying this cluster's marker for that namespace", func() {

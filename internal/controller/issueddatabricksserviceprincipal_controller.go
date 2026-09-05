@@ -563,7 +563,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroyBecauseNotServed(ctx
 	switch {
 	case err != nil:
 		return ctrl.Result{}, err
-	case exists && holder == "":
+	case exists && holder == (types.NamespacedName{}):
 		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonMintingNotSuspended,
 			fmt.Sprintf("namespace %s is not one DatabricksAccount %s names, so this identity is "+
 				"to be destroyed, and nothing carries %s there. Nothing has been destroyed yet: a "+
@@ -571,15 +571,16 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroyBecauseNotServed(ctx
 				"ones made after it. This operator writes that label on its account's own pass, "+
 				"and the destruction follows.",
 				namespace, r.DatabricksAccountNamespacedName, dbxv1alpha1.DestroyingIdentitiesLabel))
-	case exists && holder != destructionClaimedBy(r.DatabricksAccountNamespacedName):
+	case exists && holder != r.DatabricksAccountNamespacedName:
 		logger.V(1).Info("Waiting for another operator to finish destroying its identities here",
 			"tenantNamespace", namespace, "holder", holder)
 		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAnotherDestruction,
-			fmt.Sprintf("namespace %s carries %s=%s, so operator %s is destroying its identities "+
-				"there and this one waits: one at a time is what keeps either from working "+
-				"through a set the other is still adding to. Nothing has been destroyed for this "+
-				"identity.",
-				namespace, dbxv1alpha1.DestroyingIdentitiesLabel, holder, holder))
+			fmt.Sprintf("namespace %s carries %s=%s and %s=%s, so operator %s is destroying its "+
+				"identities there and this one waits: one at a time is what keeps either from "+
+				"working through a set the other is still adding to. Nothing has been destroyed "+
+				"for this identity.",
+				namespace, dbxv1alpha1.DestroyingIdentitiesLabel, holder.Namespace,
+				dbxv1alpha1.DestroyingIdentitiesAccountAnnotation, holder.Name, holder))
 	}
 
 	logger.Info("Namespace is not one this account names, so the record is deleted and its service "+
