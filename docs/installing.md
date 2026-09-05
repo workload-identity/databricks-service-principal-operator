@@ -93,7 +93,7 @@ what the operator is. That is why it does not grant, and will not:
 ## 2. Deploy
 
 ```sh
-kubectl apply -f https://github.com/workload-identity/databricks-service-principal-operator/releases/download/v0.14.0/install.yaml
+kubectl apply -f https://github.com/workload-identity/databricks-service-principal-operator/releases/download/v0.15.0/install.yaml
 ```
 
 That manifest is built from the tag it is attached to and names the image
@@ -111,7 +111,7 @@ which give the second install names of its own.
 ```sh
 helm install dbxsp-operator \
   oci://ghcr.io/workload-identity/charts/databricks-service-principal-operator \
-  --version 0.14.0 \
+  --version 0.15.0 \
   --namespace dbxsp-operator-system --create-namespace
 ```
 

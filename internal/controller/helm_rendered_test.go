@@ -178,7 +178,7 @@ var clusterScoped = map[string]bool{
 // together.
 //
 // The chart names the operator it installs, and the two are versioned as one
-// thing: `helm install --version 0.14.0` and the v0.14.0 release are the same
+// thing: `helm install --version 0.15.0` and the v0.15.0 release are the same
 // release. Letting them drift means a table somewhere of which chart goes with
 // which operator, and the first person to need that table is the one who already
 // installed the wrong pair.

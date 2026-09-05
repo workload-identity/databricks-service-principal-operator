@@ -34,7 +34,7 @@ release presents, and `helm install` prints both.
 ```sh
 helm install dbxsp-operator \
   oci://ghcr.io/workload-identity/charts/databricks-service-principal-operator \
-  --version 0.14.0 \
+  --version 0.15.0 \
   --namespace dbxsp-operator-system --create-namespace
 ```
 
@@ -44,8 +44,8 @@ operator it installs cannot be given different versions by editing one of them.
 `--set image.repository=<your registry>/<image>` runs a build of your own
 instead.
 
-The chart version is the operator version without its `v`: chart `0.14.0`
-installs `v0.14.0`, and there is no table of which goes with which.
+The chart version is the operator version without its `v`: chart `0.15.0`
+installs `v0.15.0`, and there is no table of which goes with which.
 
 The chart does not create the namespace. Helm's `--create-namespace` does, and
 leaves it outside the release, which is what you want: a namespace owned by the
