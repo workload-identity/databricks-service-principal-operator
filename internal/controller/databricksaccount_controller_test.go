@@ -690,6 +690,52 @@ func TestAnOperatorThatCannotReadItsOwnTokenSaysSo(t *testing.T) {
 	}
 }
 
+// TestTheAccountReportsTheMarkerItsIdentitiesCarry covers the only thing an
+// account admin can match on.
+//
+// A service principal in Databricks carries an externalId, and an externalId is
+// three hashes. Somebody holding one cannot read which cluster made it; what
+// they can do is compare its first twelve characters against a marker the
+// cluster states. So the string reported here has to be the same string that
+// ends up on a service principal -- reporting anything else is worse than
+// reporting nothing, because the comparison then fails for an identity that is
+// in fact this cluster's, and the reader concludes it belongs to somebody else.
+//
+// Asserted against MarkerFor rather than against a constant, so that changing
+// how a marker is built breaks this instead of silently making every published
+// marker wrong.
+func TestTheAccountReportsTheMarkerItsIdentitiesCarry(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://oidc.example/some-cluster"
+	r, c, _ := newDatabricksAccountReconciler(t, writeTokenAs(t, issuer, testSubject, testAudience),
+		func() error { return nil },
+		databricksAccountNamed(databricksAccountName))
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	var reported dbxv1alpha1.DatabricksAccount
+	if err := c.Get(context.Background(),
+		types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName}, &reported); err != nil {
+		t.Fatal(err)
+	}
+
+	if reported.Status.Issuer != issuer {
+		t.Errorf("issuer is %q, want %q read from the operator's own token -- it is what every "+
+			"federation policy names and the only thing that tells two clusters apart",
+			reported.Status.Issuer, issuer)
+	}
+
+	marker := dbx.MarkerFor(dbx.Issuing{
+		Issuer: issuer, Operator: "ops/account", Namespace: "team-a", Name: "etl",
+		ServiceAccountUID: "uid-etl",
+	})
+	if want := marker[:len(reported.Status.ClusterMarker)]; reported.Status.ClusterMarker == "" ||
+		want != reported.Status.ClusterMarker {
+		t.Errorf("the account reports %q and an identity of this cluster carries %q; an admin "+
+			"comparing the two decides this cluster did not make its own service principal",
+			reported.Status.ClusterMarker, want)
+	}
+}
+
 // TestNothingIsBlankedByAReadThatFailed covers the half of the same failure that
 // was not a decision.
 //

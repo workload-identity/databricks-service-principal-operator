@@ -205,6 +205,13 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if len(claims.Audience) > 0 {
 			databricksAccount.Status.Audience = claims.Audience[0]
 		}
+		// The issuer and what it hashes to, so that somebody looking at a service
+		// principal in Databricks can tell whether this cluster made it. Both are
+		// derived here rather than left to be derived by hand: the marker is a
+		// hash, so the only way to use it is to compare against one somebody
+		// computed the same way.
+		databricksAccount.Status.Issuer = claims.Issuer
+		databricksAccount.Status.ClusterMarker = databricks.ClusterMarker(claims.Issuer)
 	} else {
 		logger.Error(claimsErr, "Could not read the operator's own projected token, so no identity can be "+
 			"issued or converged", "tokenPath", r.OwnToken.OIDCTokenFilepath)

@@ -184,6 +184,26 @@ type DatabricksAccountStatus struct {
 	// +optional
 	Audience string `json:"audience,omitempty"`
 
+	// issuer is the cluster's OIDC issuer, which every federation policy this
+	// operator writes names verbatim. It is what tells one cluster's identities
+	// from another's in Databricks, where nothing else does: two clusters can
+	// hold the same namespace and ServiceAccount names, so the subject alone
+	// says nothing about which cluster a service principal answers to.
+	// +optional
+	Issuer string `json:"issuer,omitempty"`
+
+	// clusterMarker is the first twelve characters of every externalId this
+	// operator writes: a hash of the issuer above, shared by every identity this
+	// cluster made and by nothing else.
+	//
+	// Reported because a hash cannot be read backwards. An account admin holding
+	// a service principal can see its externalId and get nothing from it; what
+	// they can do is take this string and compare. So the cluster states its own
+	// marker rather than leaving somebody to derive it, which means knowing the
+	// issuer, the hash and the encoding.
+	// +optional
+	ClusterMarker string `json:"clusterMarker,omitempty"`
+
 	// conditions report whether this account is usable.
 	//
 	// Ready is true once the operator has exchanged its token and made one

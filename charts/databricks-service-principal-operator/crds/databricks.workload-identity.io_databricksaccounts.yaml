@@ -223,6 +223,18 @@ spec:
                   federation policy must also name. It comes from the Deployment, not from
                   the spec above.
                 type: string
+              clusterMarker:
+                description: |-
+                  clusterMarker is the first twelve characters of every externalId this
+                  operator writes: a hash of the issuer above, shared by every identity this
+                  cluster made and by nothing else.
+
+                  Reported because a hash cannot be read backwards. An account admin holding
+                  a service principal can see its externalId and get nothing from it; what
+                  they can do is take this string and compare. So the cluster states its own
+                  marker rather than leaving somebody to derive it, which means knowing the
+                  issuer, the hash and the encoding.
+                type: string
               conditions:
                 description: |-
                   conditions report whether this account is usable.
@@ -289,6 +301,14 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              issuer:
+                description: |-
+                  issuer is the cluster's OIDC issuer, which every federation policy this
+                  operator writes names verbatim. It is what tells one cluster's identities
+                  from another's in Databricks, where nothing else does: two clusters can
+                  hold the same namespace and ServiceAccount names, so the subject alone
+                  says nothing about which cluster a service principal answers to.
+                type: string
               subject:
                 description: |-
                   subject is the sub claim the operator presents when it exchanges its

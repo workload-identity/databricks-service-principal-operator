@@ -80,6 +80,9 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: audience
       type:
         scalar: string
+    - name: clusterMarker
+      type:
+        scalar: string
     - name: conditions
       type:
         list:
@@ -88,6 +91,9 @@ var schemaYAML = typed.YAMLObject(`types:
           elementRelationship: associative
           keys:
           - type
+    - name: issuer
+      type:
+        scalar: string
     - name: subject
       type:
         scalar: string
