@@ -203,6 +203,20 @@ const (
 	// removing the annotation, which nothing here can fail at.
 	reasonDeleteFailed = "DeleteFailed"
 
+	// reasonCreateUnconfirmed is a record that sent a create and cannot find
+	// what it made. The mark is written before the call, so this is a create
+	// whose answer never arrived and whose service principal the account listing
+	// does not show.
+	//
+	// Unknown, and the one reason here that names a state rather than a failure.
+	// Nothing is known to be wrong: a listing is eventually consistent, so
+	// "not there" may be a service principal that exists and has not appeared
+	// yet. Both the acts this state would otherwise reach are irreversible on
+	// that reading -- creating makes a second carrying one marker, releasing the
+	// finalizer leaves one behind that nothing records -- so neither is taken,
+	// and the message carries the marker to search Databricks with.
+	reasonCreateUnconfirmed = "CreateUnconfirmed"
+
 	// reasonNotServed is an identity in a namespace this operator's account no
 	// longer names. Its trust has been removed, so no token from this cluster
 	// can be exchanged for it -- which is False rather than anything else,

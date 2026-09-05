@@ -66,10 +66,11 @@ type stubClients struct {
 	// trust taken off, in the order it asked.
 	policiesRemoved []string
 
-	// policyPanics stands in for the process dying inside that call. Nothing
-	// after it runs -- which is the only way "written down before the next call"
-	// differs from "written down by the end of the pass".
+	// policyPanics and createPanics stand in for the process dying inside that
+	// call. Nothing after it runs -- which is the only way "written down before
+	// the next call" differs from "written down by the end of the pass".
 	policyPanics bool
+	createPanics bool
 
 	// gone is an id Databricks no longer has, so a test can see what happens
 	// when what is recorded is not there any more.
@@ -114,6 +115,13 @@ func (s *stubClients) FindServicePrincipal(_ context.Context, issuing dbx.Issuin
 func (s *stubClients) CreateServicePrincipal(_ context.Context, issuing dbx.Issuing) (string, string, error) {
 	if s.err != nil {
 		return "", "", s.err
+	}
+	if s.createPanics {
+		// Recorded first. A service principal made by a call the operator never
+		// saw return is exactly what the mark exists for, so the stub has to
+		// leave the same evidence behind that Databricks would.
+		s.created = append(s.created, issuing.Namespace+"/"+issuing.Name)
+		panic("the operator stopped here")
 	}
 	// Recorded per identity rather than per ServiceAccount, so a failure names
 	// which one. Two identities of one ServiceAccount are two creates, and

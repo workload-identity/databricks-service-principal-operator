@@ -564,11 +564,13 @@ var _ = Describe("what the webhook produces", func() {
 		databricksServiceAccount.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
 			{
 				Profile: reader, Operator: "ops-a/databricks-account",
-				ClientID: "reader-client", Audience: "databricks",
+				ServicePrincipalID: "7788",
+				ClientID:           "reader-client", Audience: "databricks",
 			},
 			{
 				Profile: writer, Operator: "ops-b/databricks-account",
-				ClientID: "writer-client", Audience: "some-other-aud",
+				ServicePrincipalID: "7799",
+				ClientID:           "writer-client", Audience: "some-other-aud",
 			},
 		}
 		Expect(k8sClient.Status().Update(ctx, databricksServiceAccount)).To(Succeed())

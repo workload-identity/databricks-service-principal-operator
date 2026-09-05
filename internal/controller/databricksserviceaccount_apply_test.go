@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -69,6 +70,12 @@ func TestTheDatabricksServiceAccountSendsOnlyWhatIsSet(t *testing.T) {
 				entry.Conditions = []metav1.Condition{{
 					Type: "Ready", Status: metav1.ConditionTrue, Reason: "Made", Message: "made",
 				}}
+			case field.Name == "ServicePrincipalRemovedAt":
+				// Truncated to the second, because the API's own marshalling is
+				// RFC 3339 and a nanosecond that does not survive the round trip
+				// would look like a field that was dropped.
+				removedAt := metav1.NewTime(time.Now().Truncate(time.Second))
+				entry.ServicePrincipalRemovedAt = &removedAt
 			default:
 				t.Fatalf("%s is a %s, which this test does not know how to set; "+
 					"teach it rather than skipping, or the field goes uncovered",

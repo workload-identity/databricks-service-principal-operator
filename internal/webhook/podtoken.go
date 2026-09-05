@@ -168,13 +168,13 @@ func (i *PodTokenInjector) Handle(ctx context.Context, req admission.Request) ad
 	// writing with another holds both at once and a pod carries whatever it was
 	// issued.
 	//
-	// The client id is assigned by Databricks on create, so one still without it
-	// is dropped rather than written: a profile naming no client cannot be
-	// exchanged for anything, and its neighbours are usable now. The pod is
-	// admitted with what there is, and a later pod gets the rest.
+	// One that cannot be exchanged for anything is dropped rather than written,
+	// whether it has not converged yet or its service principal is gone: its
+	// neighbours are usable now. The pod is admitted with what there is, and a
+	// later pod gets the rest.
 	var ready []dbxv1alpha1.ProjectedIdentity
 	for _, identity := range principal.Status.Identities {
-		if identity.ClientID != "" {
+		if identity.Usable() {
 			ready = append(ready, identity)
 		}
 	}

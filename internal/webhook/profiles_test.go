@@ -20,31 +20,37 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 )
 
-// TestNothingAtAllIsRenderedWhenNoIdentityHasAClientId is a contract of
-// Profiles itself, and the caller that depends on it is not the webhook.
+// TestNothingAtAllIsRenderedWhenNoIdentityIsUsable is a contract of Profiles
+// itself, and the caller that depends on it is not the webhook.
 //
-// The webhook drops unconverged identities before it renders, so it never asks
-// this question. The controller's describes does: it renders one identity's
-// block and asks whether the pod's annotation contains it, and it reads the
-// empty string as "there is nothing to look for". A block with client_id and
+// The webhook drops unusable identities before it renders, so it never asks this
+// question. The controller's describes does: it renders one identity's block and
+// asks whether the pod's annotation contains it. A block with client_id and
 // nothing after it is not empty, every annotation contains a substring of some
-// pod, and Equipped would report True for pods carrying no such profile --
-// which matters exactly when an identity is recorded as removed in Databricks,
-// because that clears the client id.
+// pod, and Equipped would report True for pods carrying no such profile.
 //
 // So the empty answer has to be exactly empty. Not a newline, not a section
 // header for a profile naming nobody.
-func TestNothingAtAllIsRenderedWhenNoIdentityHasAClientId(t *testing.T) {
+//
+// Both ways of not being usable, because a service principal that is gone keeps
+// its client id and one that was never made has none: an emptiness test would
+// have answered only the second.
+func TestNothingAtAllIsRenderedWhenNoIdentityIsUsable(t *testing.T) {
 	t.Parallel()
+	removedAt := metav1.Now()
 	rendered := Profiles([]dbxv1alpha1.ProjectedIdentity{
 		{Profile: testOperator, Operator: testOperator, Audience: testAudience},
-		{Profile: "reader", Operator: testOperator, Audience: testAudience},
+		{Profile: "reader", Operator: testOperator, Audience: testAudience,
+			ServicePrincipalID: "7788", ClientID: "reader-client",
+			ServicePrincipalRemovedAt: &removedAt},
 	})
 	if rendered != "" {
-		t.Errorf("Profiles rendered %q for identities Databricks has not answered for. "+
+		t.Errorf("Profiles rendered %q for identities no token can be exchanged for. "+
 			"describes reads a non-empty answer as a block to look for in the pod, and reports "+
 			"every pod in the namespace as equipped with it", rendered)
 	}
@@ -61,8 +67,10 @@ func TestNothingAtAllIsRenderedWhenNoIdentityHasAClientId(t *testing.T) {
 func TestAnIdentityDatabricksHasNotAnsweredForContributesNoProfile(t *testing.T) {
 	t.Parallel()
 	converged := []dbxv1alpha1.ProjectedIdentity{
-		{Profile: "reader", Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
-		{Profile: "writer", Operator: testOperator, ClientID: "writer-client", Audience: testAudience},
+		{Profile: "reader", Operator: testOperator, ServicePrincipalID: "7788",
+			ClientID: "reader-client", Audience: testAudience},
+		{Profile: "writer", Operator: testOperator, ServicePrincipalID: "7799",
+			ClientID: "writer-client", Audience: testAudience},
 	}
 	// One in every position, because the separator is written per profile and a
 	// leading, trailing or interior gap are three different mistakes.
@@ -111,10 +119,11 @@ func TestAnIdentityDatabricksHasNotAnsweredForContributesNoProfile(t *testing.T)
 func TestEitherSdkFindsANameItReads(t *testing.T) {
 	t.Parallel()
 	rendered := Profiles([]dbxv1alpha1.ProjectedIdentity{{
-		Profile:  testOperator,
-		Operator: testOperator,
-		ClientID: testClientID,
-		Audience: testAudience,
+		Profile:            testOperator,
+		Operator:           testOperator,
+		ServicePrincipalID: "7788",
+		ClientID:           testClientID,
+		Audience:           testAudience,
 	}})
 
 	for _, line := range []string{

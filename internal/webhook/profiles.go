@@ -40,12 +40,12 @@ import (
 func Profiles(identities []dbxv1alpha1.ProjectedIdentity) string {
 	var rendered strings.Builder
 	for _, identity := range identities {
-		if identity.ClientID == "" {
-			// Nothing to write. Databricks assigns the client id on create, so an
-			// identity without one has not converged, and a profile naming no
-			// client cannot be exchanged for anything -- it would fail as
-			// TOKEN_INVALID with the federation policy echoed back, which reads
-			// as though the policy were wrong.
+		if !identity.Usable() {
+			// Nothing to write. An identity with no service principal has not
+			// converged and one whose service principal is gone never will
+			// again, and a profile for either cannot be exchanged for anything
+			// -- it would fail as TOKEN_INVALID with the federation policy
+			// echoed back, which reads as though the policy were wrong.
 			continue
 		}
 		if rendered.Len() > 0 {

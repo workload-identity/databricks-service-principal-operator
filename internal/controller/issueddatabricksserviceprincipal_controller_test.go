@@ -34,6 +34,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
+	dbx "github.com/workload-identity/databricks-service-principal-operator/internal/databricks"
+	dbxwebhook "github.com/workload-identity/databricks-service-principal-operator/internal/webhook"
 )
 
 // TestANamespaceTeardownDestroysTheIdentityInEitherOrder covers the failure this
@@ -156,17 +158,17 @@ func TestARecreatedServiceAccountDoesNotInheritTheOldIdentity(t *testing.T) {
 // TestARecordWithNoIdStillDestroysWhatItMade covers the one window the ordering
 // cannot close.
 //
-// The record is written before the create, so a pass that creates a service
-// principal and then stops leaves a record naming no id. Deleting that record by
-// its id would delete nothing and leave the service principal behind, which is
-// exactly the outcome the record exists to prevent -- so it is looked for by the
-// marker it was created carrying.
+// The mark is written before the create, so a pass that creates a service
+// principal and then stops leaves a record in Sent: a create went out and no id
+// came back. Deleting that record by its id would delete nothing and leave the
+// service principal behind, which is exactly the outcome the record exists to
+// prevent -- so it is looked for by the marker it was created carrying.
 func TestARecordWithNoIdStillDestroysWhatItMade(t *testing.T) {
 	t.Parallel()
 	serviceAccount := asking(testNamespace, testName)
-	issued := recordFor(serviceAccount)
-	// Nothing recorded, and something out there: what a crash between the two
-	// calls leaves behind.
+	issued := sentRecordFor(serviceAccount)
+	// The mark down, no id recorded, and something out there: what a crash
+	// between the two calls leaves behind.
 	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
 	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
 
@@ -193,7 +195,7 @@ func TestARecordWithNoIdStillDestroysWhatItMade(t *testing.T) {
 func TestADeletionIsNotHeldOverAValueItDiscards(t *testing.T) {
 	t.Parallel()
 	serviceAccount := asking(testNamespace, testName)
-	issued := recordFor(serviceAccount)
+	issued := sentRecordFor(serviceAccount)
 	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
 	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
 	// A token with an issuer and no aud claim. The issuer is what the search
@@ -514,9 +516,9 @@ func TestAnIdRecordedWithNoAccountIsNotConcludedFrom(t *testing.T) {
 	if issued == nil {
 		t.Fatal("the record is gone")
 	}
-	if issued.Status.RemovedServicePrincipalID != "" {
+	if issued.Status.ServicePrincipalRemovedAt != nil {
 		t.Errorf("recorded %s as deleted in Databricks on the strength of a 404 that could as "+
-			"readily have meant 'not in this account'", issued.Status.RemovedServicePrincipalID)
+			"readily have meant 'not in this account'", issued.Status.ServicePrincipalID)
 	}
 	if issued.Status.ServicePrincipalID != "7788" {
 		t.Errorf("servicePrincipalId is %q, want it untouched", issued.Status.ServicePrincipalID)
@@ -557,10 +559,11 @@ func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
 	} {
 		t.Run(going.name, func(t *testing.T) {
 			serviceAccount := asking(testNamespace, testName)
-			existing := recordFor(serviceAccount)
-			// No id recorded, which is what makes both directions need the
-			// token: converging reads it to write a policy, and destroying
-			// reads it to find what this record may have made and never named.
+			// In Sent, which is what makes both directions need the token:
+			// converging reads it to write a policy, and destroying reads it to
+			// build the marker for what this record's create may have made and
+			// never named.
+			existing := sentRecordFor(serviceAccount)
 			existing.Status.AccountID = testAccountID
 
 			stub := &stubClients{}
@@ -585,5 +588,236 @@ func TestNotHavingLookedIsSaidAsUnknown(t *testing.T) {
 					ready.Status, ready.Reason)
 			}
 		})
+	}
+}
+
+// TestARecordThatSentNoCreateIsLetGoWithoutAsking covers the state that is both
+// the common one and the only one where letting go costs nothing.
+//
+// A record with no mark sent no create, so nothing exists for it in Databricks
+// and there is nothing to look for. The lookup that used to run here asked
+// Databricks about work this operator knows it never began, and paid a listing
+// for every record deleted before it ever converged -- which is most of them.
+func TestARecordThatSentNoCreateIsLetGoWithoutAsking(t *testing.T) {
+	t.Parallel()
+	serviceAccount := asking(testNamespace, testName)
+	unsent := recordFor(serviceAccount)
+
+	// Something findable, so that a lookup happening at all is visible rather
+	// than merely unasserted: against a stub that finds nothing, a lookup that
+	// ran would leave no trace in what this asserts.
+	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, unsent)
+
+	stopsAsking(t, c.Client)
+	c.settle(t)
+
+	if len(stub.looked) != 0 {
+		t.Errorf("looked for %v; this record sent no create, so nothing it could name exists "+
+			"and the answer cannot change what happens", stub.looked)
+	}
+	if len(stub.deleted) != 0 {
+		t.Errorf("deleted %v on behalf of a record that never asked Databricks for anything",
+			stub.deleted)
+	}
+	if c.issuedOf(t, serviceAccount) != nil {
+		t.Error("the record is held; nothing can exist for it, so holding it is waiting for " +
+			"something that will never arrive")
+	}
+}
+
+// TestARecordHeldInSentIsNotLetGoOfOnAListing covers the one state in which no
+// irreversible act is available.
+//
+// A create was sent and its answer never arrived, so a service principal
+// carrying this record's marker may exist. The listing that would find it is
+// eventually consistent, so "not there" is not an answer: releasing the
+// finalizer on it leaves a live service principal in Databricks that nothing in
+// the cluster records, which is the one outcome this object exists to prevent.
+//
+// The message has to end the situation, because nothing else will. No interval
+// resolves this, and the person who can is the one who searched the account.
+func TestARecordHeldInSentIsNotLetGoOfOnAListing(t *testing.T) {
+	t.Parallel()
+	serviceAccount := asking(testNamespace, testName)
+	sent := sentRecordFor(serviceAccount)
+
+	// Nothing findable, which is both "the create never ran" and "it ran and the
+	// listing has not caught up", and nothing here can tell them apart.
+	stub := &stubClients{}
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, sent)
+
+	stopsAsking(t, c.Client)
+	c.settle(t)
+
+	held := c.issuedOf(t, serviceAccount)
+	if held == nil {
+		t.Fatal("the record was let go of on a listing that found nothing; whatever its create " +
+			"made is now in Databricks with nothing anywhere naming it")
+	}
+	if !slices.Contains(held.Finalizers, dbxv1alpha1.ServicePrincipalFinalizer) {
+		t.Fatalf("finalizers are %v; the object goes as soon as the last one does",
+			held.Finalizers)
+	}
+	if len(stub.looked) == 0 {
+		t.Error("nothing was looked for; a create was sent, and this is the state whose only " +
+			"legal move is to keep asking")
+	}
+
+	ready := meta.FindStatusCondition(held.Status.Conditions, conditionReady)
+	if ready == nil || ready.Reason != reasonCreateUnconfirmed {
+		t.Fatalf("Ready is %v, want %s", ready, reasonCreateUnconfirmed)
+	}
+	if ready.Status != metav1.ConditionUnknown {
+		t.Errorf("Ready is %s/%s; a listing that has not caught up is not evidence that "+
+			"anything is wrong", ready.Status, ready.Reason)
+	}
+	// The two halves a person needs: what to search Databricks with, and that
+	// removing the finalizer is theirs to do once they have.
+	if marker := dbx.MarkerFor(c.Issued.issuing(held, testIssuer)); !strings.Contains(ready.Message, marker) {
+		t.Errorf("message is %q and does not carry %q; without the marker there is no way to "+
+			"search the account for what this record may have made", ready.Message, marker)
+	}
+	if !strings.Contains(ready.Message, "finalizer") {
+		t.Errorf("message is %q; nothing releases this on its own, so it has to say who does",
+			ready.Message)
+	}
+}
+
+// TestARecordInSentDoesNotCreateASecond covers what a second create would cost.
+//
+// Both service principals would carry one marker, and FindServicePrincipal
+// refuses to adopt either when it finds two -- so the record would be stuck for
+// ever, with two identities in the account and no way to tell which is its.
+// Waiting costs a pass; this costs the account.
+func TestARecordInSentDoesNotCreateASecond(t *testing.T) {
+	t.Parallel()
+	serviceAccount := asking(testNamespace, testName)
+	sent := sentRecordFor(serviceAccount)
+
+	stub := &stubClients{}
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, sent)
+	c.settle(t)
+
+	if len(stub.created) != 0 {
+		t.Errorf("created %v for a record whose create was already sent; two carrying one "+
+			"marker cannot be told apart, and neither is ever adopted again", stub.created)
+	}
+	issued := c.issuedOf(t, serviceAccount)
+	if issued == nil {
+		t.Fatal("the record is gone")
+	}
+	if issued.Status.ServicePrincipalID != "" {
+		t.Errorf("servicePrincipalId is %q; nothing answered, and writing an id nothing "+
+			"returned is inventing the evidence every later pass reads",
+			issued.Status.ServicePrincipalID)
+	}
+	ready := meta.FindStatusCondition(issued.Status.Conditions, conditionReady)
+	if ready == nil || ready.Reason != reasonCreateUnconfirmed {
+		t.Fatalf("Ready is %v, want %s", ready, reasonCreateUnconfirmed)
+	}
+}
+
+// TestTheMarkIsWrittenBeforeTheCreate covers the ordering the whole state
+// machine rests on.
+//
+// Whether a create was already sent is the one fact this operator cannot work
+// out again; everything else about a record is derivable from its spec. Written
+// after the call, the mark says nothing about a pass that did not survive the
+// call -- and that pass is exactly the one that leaves a service principal
+// behind.
+//
+// The process is stopped inside the create rather than made to fail, because a
+// failure still reaches the status write at the end of the pass: it cannot tell
+// "written down before the call" from "written down eventually".
+func TestTheMarkIsWrittenBeforeTheCreate(t *testing.T) {
+	t.Parallel()
+	serviceAccount := asking(testNamespace, testName)
+	unsent := recordFor(serviceAccount)
+
+	stub := &stubClients{createPanics: true}
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, unsent)
+
+	if issued := c.issuedOf(t, serviceAccount); issued.Status.ServicePrincipalCreateSentAt != nil {
+		t.Fatalf("the record is already marked at %v; this test is about one that has asked "+
+			"for nothing", issued.Status.ServicePrincipalCreateSentAt)
+	}
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the stub was arranged to stop the pass and did not")
+			}
+		}()
+		c.records(t)
+	}()
+
+	issued := c.issuedOf(t, serviceAccount)
+	if len(stub.created) != 1 {
+		t.Fatalf("created %v; this test says nothing unless the create was reached", stub.created)
+	}
+	if issued.Status.ServicePrincipalCreateSentAt == nil {
+		t.Error("a create was sent and nothing records that it was; the next pass reads this " +
+			"record as one that never asked, creates a second, and leaves the first behind")
+	}
+	if got := issued.Status.ServicePrincipalState(); got != dbxv1alpha1.ServicePrincipalSent {
+		t.Errorf("the record is %s, want %s -- it is what makes the next pass look before it "+
+			"builds", got, dbxv1alpha1.ServicePrincipalSent)
+	}
+}
+
+// TestALatchedRemovalDestroysNoEvidence covers what the record has to still say
+// after the one decision it never takes back.
+//
+// The id is what somebody searches Databricks' audit log with to find out who
+// deleted it and when, and the client id is what every grant anybody made names.
+// Clearing either to stop pods being equipped would be the record of a removal
+// destroying the record it was drawn from -- and the equipping is stopped by the
+// identity no longer being usable, which needs nothing destroyed.
+func TestALatchedRemovalDestroysNoEvidence(t *testing.T) {
+	t.Parallel()
+	serviceAccount := asking(testNamespace, testName)
+	stub := &stubClients{}
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount,
+		equippedPod(testName))
+	c.settle(t)
+
+	built := c.issuedOf(t, serviceAccount)
+	if built == nil || built.Status.ServicePrincipalID == "" || built.Status.ClientID == "" {
+		t.Fatal("nothing was built for somebody to delete in Databricks")
+	}
+	id, clientID := built.Status.ServicePrincipalID, built.Status.ClientID
+
+	stub.gone = id
+	c.settle(t)
+
+	issued := c.issuedOf(t, serviceAccount)
+	if issued == nil {
+		t.Fatal("the record is gone")
+	}
+	if issued.Status.ServicePrincipalID != id {
+		t.Errorf("servicePrincipalId is %q, want %q -- it is the only value that searches the "+
+			"audit log for who deleted it", issued.Status.ServicePrincipalID, id)
+	}
+	if issued.Status.ClientID != clientID {
+		t.Errorf("clientId is %q, want %q -- it is what every grant anybody made names, and a "+
+			"person auditing them has nothing else to match on",
+			issued.Status.ClientID, clientID)
+	}
+	if got := issued.Status.ServicePrincipalState(); got != dbxv1alpha1.ServicePrincipalGone {
+		t.Fatalf("the record is %s, want %s", got, dbxv1alpha1.ServicePrincipalGone)
+	}
+
+	// And no pod is equipped with it, which is what clearing the client id used
+	// to buy and now costs nothing.
+	if dbxwebhook.Profiles([]dbxv1alpha1.ProjectedIdentity{
+		identityIn(t, principalOf(t, c.Client)),
+	}) != "" {
+		t.Error("the webhook still writes a profile for a service principal that is not there; " +
+			"a pod admitted now exchanges its token for nothing")
+	}
+	if len(stub.created) != 1 {
+		t.Errorf("created %v; a record in Gone builds no replacement, whatever else it still "+
+			"says", stub.created)
 	}
 }

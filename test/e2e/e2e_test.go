@@ -424,47 +424,46 @@ var _ = Describe("An identity deleted in Databricks", Ordered, func() {
 	It("reports it, naming the id somebody can go and ask about", func() {
 		Eventually(func() string {
 			return removedIDOf(team, serviceAccount, profile)
-		}, 5*time.Minute, 5*time.Second).Should(Equal(deletedID),
-			"nothing on the DatabricksServiceAccount names the service principal that was deleted, so the only "+
-				"way to find out which one it was is to read the operator's logs")
+		}, noticingARemovalTakesUpTo, 5*time.Second).Should(Equal(deletedID),
+			"nothing on the DatabricksServiceAccount says the service principal it names was deleted, so the "+
+				"only way to find out is to read the operator's logs")
 
 		Expect(conditionOn(team, serviceAccount, profile, "Ready")).To(Equal("RemovedInDatabricks"),
 			"the identity does not say why it is not ready")
 	})
 
-	It("stops naming a client id, so no pod is equipped with one that resolves to nothing", func() {
-		Expect(clientIDOf(team, serviceAccount, profile)).To(BeEmpty(),
-			"the DatabricksServiceAccount still carries a client id for a service principal that is gone. A pod "+
-				"admitted now would be given it, exchange for nothing, and fail at the far end")
+	It("keeps the id and the client id, which are what an audit is made of", func() {
+		Expect(servicePrincipalIDOf(team, serviceAccount, profile)).To(Equal(deletedID),
+			"the id was cleared when the removal was recorded, so the evidence of the removal destroyed the "+
+				"only value Databricks' audit log can be searched with")
+		Expect(clientIDOf(team, serviceAccount, profile)).NotTo(BeEmpty(),
+			"the client id was cleared, so whoever now goes through their grants looking for what this "+
+				"identity was allowed to do has nothing left to match on")
 	})
 
 	It("does not build another while the annotation still stands", func() {
-		// Waited for before anything is held, and waited for on the right thing.
-		//
-		// Straight after the deletion the DatabricksServiceAccount still carries the
-		// client id from before it, so holding "no client id" from there reports a
-		// replacement that has not happened -- a failure that is untrue, and one that
-		// only the specs above happening to run first would hide.
-		//
-		// And the wait is for the removal being recorded, not for the client id
-		// going: an operator that noticed and then replaced also has a client
-		// id, so waiting on that one cannot tell "has not looked yet" from "has
-		// looked and built another", and would report the first while meaning
-		// the other.
+		// Waited for before anything is held. Straight after the deletion the
+		// DatabricksServiceAccount still says everything it said before it, so a
+		// check made from there reports a state the operator has not reached --
+		// a failure that is untrue, and one that only the specs above happening
+		// to run first would hide.
 		Eventually(func() string {
 			return removedIDOf(team, serviceAccount, profile)
-		}, 5*time.Minute, 5*time.Second).Should(Equal(deletedID),
+		}, noticingARemovalTakesUpTo, 5*time.Second).Should(Equal(deletedID),
 			"the operator never noticed the service principal was deleted, so there is nothing "+
 				"yet to say about what it did next")
 
-		// The whole of the decision. The request has not been withdrawn, so an
-		// operator reading the annotation as a standing order would make a new
-		// one -- with a new client id, holding none of what was granted to the
-		// old, and overruling whoever did the deleting.
+		// The whole of the decision, and it is asked of the id rather than of
+		// the client id. Both survive the removal now, so what a replacement
+		// would change is which service principal is named: Databricks assigns
+		// a new id and a new applicationId to whatever is made in its place.
 		Consistently(func() string {
-			return clientIDOf(team, serviceAccount, profile)
-		}, 90*time.Second, 10*time.Second).Should(BeEmpty(),
+			return servicePrincipalIDOf(team, serviceAccount, profile)
+		}, 90*time.Second, 10*time.Second).Should(Equal(deletedID),
 			"the operator issued a replacement for an identity somebody deleted in Databricks")
+		Expect(removedIDOf(team, serviceAccount, profile)).To(Equal(deletedID),
+			"the record stopped saying its service principal is gone, which is the only thing standing "+
+				"between the annotation and a replacement being built")
 	})
 })
 

@@ -18,7 +18,8 @@ limitations under the License.
 package v1alpha1
 
 import (
-	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
 // IssuedDatabricksServicePrincipalStatusApplyConfiguration represents a declarative configuration of the IssuedDatabricksServicePrincipalStatus type for use
@@ -40,13 +41,32 @@ type IssuedDatabricksServicePrincipalStatusApplyConfiguration struct {
 	// which creates a service principal and then stops has already said where to
 	// look for it.
 	AccountID *string `json:"accountId,omitempty"`
+	// servicePrincipalCreateSentAt is when this operator was about to ask
+	// Databricks for the service principal below. It is written before the call
+	// is made and never cleared.
+	//
+	// It is the one fact about this record that cannot be worked out again. The
+	// marker, the subject and the display name are all derivable from the spec
+	// at any moment; whether a create was already sent is not. Without it, a
+	// record naming no id cannot be told from one whose create ran and whose
+	// answer never arrived -- and those two permit opposite acts, since the
+	// first may create and may be let go of, and the second may do neither.
+	//
+	// A moment rather than a flag, because a record waiting for that answer has
+	// to be able to say how long it has been waiting.
+	ServicePrincipalCreateSentAt *v1.Time `json:"servicePrincipalCreateSentAt,omitempty"`
 	// servicePrincipalId is the numeric id Databricks assigned. Federation
 	// policies hang off it, and it is what deletes it.
 	//
-	// Empty for one window only: between this record being written and the
-	// create returning. What closes that window is the marker -- the service
+	// Empty for one window only: between the create being sent and its answer
+	// being written down. What closes that window is the marker -- the service
 	// principal carries it from the moment it exists, so one created by a pass
 	// that then crashed is found again rather than left behind.
+	//
+	// Written once and never cleared, including when Databricks answers that it
+	// is gone. It is the value somebody searches the audit log with to find out
+	// who deleted it, so clearing it would be the evidence of a removal
+	// destroying the evidence it was drawn from.
 	//
 	// A string rather than an integer because these are int64 and already
 	// approach the largest integer JSON carries exactly.
@@ -61,21 +81,23 @@ type IssuedDatabricksServicePrincipalStatusApplyConfiguration struct {
 	// matches, recorded as they were sent.
 	Issuer   *string `json:"issuer,omitempty"`
 	Audience *string `json:"audience,omitempty"`
-	// removedServicePrincipalId is an id this operator created and that is no
-	// longer in Databricks.
+	// servicePrincipalRemovedAt is when a get by id answered that the service
+	// principal above is not there.
 	//
 	// Databricks is where identity is governed. One deleted there was deleted by
 	// somebody entitled to, and making a new one while the annotation still
 	// stands would be this operator overruling them every minute, and winning,
 	// since it never tires. So it is recorded and left.
 	//
-	// The id is kept rather than a flag because it is the value to search
-	// Databricks' audit log with: that says who deleted it and when. A flag
-	// would say something is wrong; an id says whom to ask.
-	RemovedServicePrincipalID *string `json:"removedServicePrincipalId,omitempty"`
+	// Only the moment, because the id it is about is still in servicePrincipalId
+	// and stays there: that is the value to search Databricks' audit log with,
+	// and it says who deleted it and when. The two together bracket a service
+	// principal's life, which is what makes what this record knows readable off
+	// the status rather than guessed at from which field happens to be empty.
+	ServicePrincipalRemovedAt *v1.Time `json:"servicePrincipalRemovedAt,omitempty"`
 	// conditions report whether the service principal is there and whether a
 	// federation policy trusts this subject.
-	Conditions []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	Conditions []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
 // IssuedDatabricksServicePrincipalStatusApplyConfiguration constructs a declarative configuration of the IssuedDatabricksServicePrincipalStatus type for use with
@@ -89,6 +111,14 @@ func IssuedDatabricksServicePrincipalStatus() *IssuedDatabricksServicePrincipalS
 // If called multiple times, the AccountID field is set to the value of the last call.
 func (b *IssuedDatabricksServicePrincipalStatusApplyConfiguration) WithAccountID(value string) *IssuedDatabricksServicePrincipalStatusApplyConfiguration {
 	b.AccountID = &value
+	return b
+}
+
+// WithServicePrincipalCreateSentAt sets the ServicePrincipalCreateSentAt field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ServicePrincipalCreateSentAt field is set to the value of the last call.
+func (b *IssuedDatabricksServicePrincipalStatusApplyConfiguration) WithServicePrincipalCreateSentAt(value v1.Time) *IssuedDatabricksServicePrincipalStatusApplyConfiguration {
+	b.ServicePrincipalCreateSentAt = &value
 	return b
 }
 
@@ -124,18 +154,18 @@ func (b *IssuedDatabricksServicePrincipalStatusApplyConfiguration) WithAudience(
 	return b
 }
 
-// WithRemovedServicePrincipalID sets the RemovedServicePrincipalID field in the declarative configuration to the given value
+// WithServicePrincipalRemovedAt sets the ServicePrincipalRemovedAt field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the RemovedServicePrincipalID field is set to the value of the last call.
-func (b *IssuedDatabricksServicePrincipalStatusApplyConfiguration) WithRemovedServicePrincipalID(value string) *IssuedDatabricksServicePrincipalStatusApplyConfiguration {
-	b.RemovedServicePrincipalID = &value
+// If called multiple times, the ServicePrincipalRemovedAt field is set to the value of the last call.
+func (b *IssuedDatabricksServicePrincipalStatusApplyConfiguration) WithServicePrincipalRemovedAt(value v1.Time) *IssuedDatabricksServicePrincipalStatusApplyConfiguration {
+	b.ServicePrincipalRemovedAt = &value
 	return b
 }
 
 // WithConditions adds the given value to the Conditions field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Conditions field.
-func (b *IssuedDatabricksServicePrincipalStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *IssuedDatabricksServicePrincipalStatusApplyConfiguration {
+func (b *IssuedDatabricksServicePrincipalStatusApplyConfiguration) WithConditions(values ...*metav1.ConditionApplyConfiguration) *IssuedDatabricksServicePrincipalStatusApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
 			panic("nil value passed to WithConditions")

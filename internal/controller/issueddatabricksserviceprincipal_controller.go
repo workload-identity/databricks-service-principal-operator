@@ -227,6 +227,11 @@ func (r *IssuedDatabricksServicePrincipalReconciler) stillWanted(ctx context.Con
 
 // destroy deletes the service principal, and holds the record until it has.
 //
+// Which of those happens is what the record's state says, and nothing else:
+// letting the finalizer go is irreversible, so it is taken only where nothing
+// can be left behind by it -- Unsent, where nothing can exist; Gone, where
+// Databricks has answered; and after this operator's own delete has confirmed.
+//
 // The finalizer is never dropped on a timeout. Doing so would be this operator
 // deciding that an identity nothing records is acceptable, on the evidence that
 // one call did not go through. A person can decide that; they remove the
@@ -247,26 +252,26 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountMismatch, message)
 	}
 
-	// The same refusal, for the same reason and a worse outcome. Deleting an id
-	// in the wrong account answers 404, which reads as already gone, releases the
-	// finalizer, and leaves a live service principal in the other account with
-	// nothing anywhere recording it.
-	if issued.Status.ServicePrincipalID != "" && issued.Status.AccountID == "" &&
-		clients.AccountID() != "" {
-		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
-			fmt.Sprintf("service principal %s is recorded with no Databricks account, so it is "+
-				"not deleted from here: an answer of 'not found' would mean 'not in this "+
-				"account' as readily as 'gone'. This record is held until somebody sets "+
-				"status.accountId, or removes the finalizer having seen what is left behind.",
-				issued.Status.ServicePrincipalID))
-	}
+	// What there is to delete, which each state answers differently and only one
+	// of them by asking Databricks.
+	var id string
+	switch issued.Status.ServicePrincipalState() {
+	case dbxv1alpha1.ServicePrincipalUnsent:
+		// Nothing was ever asked of Databricks for this record, so nothing can
+		// be out there and there is nothing to look for. This is the ordinary
+		// case -- a record deleted before it ever converged -- and a lookup here
+		// would be the operator asking about work it knows it never began.
 
-	id := issued.Status.ServicePrincipalID
-	if id == "" && issued.Status.RemovedServicePrincipalID == "" {
-		// This record names no service principal, which is either a record whose
-		// create never ran or one whose create ran and whose answer was never
-		// written down. The second leaves a service principal nothing names, so
-		// it is looked for rather than assumed away.
+	case dbxv1alpha1.ServicePrincipalGone:
+		// A get by id already answered that it is not there.
+
+	case dbxv1alpha1.ServicePrincipalSent:
+		// A create was sent and its answer never arrived, so something may exist
+		// carrying this record's marker. It is looked for rather than assumed
+		// away, and when the listing does not show it the record is held: a
+		// listing is eventually consistent, and releasing on one is how a live
+		// service principal ends up with nothing recording it.
+		//
 		// The issuer alone. Asking for the pair would hold this deletion over a
 		// token carrying no aud claim -- a value only a federation policy needs,
 		// and this path writes none.
@@ -274,14 +279,39 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 		if err != nil {
 			return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
 		}
-		found, _, ok, err := clients.FindServicePrincipal(ctx, r.issuing(issued, issuer))
+		issuing := r.issuing(issued, issuer)
+		found, _, ok, err := clients.FindServicePrincipal(ctx, issuing)
 		if err != nil {
 			result := outcomeFor(err)
 			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 		}
-		if ok {
-			id = found
+		if !ok {
+			return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonCreateUnconfirmed,
+				fmt.Sprintf("a create was sent for this identity at %s and no service principal "+
+					"carrying its marker has appeared, so this record is held rather than let go "+
+					"of: releasing it now would leave one in Databricks that nothing records. "+
+					"Search account %s for a service principal whose externalId is %s. Whoever "+
+					"has looked and found none removes the finalizer; whoever finds one deletes "+
+					"it there first.",
+					issued.Status.ServicePrincipalCreateSentAt.UTC().Format(time.RFC3339),
+					clients.AccountID(), databricks.MarkerFor(issuing)))
 		}
+		id = found
+
+	case dbxv1alpha1.ServicePrincipalKnown:
+		// The same refusal elsewhere makes, for the same reason and a worse
+		// outcome. Deleting an id in the wrong account answers 404, which reads
+		// as already gone, releases the finalizer, and leaves a live service
+		// principal in the other account with nothing anywhere recording it.
+		if issued.Status.AccountID == "" && clients.AccountID() != "" {
+			return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
+				fmt.Sprintf("service principal %s is recorded with no Databricks account, so it is "+
+					"not deleted from here: an answer of 'not found' would mean 'not in this "+
+					"account' as readily as 'gone'. This record is held until somebody sets "+
+					"status.accountId, or removes the finalizer having seen what is left behind.",
+					issued.Status.ServicePrincipalID))
+		}
+		id = issued.Status.ServicePrincipalID
 	}
 
 	logger := log.FromContext(ctx)
@@ -314,14 +344,9 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 	// deleted in Databricks, nothing here builds another: that deletion was made
 	// by somebody entitled to, and replacing it every minute would be this
 	// operator overruling them on a timer, and winning.
-	if issued.Status.RemovedServicePrincipalID != "" {
+	if issued.Status.ServicePrincipalState() == dbxv1alpha1.ServicePrincipalGone {
 		return r.reportReady(ctx, issued, metav1.ConditionFalse, reasonRemovedInDatabricks,
-			fmt.Sprintf("service principal %s was deleted in Databricks and is not replaced. To "+
-				"issue a new identity, remove %s from ServiceAccount %s/%s and add it again, "+
-				"which produces a new client id",
-				issued.Status.RemovedServicePrincipalID,
-				dbxv1alpha1.ServicePrincipalAnnotationFor(issued.Spec.Identity),
-				issued.Spec.ServiceAccount.Namespace, issued.Spec.ServiceAccount.Name))
+			removedInDatabricksMessage(issued))
 	}
 
 	// Asked before anything is created and before the trust is re-asserted, and
@@ -359,36 +384,19 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
 	}
 
-	// Written before the first call and not with its answer. A pass that creates
-	// a service principal and then stops has to leave behind something saying
-	// which account to look in, or an operator later pointed elsewhere finds
-	// nothing, concludes nothing was made, and makes a second.
-	//
-	// Only when nothing has been made yet. A record that already names a service
-	// principal and no account was made somewhere this operator cannot know, and
-	// stamping it with wherever the operator happens to be now is inventing the
-	// evidence the guard below is meant to weigh.
-	if here := clients.AccountID(); here != "" &&
-		issued.Status.AccountID == "" && issued.Status.ServicePrincipalID == "" {
-		issued.Status.AccountID = here
-		if err := r.Status().Update(ctx, issued); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
 	// A recorded id with no account is not something to conclude from.
 	//
-	// Everything below reads a 404 as "somebody deleted it in Databricks", which
-	// is recorded and never rebuilt. That reading is only available when the
-	// account this was made in is known and is the one being asked -- otherwise
-	// the same 404 means "not here", and taking it as a deletion erases the only
-	// record of where a live identity is.
+	// The existence check below reads a 404 as "somebody deleted it in
+	// Databricks", which is recorded and never rebuilt. That reading is only
+	// available when the account this was made in is known and is the one being
+	// asked -- otherwise the same 404 means "not here", and taking it as a
+	// deletion erases the only record of where a live identity is.
 	//
 	// The account is written before the first call, so this is a record carried
 	// across an upgrade or edited by hand. It waits rather than guesses, and
 	// somebody has to say which account it was made in.
-	if issued.Status.ServicePrincipalID != "" && issued.Status.AccountID == "" &&
-		clients.AccountID() != "" {
+	if issued.Status.ServicePrincipalState() == dbxv1alpha1.ServicePrincipalKnown &&
+		issued.Status.AccountID == "" && clients.AccountID() != "" {
 		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
 			fmt.Sprintf("service principal %s is recorded with no Databricks account, so an "+
 				"answer of 'not found' cannot be told from a lookup in the wrong place. Nothing "+
@@ -397,77 +405,87 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 				issued.Status.ServicePrincipalID))
 	}
 
-	if id := issued.Status.ServicePrincipalID; id != "" {
-		switch there, err := clients.ServicePrincipalExists(ctx, id); {
+	issuing := r.issuing(issued, issuer)
+	switch issued.Status.ServicePrincipalState() {
+	case dbxv1alpha1.ServicePrincipalKnown:
+		// The authoritative question, and the only state that can ask it. A get
+		// by id answers for certain, so a 404 here is a deletion rather than a
+		// listing that has not caught up.
+		switch there, err := clients.ServicePrincipalExists(ctx, issued.Status.ServicePrincipalID); {
 		case err != nil:
 			result := outcomeFor(err)
 			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 		case !there:
-			// The id is kept, in its own field, because it is the value to
-			// search Databricks' audit log with: that says who deleted it and
-			// when. A flag would say something is wrong; an id says whom to ask.
-			issued.Status.RemovedServicePrincipalID = id
-			issued.Status.ServicePrincipalID = ""
+			// The moment, and nothing cleared. The id stays where it was
+			// written, which is where somebody searching the audit log for who
+			// deleted it and when goes to read it; what stops a pod being
+			// equipped is the identity no longer being usable, not the client id
+			// being destroyed.
+			removedAt := metav1.Now()
+			issued.Status.ServicePrincipalRemovedAt = &removedAt
 			logger.Info("Latching the service principal as removed in Databricks: nothing here builds "+
-				"another", "removedServicePrincipalId", id)
-			// Cleared so that no pod is equipped with a client id resolving to
-			// nothing: the DatabricksServiceAccount carries no client id, so the webhook
-			// injects none.
-			issued.Status.ClientID = ""
+				"another", "servicePrincipalId", issued.Status.ServicePrincipalID)
 			return r.reportReady(ctx, issued, metav1.ConditionFalse, reasonRemovedInDatabricks,
-				fmt.Sprintf("service principal %s was deleted in Databricks and is not replaced. To "+
-					"issue a new identity, remove %s from ServiceAccount %s/%s and add it again, "+
-					"which produces a new client id",
-					issued.Status.RemovedServicePrincipalID,
-					dbxv1alpha1.ServicePrincipalAnnotationFor(issued.Spec.Identity),
-					issued.Spec.ServiceAccount.Namespace, issued.Spec.ServiceAccount.Name))
+				removedInDatabricksMessage(issued))
 		}
-	}
 
-	if issued.Status.ServicePrincipalID == "" {
-		// Looked for before it is made. An empty id here is a record written
-		// before a create that may or may not have run; making a second service
-		// principal would leave the first behind and hand the workload a new
-		// applicationId, so that everything granted to the first points at
-		// nothing.
-		issuing := r.issuing(issued, issuer)
+	case dbxv1alpha1.ServicePrincipalUnsent:
+		// No lookup, because nothing can exist for this record to adopt. The
+		// lookup that used to run here is a listing, and a listing that has not
+		// caught up answers "nothing" about a service principal that is there --
+		// which is only a wrong answer once a create has been sent.
+		//
+		// The mark goes down first and is persisted before the call, so a pass
+		// that creates and then stops leaves behind the one fact it cannot work
+		// out again. The account goes with it, in the same write: a record that
+		// named a service principal and no account would be one nothing could
+		// safely look up, and both are what a later pass needs to find what this
+		// one made.
+		if here := clients.AccountID(); here != "" && issued.Status.AccountID == "" {
+			issued.Status.AccountID = here
+		}
+		sentAt := metav1.Now()
+		issued.Status.ServicePrincipalCreateSentAt = &sentAt
+		if err := r.Status().Update(ctx, issued); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		id, clientID, err := clients.CreateServicePrincipal(ctx, issuing)
+		if err != nil {
+			logger.Error(err, "Could not create the service principal in Databricks")
+			result := outcomeFor(err)
+			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
+		}
+		logger.Info("Created a service principal in Databricks",
+			"servicePrincipalId", id, "clientId", clientID)
+		if err := r.adopt(ctx, clients, issued, id, clientID, issuer, audience); err != nil {
+			return ctrl.Result{}, err
+		}
+
+	case dbxv1alpha1.ServicePrincipalSent:
+		// A create was sent and its answer never arrived, so a service principal
+		// carrying this record's marker may already exist. It is looked for, and
+		// nothing else is done: creating here is what makes two of them carrying
+		// one marker, which FindServicePrincipal then refuses to adopt either of
+		// for ever.
 		id, clientID, found, err := clients.FindServicePrincipal(ctx, issuing)
 		if err != nil {
 			result := outcomeFor(err)
 			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
 		}
 		if !found {
-			if id, clientID, err = clients.CreateServicePrincipal(ctx, issuing); err == nil {
-				logger.Info("Created a service principal in Databricks",
-					"servicePrincipalId", id, "clientId", clientID)
-			}
+			return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonCreateUnconfirmed,
+				fmt.Sprintf("a create was sent for this identity at %s and no service principal "+
+					"carrying its marker has appeared, so nothing is created here: a second one "+
+					"carrying the same marker could never be told from the first. Search account "+
+					"%s for a service principal whose externalId is %s. Deleting it there, or "+
+					"deleting this record once nothing is left, is what ends this.",
+					issued.Status.ServicePrincipalCreateSentAt.UTC().Format(time.RFC3339),
+					clients.AccountID(), databricks.MarkerFor(issuing)))
 		}
-		if err != nil {
-			logger.Error(err, "Could not create the service principal in Databricks")
-			result := outcomeFor(err)
-			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
-		}
-
-		issued.Status.ServicePrincipalID = id
-		issued.Status.ClientID = clientID
-		issued.Status.AccountID = clients.AccountID()
-		issued.Status.Issuer = issuer
-		// Assigned here rather than after the write below, with the client id it
-		// belongs to. The DatabricksServiceAccount controller copies both into
-		// the tenant's namespace and the webhook injects both, and a pod given a
-		// client id with no audience gets a token minted for the audience kubelet
-		// defaults to -- which is the one value that can never be exchanged. Half
-		// of a pair is worse than neither.
-		issued.Status.Audience = audience
-
-		// Written before anything else is attempted. A service principal exists
-		// in Databricks now, and an id this record never held is one nothing
-		// deletes until the marker is read.
-		//
-		// Status().Update rather than the forgiving one: a NotFound here means
-		// this record was deleted mid-pass, and carrying on would build a
-		// federation policy onto an id nothing records.
-		if err := r.Status().Update(ctx, issued); err != nil {
+		logger.Info("Adopted the service principal this record's create made",
+			"servicePrincipalId", id, "clientId", clientID)
+		if err := r.adopt(ctx, clients, issued, id, clientID, issuer, audience); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -500,6 +518,47 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 
 	return r.reportReady(ctx, issued, metav1.ConditionTrue, reasonExchangeable,
 		fmt.Sprintf("exchanging tokens for %s as client %s", issued.Spec.Subject, issued.Status.ClientID))
+}
+
+// adopt writes down what Databricks answered, before anything else is
+// attempted. It is what takes a record from Sent to Known, whether the answer
+// came from the create or from the lookup that found what an earlier create
+// made.
+//
+// Status().Update rather than the forgiving one: a NotFound here means this
+// record was deleted mid-pass, and carrying on would build a federation policy
+// onto an id nothing records.
+func (r *IssuedDatabricksServicePrincipalReconciler) adopt(ctx context.Context,
+	clients databricks.Clients, issued *dbxv1alpha1.IssuedDatabricksServicePrincipal,
+	id, clientID, issuer, audience string) error {
+	issued.Status.ServicePrincipalID = id
+	issued.Status.ClientID = clientID
+	if here := clients.AccountID(); here != "" {
+		issued.Status.AccountID = here
+	}
+	issued.Status.Issuer = issuer
+	// Assigned with the client id it belongs to. The DatabricksServiceAccount
+	// controller copies both into the tenant's namespace and the webhook injects
+	// both, and a pod given a client id with no audience gets a token minted for
+	// the audience kubelet defaults to -- which is the one value that can never
+	// be exchanged. Half of a pair is worse than neither.
+	issued.Status.Audience = audience
+	return r.Status().Update(ctx, issued)
+}
+
+// removedInDatabricksMessage says what happened and names the one act that
+// starts a new identity.
+//
+// It names the id, which is still on the record: that is the value somebody
+// searches Databricks' audit log with, and it says who deleted it and when. A
+// flag would say something is wrong; an id says whom to ask.
+func removedInDatabricksMessage(issued *dbxv1alpha1.IssuedDatabricksServicePrincipal) string {
+	return fmt.Sprintf("service principal %s was deleted in Databricks and is not replaced. To "+
+		"issue a new identity, remove %s from ServiceAccount %s/%s and add it again, "+
+		"which produces a new client id",
+		issued.Status.ServicePrincipalID,
+		dbxv1alpha1.ServicePrincipalAnnotationFor(issued.Spec.Identity),
+		issued.Spec.ServiceAccount.Namespace, issued.Spec.ServiceAccount.Name)
 }
 
 // removeFederationPolicies takes back the trust this operator wrote for an

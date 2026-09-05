@@ -18,7 +18,8 @@ limitations under the License.
 package v1alpha1
 
 import (
-	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
 // ProjectedIdentityApplyConfiguration represents a declarative configuration of the ProjectedIdentity type for use
@@ -81,13 +82,14 @@ type ProjectedIdentityApplyConfiguration struct {
 	//
 	// It cannot be derived: Databricks generates it and refuses to accept one.
 	ClientID *string `json:"clientId,omitempty"`
-	// removedServicePrincipalId is an id this operator created and that is no
-	// longer in Databricks.
+	// servicePrincipalRemovedAt is when Databricks answered that the service
+	// principal above is no longer there.
 	//
-	// It is kept rather than a flag because it is the value to search Databricks'
-	// audit log with: that says who deleted it and when. A flag would say
-	// something is wrong; an id says whom to ask.
-	RemovedServicePrincipalID *string `json:"removedServicePrincipalId,omitempty"`
+	// Only the moment, because servicePrincipalId still names it and is not
+	// cleared: that id is the value to search Databricks' audit log with, and it
+	// says who deleted it and when. What this field decides is whether the
+	// identity may still be used, which is Usable.
+	ServicePrincipalRemovedAt *v1.Time `json:"servicePrincipalRemovedAt,omitempty"`
 	// subject is the sub claim the federation policy matches, assembled from the
 	// ServiceAccount's namespace and name.
 	//
@@ -107,7 +109,7 @@ type ProjectedIdentityApplyConfiguration struct {
 	// would write it, and conditions are keyed by type -- so they would contend
 	// for one entry. Asked per identity it also says more, because a pod may
 	// carry one operator's token and not another's.
-	Conditions []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	Conditions []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
 
 // ProjectedIdentityApplyConfiguration constructs a declarative configuration of the ProjectedIdentity type for use with
@@ -164,11 +166,11 @@ func (b *ProjectedIdentityApplyConfiguration) WithClientID(value string) *Projec
 	return b
 }
 
-// WithRemovedServicePrincipalID sets the RemovedServicePrincipalID field in the declarative configuration to the given value
+// WithServicePrincipalRemovedAt sets the ServicePrincipalRemovedAt field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the RemovedServicePrincipalID field is set to the value of the last call.
-func (b *ProjectedIdentityApplyConfiguration) WithRemovedServicePrincipalID(value string) *ProjectedIdentityApplyConfiguration {
-	b.RemovedServicePrincipalID = &value
+// If called multiple times, the ServicePrincipalRemovedAt field is set to the value of the last call.
+func (b *ProjectedIdentityApplyConfiguration) WithServicePrincipalRemovedAt(value v1.Time) *ProjectedIdentityApplyConfiguration {
+	b.ServicePrincipalRemovedAt = &value
 	return b
 }
 
@@ -191,7 +193,7 @@ func (b *ProjectedIdentityApplyConfiguration) WithAudience(value string) *Projec
 // WithConditions adds the given value to the Conditions field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Conditions field.
-func (b *ProjectedIdentityApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *ProjectedIdentityApplyConfiguration {
+func (b *ProjectedIdentityApplyConfiguration) WithConditions(values ...*metav1.ConditionApplyConfiguration) *ProjectedIdentityApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
 			panic("nil value passed to WithConditions")

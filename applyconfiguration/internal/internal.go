@@ -173,12 +173,15 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: issuer
       type:
         scalar: string
-    - name: removedServicePrincipalId
+    - name: servicePrincipalCreateSentAt
       type:
-        scalar: string
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.Time
     - name: servicePrincipalId
       type:
         scalar: string
+    - name: servicePrincipalRemovedAt
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.Time
 - name: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.IssuedServiceAccount
   map:
     fields:
@@ -223,12 +226,12 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: profile
       type:
         scalar: string
-    - name: removedServicePrincipalId
-      type:
-        scalar: string
     - name: servicePrincipalId
       type:
         scalar: string
+    - name: servicePrincipalRemovedAt
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.Time
     - name: subject
       type:
         scalar: string

@@ -250,7 +250,7 @@ func (r *DatabricksServiceAccountReconciler) entryFor(ctx context.Context,
 		Operator:                  request.Operator.String(),
 		Issued:                    r.DatabricksAccountNamespacedName.Namespace + "/" + issued.Name,
 		ServicePrincipalID:        issued.Status.ServicePrincipalID,
-		RemovedServicePrincipalID: issued.Status.RemovedServicePrincipalID,
+		ServicePrincipalRemovedAt: issued.Status.ServicePrincipalRemovedAt,
 		ClientID:                  issued.Status.ClientID,
 		AccountID:                 issued.Status.AccountID,
 		Subject:                   issued.Spec.Subject,
@@ -352,13 +352,19 @@ func projectedIdentityFor(entry dbxv1alpha1.ProjectedIdentity) *acv1alpha1.Proje
 		{entry.ServicePrincipalID, identity.WithServicePrincipalID},
 		{entry.AccountID, identity.WithAccountID},
 		{entry.ClientID, identity.WithClientID},
-		{entry.RemovedServicePrincipalID, identity.WithRemovedServicePrincipalID},
 		{entry.Subject, identity.WithSubject},
 		{entry.Audience, identity.WithAudience},
 	} {
 		if field.value != "" {
 			identity = field.set(field.value)
 		}
+	}
+
+	// Its own line rather than a row above, because it is a moment and the rows
+	// are strings. The same rule governs it: sent only when there is one, so an
+	// identity nothing has removed is not one this operator claims a value for.
+	if entry.ServicePrincipalRemovedAt != nil {
+		identity = identity.WithServicePrincipalRemovedAt(*entry.ServicePrincipalRemovedAt)
 	}
 
 	for i := range entry.Conditions {
@@ -681,15 +687,15 @@ func (r *DatabricksServiceAccountReconciler) equipment(ctx context.Context,
 			len(wrongAudience), strings.Join(wrongAudience, ", ")))
 	}
 	if len(stale) > 0 {
-		if entry.ClientID == "" {
-			// The identity has no client id to write, so a pod created now would
-			// carry no profile at all and the advice above is one nobody can
-			// act on. What to do instead is on Ready, which is where the reason
-			// the client id is gone is written.
+		if !entry.Usable() {
+			// The identity is not one a pod may be equipped with, so a pod
+			// created now would carry no profile at all and the advice below is
+			// one nobody can act on. What to do instead is on Ready, which is
+			// where the reason this identity stopped being usable is written.
 			said = append(said, fmt.Sprintf(
-				"%d pod(s) carry a profile naming a client id this identity no longer has, so "+
-					"nothing they hold can be exchanged; Ready says why and what starts a new "+
-					"identity: %s",
+				"%d pod(s) carry a profile for an identity that can no longer be exchanged for "+
+					"anything, so nothing they hold reaches Databricks; Ready says why and what "+
+					"starts a new identity: %s",
 				len(stale), strings.Join(stale, ", ")))
 		} else {
 			said = append(said, fmt.Sprintf(
@@ -717,17 +723,17 @@ func (r *DatabricksServiceAccountReconciler) equipment(ctx context.Context,
 // will not match. That is the right report: this operator did not equip it, and
 // saying so is not the same as saying it is broken.
 func describes(pod *corev1.Pod, entry dbxv1alpha1.ProjectedIdentity) bool {
-	written := dbxwebhook.Profiles([]dbxv1alpha1.ProjectedIdentity{entry})
-	if written == "" {
-		// An identity with no client id is one the webhook writes nothing for,
-		// and every string contains the empty one -- so without this the check
-		// answers yes for every pod in the namespace and Equipped reports True
-		// for pods carrying a profile for a service principal that is not there.
-		// Recording one as removed in Databricks clears the client id, which is
-		// exactly when those pods are worth reporting.
+	if !entry.Usable() {
+		// An identity a workload cannot be equipped with is one the webhook
+		// writes nothing for, and every string contains the empty one -- so
+		// without this the check answers yes for every pod in the namespace and
+		// Equipped reports True for pods carrying a profile for a service
+		// principal that is not there, which is exactly when they are worth
+		// reporting.
 		return false
 	}
-	return strings.Contains(pod.Annotations[dbxwebhook.ConfigAnnotation], written)
+	return strings.Contains(pod.Annotations[dbxwebhook.ConfigAnnotation],
+		dbxwebhook.Profiles([]dbxv1alpha1.ProjectedIdentity{entry}))
 }
 
 // serviceAccountOf is the ServiceAccount a pod actually runs as. An empty name

@@ -119,13 +119,34 @@ type IssuedDatabricksServicePrincipalStatus struct {
 	// +optional
 	AccountID string `json:"accountId,omitempty"`
 
+	// servicePrincipalCreateSentAt is when this operator was about to ask
+	// Databricks for the service principal below. It is written before the call
+	// is made and never cleared.
+	//
+	// It is the one fact about this record that cannot be worked out again. The
+	// marker, the subject and the display name are all derivable from the spec
+	// at any moment; whether a create was already sent is not. Without it, a
+	// record naming no id cannot be told from one whose create ran and whose
+	// answer never arrived -- and those two permit opposite acts, since the
+	// first may create and may be let go of, and the second may do neither.
+	//
+	// A moment rather than a flag, because a record waiting for that answer has
+	// to be able to say how long it has been waiting.
+	// +optional
+	ServicePrincipalCreateSentAt *metav1.Time `json:"servicePrincipalCreateSentAt,omitempty"`
+
 	// servicePrincipalId is the numeric id Databricks assigned. Federation
 	// policies hang off it, and it is what deletes it.
 	//
-	// Empty for one window only: between this record being written and the
-	// create returning. What closes that window is the marker -- the service
+	// Empty for one window only: between the create being sent and its answer
+	// being written down. What closes that window is the marker -- the service
 	// principal carries it from the moment it exists, so one created by a pass
 	// that then crashed is found again rather than left behind.
+	//
+	// Written once and never cleared, including when Databricks answers that it
+	// is gone. It is the value somebody searches the audit log with to find out
+	// who deleted it, so clearing it would be the evidence of a removal
+	// destroying the evidence it was drawn from.
 	//
 	// A string rather than an integer because these are int64 and already
 	// approach the largest integer JSON carries exactly.
@@ -147,19 +168,21 @@ type IssuedDatabricksServicePrincipalStatus struct {
 	// +optional
 	Audience string `json:"audience,omitempty"`
 
-	// removedServicePrincipalId is an id this operator created and that is no
-	// longer in Databricks.
+	// servicePrincipalRemovedAt is when a get by id answered that the service
+	// principal above is not there.
 	//
 	// Databricks is where identity is governed. One deleted there was deleted by
 	// somebody entitled to, and making a new one while the annotation still
 	// stands would be this operator overruling them every minute, and winning,
 	// since it never tires. So it is recorded and left.
 	//
-	// The id is kept rather than a flag because it is the value to search
-	// Databricks' audit log with: that says who deleted it and when. A flag
-	// would say something is wrong; an id says whom to ask.
+	// Only the moment, because the id it is about is still in servicePrincipalId
+	// and stays there: that is the value to search Databricks' audit log with,
+	// and it says who deleted it and when. The two together bracket a service
+	// principal's life, which is what makes what this record knows readable off
+	// the status rather than guessed at from which field happens to be empty.
 	// +optional
-	RemovedServicePrincipalID string `json:"removedServicePrincipalId,omitempty"`
+	ServicePrincipalRemovedAt *metav1.Time `json:"servicePrincipalRemovedAt,omitempty"`
 
 	// conditions report whether the service principal is there and whether a
 	// federation policy trusts this subject.
@@ -167,6 +190,62 @@ type IssuedDatabricksServicePrincipalStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// ServicePrincipalState is what a record knows about the service principal it
+// is the memory of.
+//
+// It is not stored anywhere. It is read off the three fields above, so that
+// every caller asks one question and gets one answer.
+type ServicePrincipalState string
+
+const (
+	// ServicePrincipalUnsent is no create having been sent, so nothing can
+	// exist. It is the only state in which one may be created, and the only one
+	// in which this record may be let go of without asking Databricks anything.
+	ServicePrincipalUnsent ServicePrincipalState = "Unsent"
+
+	// ServicePrincipalSent is a create having been sent whose answer never
+	// arrived. It is the state "I may have made something I cannot see", and it
+	// permits no irreversible act: creating here would make a second service
+	// principal carrying one marker, which nothing afterwards can tell apart,
+	// and releasing the finalizer here would leave one behind that nothing
+	// records. The only move it allows is to keep looking by the marker.
+	ServicePrincipalSent ServicePrincipalState = "Sent"
+
+	// ServicePrincipalKnown is there being an id, which is what makes an
+	// authoritative question askable: a get by id answers for certain, where a
+	// list by marker is a listing and may be behind. It is the only state in
+	// which a workload is equipped, and the only one in which a 404 is a
+	// deletion.
+	ServicePrincipalKnown ServicePrincipalState = "Known"
+
+	// ServicePrincipalGone is such a get having answered that the id is not
+	// there. Nothing here builds another.
+	ServicePrincipalGone ServicePrincipalState = "Gone"
+)
+
+// ServicePrincipalState is what this record knows, resolved most-decided first:
+// a 404 answered about the id outranks the id, and the id outranks the mark,
+// because each is a later fact about the same service principal than the one
+// under it.
+//
+// One function rather than a comparison at each site. Three fields spell four
+// states, and an emptiness compared in isolation means "never knew" on one path,
+// "deliberately cleared" on another and "gone" on a third -- so the paths
+// disagree about the same record. What each state permits is the whole of what
+// this operator does, and it is decided here.
+func (s *IssuedDatabricksServicePrincipalStatus) ServicePrincipalState() ServicePrincipalState {
+	switch {
+	case s.ServicePrincipalRemovedAt != nil:
+		return ServicePrincipalGone
+	case s.ServicePrincipalID != "":
+		return ServicePrincipalKnown
+	case s.ServicePrincipalCreateSentAt != nil:
+		return ServicePrincipalSent
+	default:
+		return ServicePrincipalUnsent
+	}
 }
 
 // +kubebuilder:object:root=true

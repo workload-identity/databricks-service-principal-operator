@@ -258,14 +258,15 @@ type ProjectedIdentity struct {
 	// +optional
 	ClientID string `json:"clientId,omitempty"`
 
-	// removedServicePrincipalId is an id this operator created and that is no
-	// longer in Databricks.
+	// servicePrincipalRemovedAt is when Databricks answered that the service
+	// principal above is no longer there.
 	//
-	// It is kept rather than a flag because it is the value to search Databricks'
-	// audit log with: that says who deleted it and when. A flag would say
-	// something is wrong; an id says whom to ask.
+	// Only the moment, because servicePrincipalId still names it and is not
+	// cleared: that id is the value to search Databricks' audit log with, and it
+	// says who deleted it and when. What this field decides is whether the
+	// identity may still be used, which is Usable.
 	// +optional
-	RemovedServicePrincipalID string `json:"removedServicePrincipalId,omitempty"`
+	ServicePrincipalRemovedAt *metav1.Time `json:"servicePrincipalRemovedAt,omitempty"`
 
 	// subject is the sub claim the federation policy matches, assembled from the
 	// ServiceAccount's namespace and name.
@@ -342,6 +343,19 @@ func (s *DatabricksServiceAccountStatus) Identity(profile string) (*ProjectedIde
 // the shape that produced the worst bug in this codebase.
 func (i ProjectedIdentity) AskedOf(operator types.NamespacedName) bool {
 	return i.Operator == operator.String()
+}
+
+// Usable reports whether a workload may be equipped with this identity: there
+// is a service principal, and Databricks has not answered that it is gone.
+//
+// It is the question the webhook and the equipment check have always been
+// asking. What they compared was the client id against the empty string, which
+// answered correctly only because latching a removal cleared it -- behaviour
+// changed by destroying the record of what happened, taking the id somebody
+// searches the audit log with along with it. Nothing is cleared now, so the
+// question is asked as itself.
+func (i ProjectedIdentity) Usable() bool {
+	return i.ServicePrincipalID != "" && i.ServicePrincipalRemovedAt == nil
 }
 
 // +kubebuilder:object:root=true

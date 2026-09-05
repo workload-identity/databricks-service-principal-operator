@@ -388,18 +388,19 @@ func TestOneDeletedInDatabricksIsNotReplaced(t *testing.T) {
 	}
 
 	principal := principalOf(t, c.Client)
-	if identityIn(t, principal).RemovedServicePrincipalID != first {
-		t.Errorf("removedServicePrincipalId is %q, want %q -- it is the value that searches "+
-			"Databricks' audit log for who deleted it",
-			identityIn(t, principal).RemovedServicePrincipalID, first)
+	if identityIn(t, principal).ServicePrincipalRemovedAt == nil {
+		t.Error("nothing on the identity says its service principal is gone, so the next pass " +
+			"reads a record that never built one and builds")
 	}
-	if identityIn(t, principal).ServicePrincipalID != "" {
-		t.Errorf("servicePrincipalId is %q; nothing is there, and naming it would mislead "+
-			"everything that reads it", identityIn(t, principal).ServicePrincipalID)
+	if identityIn(t, principal).ServicePrincipalID != first {
+		t.Errorf("servicePrincipalId is %q, want %q -- it is the value that searches "+
+			"Databricks' audit log for who deleted it, and the removal is not evidence "+
+			"that may destroy the evidence it was drawn from",
+			identityIn(t, principal).ServicePrincipalID, first)
 	}
-	if identityIn(t, principal).ClientID != "" {
-		t.Errorf("clientId is %q; a pod equipped with it would present a client id that "+
-			"resolves to nothing", identityIn(t, principal).ClientID)
+	if identityIn(t, principal).Usable() {
+		t.Error("the identity still reports itself usable, so the webhook equips pods with a " +
+			"client id that resolves to nothing")
 	}
 	ready := meta.FindStatusCondition(identityIn(t, principal).Conditions, conditionReady)
 	if ready == nil || ready.Reason != reasonRemovedInDatabricks {
@@ -461,9 +462,9 @@ func TestAskingAgainStartsAgain(t *testing.T) {
 			"the same, which is why every permission has to be granted again",
 			identityIn(t, principal).ClientID)
 	}
-	if identityIn(t, principal).RemovedServicePrincipalID != "" {
-		t.Errorf("removedServicePrincipalId is %q on a fresh identity",
-			identityIn(t, principal).RemovedServicePrincipalID)
+	if identityIn(t, principal).ServicePrincipalRemovedAt != nil {
+		t.Errorf("servicePrincipalRemovedAt is %v on a fresh identity, so nothing will equip a "+
+			"pod with it", identityIn(t, principal).ServicePrincipalRemovedAt)
 	}
 }
 
@@ -594,7 +595,8 @@ func tokenVolumeFor(audience string) corev1.Volume {
 func equippedPod(serviceAccount string, identities ...dbxv1alpha1.ProjectedIdentity) *corev1.Pod {
 	if len(identities) == 0 {
 		identities = []dbxv1alpha1.ProjectedIdentity{{
-			Profile: testOperatorRef.String(), ClientID: "app-uuid", Audience: testAudience,
+			Profile: testOperatorRef.String(), ServicePrincipalID: "7788",
+			ClientID: "app-uuid", Audience: testAudience,
 		}}
 	}
 	pod := rawPodRunningAs(serviceAccount, tokenVolume())
@@ -707,12 +709,12 @@ func TestAPodCarryingAnOlderConfigurationIsReported(t *testing.T) {
 // TestPodsHoldingAProfileForAServicePrincipalThatIsGoneAreNotCalledEquipped
 // covers the state where being equipped stops meaning anything.
 //
-// A service principal deleted in Databricks clears the client id and leaves the
-// audience, so the webhook would now write nothing for this identity -- and what
-// is written for nothing is the empty string, which every pod in the namespace
-// contains. Equipped then reports True for pods carrying a profile naming a
-// client that resolves to nothing, which is the one moment their owner needs to
-// be told otherwise.
+// A service principal deleted in Databricks leaves the identity carrying every
+// value it always had, and the webhook writes nothing for it from that moment --
+// and what is written for nothing is the empty string, which every pod in the
+// namespace contains. Equipped then reports True for pods carrying a profile
+// naming a client that resolves to nothing, which is the one moment their owner
+// needs to be told otherwise.
 func TestPodsHoldingAProfileForAServicePrincipalThatIsGoneAreNotCalledEquipped(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
@@ -730,8 +732,17 @@ func TestPodsHoldingAProfileForAServicePrincipalThatIsGoneAreNotCalledEquipped(t
 	stub.gone = identityIn(t, principalOf(t, c.Client)).ServicePrincipalID
 	c.settle(t)
 
-	if got := identityIn(t, principalOf(t, c.Client)).ClientID; got != "" {
-		t.Fatalf("clientId is %q; this test is about what is reported once it is cleared", got)
+	// The identity keeps everything it held, and stops being usable. That is the
+	// whole of what changed here, and it is why the pods have to be reported on
+	// something other than a value going missing.
+	entry := identityIn(t, principalOf(t, c.Client))
+	if entry.ClientID == "" || entry.ServicePrincipalID == "" {
+		t.Fatalf("the identity is %+v; the id and the client id are what somebody searches the "+
+			"audit log and their own grants with, and both have to survive the removal", entry)
+	}
+	if entry.Usable() {
+		t.Fatal("the identity still reports itself usable, so this test is about a state it " +
+			"never reached")
 	}
 	condition := equipment(t, c.Client)
 	if condition == nil || condition.Status != metav1.ConditionFalse {
@@ -1085,11 +1096,11 @@ func TestNamingNoNamespacesServesNothing(t *testing.T) {
 // operator must not make.
 //
 // Databricks answers a lookup in the wrong account with the same 404 it gives
-// for an identity that is really gone. Reading the second as the first moves the
-// id to removedServicePrincipalId, clears it, and never rebuilds -- and what was
-// cleared is the only record of where the live identity is. One edit to the
-// DatabricksAccount did that to every identity in a cluster in one reconcile
-// interval, with nothing anywhere reporting an error.
+// for an identity that is really gone. Reading the second as the first latches
+// the record as Gone and never rebuilds, over a service principal that is alive
+// somewhere this operator was not looking. One edit to the DatabricksAccount did
+// that to every identity in a cluster in one reconcile interval, with nothing
+// anywhere reporting an error.
 func TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted(t *testing.T) {
 	t.Parallel()
 	serviceAccount := asking(testNamespace, testName)
@@ -1108,13 +1119,13 @@ func TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted(t *testing.T) {
 	if got == nil {
 		t.Fatal("the record is gone")
 	}
-	if got.Status.RemovedServicePrincipalID != "" {
+	if got.Status.ServicePrincipalRemovedAt != nil {
 		t.Errorf("recorded %s as deleted in Databricks on a lookup made in another account",
-			got.Status.RemovedServicePrincipalID)
+			got.Status.ServicePrincipalID)
 	}
 	if got.Status.ServicePrincipalID != "7788" {
-		t.Errorf("servicePrincipalId is %q, want it untouched -- clearing it erases the only "+
-			"record of where the live identity is", got.Status.ServicePrincipalID)
+		t.Errorf("servicePrincipalId is %q, want it untouched -- it is the only record of where "+
+			"the live identity is", got.Status.ServicePrincipalID)
 	}
 	ready := meta.FindStatusCondition(got.Status.Conditions, conditionReady)
 	if ready == nil || ready.Reason != reasonAccountMismatch {
@@ -1198,14 +1209,23 @@ func TestDeletingTheDatabricksServiceAccountChangesNothing(t *testing.T) {
 	}
 }
 
-// TestTheObjectComesBackAdoptingWhatIsThere is the other half. The record is
-// rebuilt from Databricks rather than by making a second service principal, so
-// the applicationId a workload was given does not change under it.
-func TestTheObjectComesBackAdoptingWhatIsThere(t *testing.T) {
+// TestTheObjectComesBackAdoptingWhatItsOwnCreateMade is the other half, and the
+// state that reaches it is Sent: a create was sent and its answer never arrived.
+//
+// What the record then has to do is find what it made rather than make a second,
+// so the applicationId a workload was given does not change under it. The mark
+// is what says a create was sent, and it is the only thing that makes adopting
+// legal here -- without it nothing can exist, and looking is asking about work
+// this operator knows it never began.
+func TestTheObjectComesBackAdoptingWhatItsOwnCreateMade(t *testing.T) {
 	t.Parallel()
+	serviceAccount := asking(testNamespace, testName)
+	sent := recordFor(serviceAccount)
+	sentAt := metav1.Now()
+	sent.Status.ServicePrincipalCreateSentAt = &sentAt
+
 	stub := &stubClients{foundID: "7788", foundClientID: "app-uuid"}
-	c := newControllers(t, stub,
-		mintingNamespace(testNamespace), asking(testNamespace, testName))
+	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, sent)
 
 	c.settle(t)
 
@@ -1214,13 +1234,15 @@ func TestTheObjectComesBackAdoptingWhatIsThere(t *testing.T) {
 		t.Fatal("no identity was recorded")
 	}
 	if len(stub.created) != 0 {
-		t.Errorf("created %v; there was already one to adopt", stub.created)
+		t.Errorf("created %v; there was already one to adopt, and a second carrying the same "+
+			"marker could never be told from it", stub.created)
 	}
 	if identityIn(t, got).ServicePrincipalID != "7788" || identityIn(t, got).ClientID != "app-uuid" {
 		t.Errorf("status is %+v, want the one that was already there", got.Status)
 	}
 	if len(stub.looked) == 0 {
-		t.Error("nothing was looked for; a lost record would be a lost identity")
+		t.Error("nothing was looked for; the service principal this record's create made would " +
+			"be left with nothing naming it")
 	}
 }
 
@@ -1471,30 +1493,47 @@ func TestARecordThatHasNotReachedTheCacheIsNotDereferenced(t *testing.T) {
 	}
 }
 
-// TestAnIdentityWithNoClientIdDescribesNoPod covers the guard describes needs in
+// TestAnIdentityNoPodCanUseDescribesNoPod covers the guard describes needs in
 // order to answer a question about a string at all.
 //
-// The webhook writes nothing for an identity with no client id, and every string
-// contains the empty one. Without the guard the containment check answers yes
-// for every pod in the namespace, so Equipped reports True for pods carrying a
-// profile for a service principal that is not there -- and clearing the client
-// id is exactly what recording one as removed in Databricks does, which is the
-// moment those pods are worth reporting.
-func TestAnIdentityWithNoClientIdDescribesNoPod(t *testing.T) {
+// The webhook writes nothing for an identity a workload cannot be equipped with,
+// and every string contains the empty one. Without the guard the containment
+// check answers yes for every pod in the namespace, so Equipped reports True for
+// pods carrying a profile for a service principal that is not there -- which is
+// the moment those pods are worth reporting.
+//
+// Both ways of not being usable. A service principal recorded as removed keeps
+// its client id and its own id, so a guard reading the client id for emptiness
+// would answer the first row and pass the second straight through.
+func TestAnIdentityNoPodCanUseDescribesNoPod(t *testing.T) {
 	t.Parallel()
-	removed := dbxv1alpha1.ProjectedIdentity{
-		Profile: testOperatorRef.String(), Audience: testAudience,
-	}
-
-	for _, pod := range []*corev1.Pod{
-		equippedPod(testName),
-		rawPodRunningAs(testName),
+	removedAt := metav1.Now()
+	for _, unusable := range []struct {
+		name  string
+		entry dbxv1alpha1.ProjectedIdentity
+	}{
+		{"nothing was made for it", dbxv1alpha1.ProjectedIdentity{
+			Profile: testOperatorRef.String(), Audience: testAudience,
+		}},
+		{"its service principal was deleted in Databricks", dbxv1alpha1.ProjectedIdentity{
+			Profile: testOperatorRef.String(), Audience: testAudience,
+			ServicePrincipalID: "7788", ClientID: "app-uuid",
+			ServicePrincipalRemovedAt: &removedAt,
+		}},
 	} {
-		if describes(pod, removed) {
-			t.Errorf("pod %s is reported as describing an identity with no client id; every "+
-				"pod in the namespace would be, and Equipped would say True for a service "+
-				"principal that is not there", pod.Name)
-		}
+		t.Run(unusable.name, func(t *testing.T) {
+			t.Parallel()
+			for _, pod := range []*corev1.Pod{
+				equippedPod(testName),
+				rawPodRunningAs(testName),
+			} {
+				if describes(pod, unusable.entry) {
+					t.Errorf("pod %s is reported as describing an identity nothing can be "+
+						"exchanged for; every pod in the namespace would be, and Equipped "+
+						"would say True for a service principal that is not there", pod.Name)
+				}
+			}
+		})
 	}
 }
 
@@ -1509,7 +1548,8 @@ func TestAnIdentityWithNoClientIdDescribesNoPod(t *testing.T) {
 func TestAPodDescribesTheIdentityItWasAdmittedWith(t *testing.T) {
 	t.Parallel()
 	converged := dbxv1alpha1.ProjectedIdentity{
-		Profile: testOperatorRef.String(), ClientID: "app-uuid", Audience: testAudience,
+		Profile: testOperatorRef.String(), ServicePrincipalID: "7788",
+		ClientID: "app-uuid", Audience: testAudience,
 	}
 	pod := equippedPod(testName, converged)
 

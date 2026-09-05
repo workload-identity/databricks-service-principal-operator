@@ -262,32 +262,57 @@ spec:
                   issuer and audience are the other two things the federation policy
                   matches, recorded as they were sent.
                 type: string
-              removedServicePrincipalId:
+              servicePrincipalCreateSentAt:
                 description: |-
-                  removedServicePrincipalId is an id this operator created and that is no
-                  longer in Databricks.
+                  servicePrincipalCreateSentAt is when this operator was about to ask
+                  Databricks for the service principal below. It is written before the call
+                  is made and never cleared.
 
-                  Databricks is where identity is governed. One deleted there was deleted by
-                  somebody entitled to, and making a new one while the annotation still
-                  stands would be this operator overruling them every minute, and winning,
-                  since it never tires. So it is recorded and left.
+                  It is the one fact about this record that cannot be worked out again. The
+                  marker, the subject and the display name are all derivable from the spec
+                  at any moment; whether a create was already sent is not. Without it, a
+                  record naming no id cannot be told from one whose create ran and whose
+                  answer never arrived -- and those two permit opposite acts, since the
+                  first may create and may be let go of, and the second may do neither.
 
-                  The id is kept rather than a flag because it is the value to search
-                  Databricks' audit log with: that says who deleted it and when. A flag
-                  would say something is wrong; an id says whom to ask.
+                  A moment rather than a flag, because a record waiting for that answer has
+                  to be able to say how long it has been waiting.
+                format: date-time
                 type: string
               servicePrincipalId:
                 description: |-
                   servicePrincipalId is the numeric id Databricks assigned. Federation
                   policies hang off it, and it is what deletes it.
 
-                  Empty for one window only: between this record being written and the
-                  create returning. What closes that window is the marker -- the service
+                  Empty for one window only: between the create being sent and its answer
+                  being written down. What closes that window is the marker -- the service
                   principal carries it from the moment it exists, so one created by a pass
                   that then crashed is found again rather than left behind.
 
+                  Written once and never cleared, including when Databricks answers that it
+                  is gone. It is the value somebody searches the audit log with to find out
+                  who deleted it, so clearing it would be the evidence of a removal
+                  destroying the evidence it was drawn from.
+
                   A string rather than an integer because these are int64 and already
                   approach the largest integer JSON carries exactly.
+                type: string
+              servicePrincipalRemovedAt:
+                description: |-
+                  servicePrincipalRemovedAt is when a get by id answered that the service
+                  principal above is not there.
+
+                  Databricks is where identity is governed. One deleted there was deleted by
+                  somebody entitled to, and making a new one while the annotation still
+                  stands would be this operator overruling them every minute, and winning,
+                  since it never tires. So it is recorded and left.
+
+                  Only the moment, because the id it is about is still in servicePrincipalId
+                  and stays there: that is the value to search Databricks' audit log with,
+                  and it says who deleted it and when. The two together bracket a service
+                  principal's life, which is what makes what this record knows readable off
+                  the status rather than guessed at from which field happens to be empty.
+                format: date-time
                 type: string
             type: object
         required:

@@ -63,6 +63,22 @@ const (
 	envOperator  = "E2E_OPERATOR_NAMESPACE"
 )
 
+// noticingARemovalTakesUpTo is how long a service principal deleted in
+// Databricks may go unnoticed here.
+//
+// Nothing in Kubernetes hears about that deletion, so it is found by a converged
+// record coming back and asking -- which it does on the controller's settled
+// interval. This must exceed that interval or every run of the spec below fails
+// on a system that is working: the deletion happens at an arbitrary point
+// between two passes, so the wait is the interval plus however long the pass and
+// the projection take.
+//
+// Not shared with the constant it must exceed. That one is unexported in
+// internal/controller, and exporting a production value so a test in another
+// package can read it makes the test's requirement into the operator's API. The
+// obligation runs the other way: this number is raised when that interval is.
+const noticingARemovalTakesUpTo = 15 * time.Minute
+
 var (
 	// host and accountID name the account, and are read once so that every use
 	// of them is the same string the clients were built from.
@@ -433,7 +449,7 @@ type databricksServiceAccount struct {
 			Operator                  string `json:"operator"`
 			ClientID                  string `json:"clientId"`
 			ServicePrincipalID        string `json:"servicePrincipalId"`
-			RemovedServicePrincipalID string `json:"removedServicePrincipalId"`
+			ServicePrincipalRemovedAt string `json:"servicePrincipalRemovedAt"`
 		} `json:"identities"`
 	} `json:"status"`
 }
@@ -462,13 +478,16 @@ func profilesOn(team, serviceAccount string) []string {
 }
 
 // removedIDOf is the id of a service principal this operator created and that is
-// no longer in Databricks. It is kept rather than a flag because it is what an
-// audit log is searched with: a flag says something is wrong, an id says whom to
-// ask.
+// no longer in Databricks, or empty while none has been recorded as gone.
+//
+// Two values, because the id alone says nothing about whether it is still there:
+// it is not cleared by the removal being recorded, so that whoever searches the
+// audit log for who deleted it and when still has the value to search with. What
+// says the removal happened is the moment beside it.
 func removedIDOf(team, serviceAccount, profile string) string {
 	for _, identity := range read(team, serviceAccount).Status.Identities {
-		if identity.Profile == profile {
-			return identity.RemovedServicePrincipalID
+		if identity.Profile == profile && identity.ServicePrincipalRemovedAt != "" {
+			return identity.ServicePrincipalID
 		}
 	}
 	return ""

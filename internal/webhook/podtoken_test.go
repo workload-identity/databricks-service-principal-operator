@@ -351,12 +351,13 @@ func TestAPodIsAdmittedWhenTheIdentityCannotBeRead(t *testing.T) {
 // TestAnIdentityWithNoClientIdYetChangesNothing covers the window between the
 // object being created and Databricks having answered.
 //
-// The client id is assigned on create and cannot be derived, so there is nothing
-// to tell the workload yet. Injecting a volume without it would produce a pod
-// that looks equipped and is not.
+// Both values are assigned on create and neither can be derived, so there is
+// nothing to tell the workload yet. Injecting a volume without them would
+// produce a pod that looks equipped and is not.
 func TestAnIdentityWithNoClientIdYetChangesNothing(t *testing.T) {
 	t.Parallel()
 	principal := identity(testNamespace, testAccount)
+	principal.Status.Identities[0].ServicePrincipalID = ""
 	principal.Status.Identities[0].ClientID = ""
 	i := newInjector(t, principal)
 
@@ -712,11 +713,13 @@ func TestAPodCarriesEveryIdentityItWasIssued(t *testing.T) {
 
 	principal := identity(testNamespace, testAccount)
 	principal.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
-		{Profile: reader, Operator: testOperator, ClientID: "reader-client", Audience: "databricks"},
+		{Profile: reader, Operator: testOperator, ServicePrincipalID: "7788",
+			ClientID: "reader-client", Audience: "databricks"},
 		// Another operator's unnamed identity, which is why its profile is that
 		// operator's reference. Its audience is its own: nothing asks two platform
 		// teams to agree on one.
-		{Profile: writer, Operator: writer, ClientID: "writer-client", Audience: "some-other-aud"},
+		{Profile: writer, Operator: writer, ServicePrincipalID: "7799",
+			ClientID: "writer-client", Audience: "some-other-aud"},
 	}
 	i := newInjector(t, principal)
 	pod := admit(t, i, podUsing(testAccount))
@@ -758,7 +761,8 @@ func TestAnIdentityIsCalledWhatItsAnnotationKeyCalledIt(t *testing.T) {
 	t.Parallel()
 	principal := identity(testNamespace, testAccount)
 	principal.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
-		{Profile: "reader", Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
+		{Profile: "reader", Operator: testOperator, ServicePrincipalID: "7788",
+			ClientID: "reader-client", Audience: testAudience},
 	}
 	i := newInjector(t, principal)
 	pod := admit(t, i, podUsing(testAccount))
@@ -801,7 +805,8 @@ func TestAnIdentityWithoutAClientIdYetDoesNotHoldBackItsNeighbours(t *testing.T)
 
 	principal := identity(testNamespace, testAccount)
 	principal.Status.Identities = []dbxv1alpha1.ProjectedIdentity{
-		{Profile: ready, Operator: testOperator, ClientID: "reader-client", Audience: testAudience},
+		{Profile: ready, Operator: testOperator, ServicePrincipalID: "7788",
+			ClientID: "reader-client", Audience: testAudience},
 		{Profile: "writer", Operator: testOperator, Audience: testAudience},
 	}
 	i := newInjector(t, principal)

@@ -205,8 +205,8 @@ func databricksAccountServing(namespaces ...string) *dbxv1alpha1.DatabricksAccou
 	return served
 }
 
-// recordFor is a record as the operator would have written it, for tests that
-// start from an identity that already exists.
+// recordFor is a record as the operator would have written it and not yet acted
+// on: Unsent, so nothing can exist for it in Databricks.
 func recordFor(serviceAccount *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
 	return &dbxv1alpha1.IssuedDatabricksServicePrincipal{
 		ObjectMeta: metav1.ObjectMeta{
@@ -223,6 +223,16 @@ func recordFor(serviceAccount *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabri
 			},
 		},
 	}
+}
+
+// sentRecordFor is the same record after a create went out and before any
+// answer came back: Sent, which is where a crash between the two calls leaves
+// one and the only state in which something may exist that nothing names.
+func sentRecordFor(serviceAccount *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
+	record := recordFor(serviceAccount)
+	sentAt := metav1.Now()
+	record.Status.ServicePrincipalCreateSentAt = &sentAt
+	return record
 }
 
 func rawPodRunningAs(serviceAccount string, volumes ...corev1.Volume) *corev1.Pod {
