@@ -17,13 +17,35 @@ and each place is one only its owner can write. A Namespace label needs cluster
 access. The `DatabricksAccount` is in the operator's own namespace. The
 annotation is on an object inside the asking team's namespace.
 
-Withhold any of the three and nothing happens, and nothing says so. That is
-deliberate: until an identity exists there is no object to carry a condition, and
-an object in every namespace announcing that it has nothing would be this
-operator answering a question nobody asked. All three are read rather than
-reported — the label on the Namespace, the list on the DatabricksAccount, and the
-annotation on the ServiceAccount — so what there is to check is the three places
-themselves.
+Withhold any of the three and nothing happens. What differs is whether anything
+says so. Withhold the account holder's, and the annotation is refused as it is
+written, with a message naming the account and the namespace. Withhold either of
+the other two and there is nothing to read: until an identity exists there is no
+object to carry a condition, and an object in every namespace announcing that it
+has nothing would be this operator answering a question nobody asked. Those two
+are read rather than reported — the label on the Namespace and the annotation on
+the ServiceAccount — so what there is to check is the two places themselves.
+
+## Two of the three are ordered
+
+They belong to three people, but they are no longer three things that can be said
+in any order. A ServiceAccount write that introduces an annotation asking an
+operator whose `DatabricksAccount` does not name the namespace is refused by an
+admission webhook, and the refusal names the namespace, names the account, and
+says which to edit first: `spec.namespaces`, and the annotation after that.
+
+The order is not arbitrary and it is not the operator being fussy. The list is
+what says an account has identities in a namespace, and taking a namespace off it
+destroys every one of them — so the list is a statement about the present, and an
+annotation written before the namespace is on it is a request addressed to an
+operator that has not been told it works there. Before the webhook, that request
+was answered by nothing at all, and the asker had nowhere to look.
+
+The cluster admin's `mint` label is not ordered against either of the other two,
+and withholding it is still silent. The webhook does not read it, and the
+account's own status deliberately says nothing about it: that refusal is the
+cluster's, given to every operator serving the namespace at once, so reporting it
+on one account would put that account's name on somebody else's decision.
 
 ## The cluster admin: this namespace may be served
 

@@ -15,16 +15,21 @@ This is what the list actually promises once it is written.
 A namespace is in exactly one of three states with respect to one account, and
 the third is not the first:
 
-| The namespace is   | This account                             |
-|--------------------|------------------------------------------|
-| on the list        | issues identities there and manages them |
-| taken off the list | destroys every identity it issued there  |
-| never on the list  | has nothing there                        |
+| The namespace is   | This account                                                       |
+|--------------------|--------------------------------------------------------------------|
+| on the list        | issues identities there and manages them                           |
+| taken off the list | destroys every identity it issued there                            |
+| never on the list  | has nothing there, and refuses the annotation that asks it for one |
 
-"Never on the list" and "taken off the list" look the same from inside the
-namespace — no identities either way — and they are entirely different acts. One
-is an account that was never asked; the other is an account withdrawing, which
-means deleting what it made.
+"Never on the list" and "taken off the list" are entirely different acts. One is
+an account that was never asked; the other is an account withdrawing, which means
+deleting what it made. They used to be indistinguishable from inside the
+namespace — no identities either way, and nothing anywhere saying which — and
+that is no longer so. A ServiceAccount write that introduces an annotation asking
+this operator, in a namespace this list does not name, is refused at admission
+with a message telling the asker to come to you first. A namespace that was on
+the list and came off does not bounce anything: the annotation is already there,
+and what is happening is a destruction.
 
 The list is short and each line of it is a decision, which buys one thing a
 person can check: **every service principal carrying this operator's marker is in
@@ -52,6 +57,36 @@ person who will pay for it.
 It is also not the only way an identity is destroyed, only the one that is not
 the asking team's to do. The ordinary way is the team that asked removing the key
 that asked: [Asking for an identity](asking-for-an-identity.md).
+
+## You can see who is asking from a namespace you do not serve
+
+The refusal above stops the write, but it does not tell you it happened, and it
+never sees an annotation written before this operator was installed or one whose
+namespace you took off the list afterwards. `RequestsServed` on the
+`DatabricksAccount` is where those are counted:
+
+```sh
+kubectl -n dbxsp-operator-system get databricksaccount databricks-account \
+  -o jsonpath='{.status.conditions[?(@.type=="RequestsServed")].message}'
+```
+
+True is every ServiceAccount asking this operator being in a namespace this list
+names. False names each namespace and how many are asking in it, and it is the
+only place such a request appears anywhere: nothing is written in the namespace
+it came from, so there is no `DatabricksServiceAccount` to carry a condition and
+no event on anything.
+
+That is here because the edit it informs is this one. A team that wants an
+identity is asking for something only a line on this list grants, and without
+this the list is edited against nothing — you would be deciding where your
+credential may be spent with no way to see who has asked. It counts only requests
+addressed to this operator, so another account's namespaces never appear on
+yours, and it says nothing about the `mint` label, because that refusal is the
+cluster's and not this account's to report.
+
+Neither value is a failure and neither is retried. Nothing this operator does
+moves it: what ends a False is a namespace named here, or whoever wrote the
+annotation taking it off, and both of those are people.
 
 ## The promise is eventual
 

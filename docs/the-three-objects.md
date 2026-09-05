@@ -98,7 +98,11 @@ cannot be derived from anything the installer holds, being assembled from a
 namespace and a ServiceAccount name that kustomize rewrites. `Ready` and
 `Prepared` are separate answers and both matter;
 [docs/when-something-is-wrong.md](when-something-is-wrong.md) says why `Prepared`
-is the one to alert on.
+is the one to alert on. `RequestsServed` is the third, and it is what the
+`spec.namespaces` edit is made against: it names each namespace where a
+ServiceAccount is asking this operator and this account does not serve, and how
+many are asking there. It is the only place such a request is visible at all,
+because nothing is written in the namespace it came from.
 
 ## `IssuedDatabricksServicePrincipal` (`isdbxsp`)
 

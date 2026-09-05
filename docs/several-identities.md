@@ -80,10 +80,14 @@ This is the property everything below rests on, so it is worth being exact about
 | A key's value does not parse                 | That key is refused. Nothing is created for it and **nothing is destroyed**   |
 | A key's name does not parse                  | The same, and no identity of that name has ever existed to lose               |
 
-A refusal is not reported anywhere. What you see is the key you edited not taking
-effect: no entry appears for it, and the operator says nothing about it. Whether
-a key reads is decided by the characters in the key and its value, so the line
-you wrote is the whole of what there is to check.
+Neither of those two refusals is reported anywhere — unlike the one that stops
+the write itself, which is about the namespace rather than about the characters
+and which you cannot miss
+([If that write is refused](asking-for-an-identity.md#if-that-write-is-refused)).
+What you see instead is the key you edited not taking effect: no entry appears
+for it, and the operator says nothing about it. Whether a key reads is decided by
+the characters in the key and its value, so the line you wrote is the whole of
+what there is to check.
 
 **Refusing is safe because refusing changes nothing.** The identity a refused key
 names is left exactly as it stands — still issued, still exchangeable, its pods

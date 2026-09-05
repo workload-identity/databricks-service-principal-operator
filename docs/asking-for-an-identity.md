@@ -10,7 +10,9 @@ ending are one page — the second half is the first half read backwards.
 
 The annotation is a request, not a permission. Two other people have to have said
 yes before it does anything, neither yes is yours to give, and neither is visible
-from your namespace: [Two people have to say yes first](who-says-yes.md). What
+from your namespace: [Two people have to say yes first](who-says-yes.md). One of
+the two is now checked as you write, so the order matters and the cluster will
+tell you if you have it wrong — below. What
 the identity may then read or run in Databricks is decided in Databricks, by
 somebody else again: [Issuing an identity, not a permission](identity-not-permission.md).
 
@@ -68,6 +70,38 @@ waits rather than making another, and what you ask for in its place carries a ne
 applicationId. Anything that named the old one directly has to be redone;
 anything that went through a group is adding the new principal to it.
 
+### If that write is refused
+
+The account holder's yes has to already be there, and the API server checks it
+while you are standing at the keyboard:
+
+```
+Error from server (Forbidden): admission webhook
+"serviceaccountrequest.databricks.workload-identity.io" denied the request:
+ServiceAccount team-a/etl asks DatabricksAccount
+dbxsp-operator-system/databricks-account for a Databricks identity through
+databricks.workload-identity.io/service-principal, and team-a is not one of the
+namespaces that account names. Add team-a to spec.namespaces of DatabricksAccount
+dbxsp-operator-system/databricks-account first, and write the annotation after
+that. In that order, because the list is what says this account has identities in
+a namespace: taking a namespace off it destroys every identity there. Written
+now, the annotation would be answered by nothing at all -- no
+DatabricksServiceAccount, no condition and no event -- and the workloads here
+would go on failing every call to Databricks with an error naming Databricks.
+```
+
+Nothing was stored, so there is nothing to undo. What it asks for is not yours to
+do: your namespace has to be named on that `DatabricksAccount`'s
+`spec.namespaces`, which is the account holder's own edit
+([Three people have to say yes](who-says-yes.md#the-account-holder-i-will-spend-my-credential-here)),
+and your annotation goes on after it. Asking in the other order is not slower; it
+does not go through at all.
+
+Only that one thing is refused. A key naming an operator that is not there, or
+one whose value will not parse, goes in and sits there: it is nobody's to refuse,
+so no operator refuses it. That case is [below](#ending-an-identity), and it is
+still the quiet one.
+
 ## More than one identity
 
 A workload that reads with one service principal and writes with another asks for
@@ -115,6 +149,15 @@ kubectl -n team-a annotate serviceaccount etl \
 That trailing hyphen is easy to miss here, because the key ends in `-principal`
 and already has hyphens of its own. Editing the ServiceAccount by hand and
 deleting the line does exactly the same thing.
+
+**Removing a key is never refused, in any namespace.** The webhook that refused
+you above refuses only the write that *introduces* a request, so taking one off
+always goes through — in a namespace that has just refused you, and in one the
+account holder has taken off their list since. So does any unrelated edit to a
+ServiceAccount that already carries the key. A rule that refused the state
+instead would leave such a ServiceAccount permanently unwritable, with no way to
+withdraw the request either, which is a worse failure than the one it prevents
+and lands on people who did nothing.
 
 The key is the request, so a key that is gone is the workload saying it no longer
 needs that identity. The service principal is deleted in Databricks — everything

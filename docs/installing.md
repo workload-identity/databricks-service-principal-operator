@@ -10,9 +10,12 @@ after.
 
 ## What has to be there already
 
-- **cert-manager**, any version serving `cert-manager.io/v1`. The webhook serves
-  TLS and cert-manager issues its certificate. `make deploy` refuses rather than
-  installing half of itself when the CRDs are absent.
+- **cert-manager**, any version serving `cert-manager.io/v1`. The install carries
+  two admission webhooks — one that equips pods, one that refuses an annotation
+  asking for an identity in a namespace this account does not serve — and both
+  are served by the one webhook server, from the one certificate cert-manager
+  issues for it. `make deploy` refuses rather than installing half of itself when
+  the CRDs are absent.
 - **A cluster whose OIDC issuer Databricks can reach.** EKS and GKE publish a
   managed issuer and are fine. A private one does not work until it is published
   somewhere Databricks can read.
@@ -111,8 +114,19 @@ spec:
 
 `namespaces` is where this operator will act, by name: it says which namespaces
 your account admin credential may be spent on. Naming none serves none, and that
-is the default — a fresh install is inert until its owner says where it may act,
-so a `DatabricksAccount` written without this field is correct and does nothing.
+is the default — a fresh install issues nothing until its owner says where it may
+act, so a `DatabricksAccount` written without this field is correct and creates
+nothing.
+
+Inert is not the same as silent, though, and the difference starts the moment
+this object exists. From then on, a ServiceAccount write anywhere in the cluster
+that introduces an annotation asking *this* operator, in a namespace this list
+does not name, is refused at admission with a message naming this object and
+telling whoever wrote it to come to you first. An install that names no
+namespaces therefore refuses every request addressed to it, which is the honest
+reading of an account that has not yet said where it may act — and it is a great
+deal better than the alternative, which was a write that succeeded and was then
+answered by nothing at all.
 
 It is one of the three separate yeses an identity needs, and the only one that is
 yours: [Three people have to say yes](who-says-yes.md). What the list means once

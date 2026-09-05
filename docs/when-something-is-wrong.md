@@ -18,21 +18,87 @@ written next to it, which is what stops the next one being a guess.
 
 ## I annotated a ServiceAccount and nothing happened
 
-**There is genuinely nothing to look at, and that is the answer rather than a
-gap.** No `DatabricksServiceAccount` appears, no condition is written, and no
-event is emitted. Until an identity exists there is no object to carry a
-condition, and an object in every namespace announcing that it has nothing would
-be this operator answering a question nobody asked.
+**Then it is not the account's namespace list, because that one is refused at the
+write.** An admission webhook stands on every ServiceAccount write that
+introduces one of this operator's annotation keys, and refuses it when the
+namespace is not named on the `DatabricksAccount`'s `spec.namespaces`:
 
-So the check is not "what does the cluster say". It is the three things that each
-have to be true before anything happens, all three of which are **read** rather
-than reported:
+```
+Error from server (Forbidden): admission webhook
+"serviceaccountrequest.databricks.workload-identity.io" denied the request:
+ServiceAccount team-c/etl asks DatabricksAccount
+dbxsp-operator-system/databricks-account for a Databricks identity through
+databricks.workload-identity.io/service-principal, and team-c is not one of the
+namespaces that account names. Add team-c to spec.namespaces of DatabricksAccount
+dbxsp-operator-system/databricks-account first, and write the annotation after
+that. In that order, because the list is what says this account has identities in
+a namespace: taking a namespace off it destroys every identity there. Written
+now, the annotation would be answered by nothing at all -- no
+DatabricksServiceAccount, no condition and no event -- and the workloads here
+would go on failing every call to Databricks with an error naming Databricks.
+```
 
-| Has to be true                                            | Read from                                               | Who writes it                           |
-|-----------------------------------------------------------|---------------------------------------------------------|-----------------------------------------|
-| This namespace may be served at all                       | `databricks.workload-identity.io/mint` on the Namespace | a cluster admin                         |
-| This account will spend its credential here               | `spec.namespaces` on the operator's `DatabricksAccount` | the team holding the Databricks account |
-| This ServiceAccount is asking, of an operator that exists | the annotation key and its value on the ServiceAccount  | whoever holds the namespace             |
+Nothing was stored, so there is nothing to undo and nothing half-done, and what
+to do next is in the message rather than on this page. The refusal exists because
+the alternative was a write that succeeded and then meant nothing: the controller
+already declined to mint there, and declining produced no object, so no condition
+and no event — whoever wrote the annotation waited for an identity that was never
+coming, with nowhere to look. **So if you annotated something just now and saw no
+error, the namespace list is not what is missing.**
+
+**An annotation that was already there is the other half, and it is counted on
+the `DatabricksAccount`.** The webhook refuses the transition and never the
+state: a rule that refused the state would make an already-annotated
+ServiceAccount in a namespace since taken off the list permanently unwritable —
+no label, no secret, and no way to take the annotation off either, since that
+write carries the state too. So an annotation that predates the webhook, or one
+whose namespace the account holder removed afterwards, goes on sitting there
+asking, and nothing in its own namespace answers. `RequestsServed` is the only
+place it appears at all:
+
+```sh
+kubectl -n dbxsp-operator-system get dbxacc \
+  -o jsonpath='{.status.conditions[?(@.type=="RequestsServed")].message}'
+```
+
+False names each namespace and how many ServiceAccounts in it are asking:
+
+```
+ServiceAccounts in team-c (2), team-d (1) ask this operator for an identity and
+are in namespaces spec.namespaces does not name, counted as <namespace> (<how
+many ask there>). Nothing is being made for them and nothing in their own
+namespace says so -- there is no DatabricksServiceAccount to carry a condition
+and no event on anything -- so this line is the whole of what anybody can read
+about it. Either name the namespace in spec.namespaces, which issues new service
+principals with new client ids and no grants, or have whoever wrote the
+databricks.workload-identity.io/service-principal annotation take it off. None of
+these was ever issued, which is what tells them from the ones
+IdentitiesDestroyed counts: those exist and are being destroyed.
+```
+
+That object lives in the operator's namespace, so this is a reading for whoever
+holds the account rather than one a namespace holder can take — which is the
+point of putting it there. What would serve the namespace is an edit only they
+can make, and without this the edit is made against a list nothing anywhere
+argues with.
+
+It also catches what the webhook cannot. `failurePolicy` is `Ignore` — an outage
+of this operator must never stop anybody from creating a ServiceAccount, in
+namespaces that have never heard of Databricks — so an annotation written while
+the operator was down is admitted unchecked, and it lands here rather than
+nowhere.
+
+**What is left is silent, and it is the other two yeses.** The webhook reads the
+account's namespace list and nothing else, and `RequestsServed` deliberately says
+nothing about the `mint` label: that refusal is the cluster's, given to every
+operator serving the namespace at once, so reporting it here would put one
+account's name on somebody else's decision.
+
+| Has to be true                                            | Read from                                               | Who writes it                           | A missing one looks like                                     |
+|-----------------------------------------------------------|---------------------------------------------------------|-----------------------------------------|--------------------------------------------------------------|
+| This namespace may be served at all                       | `databricks.workload-identity.io/mint` on the Namespace | a cluster admin                         | nothing at all                                               |
+| This account will spend its credential here               | `spec.namespaces` on the operator's `DatabricksAccount` | the team holding the Databricks account | the write refused, or `RequestsServed` False on that account |
+| This ServiceAccount is asking, of an operator that exists | the annotation key and its value on the ServiceAccount  | whoever holds the namespace             | nothing at all                                               |
 
 Three different people, and none of them can say another's. Withhold any one and
 nothing happens.
@@ -40,11 +106,14 @@ nothing happens.
 The third is the one to read character by character, because it is the one you
 just typed. The value is `<operator namespace>/<DatabricksAccount name>`, and a
 value that does not parse — or that names an operator which is not there — is
-refused. **A refused key is left alone deliberately**: an identity a refused key
-names stays issued and stays exchangeable, because the alternative is an operator
-that destroys a service principal, and every grant made on it, over a mistyped
-character. That is why the failure is silent, and why the line you wrote is the
-whole of what there is to check.
+refused. That refusal is also why no webhook catches it: a key naming another
+operator is that operator's to answer, and a key that will not parse names
+nobody, so refusing either would be one operator standing in front of a decision
+that is not its own. **A refused key is left alone deliberately**: an identity a
+refused key names stays issued and stays exchangeable, because the alternative is
+an operator that destroys a service principal, and every grant made on it, over a
+mistyped character. That is why the failure is silent, and why the line you wrote
+is the whole of what there is to check.
 
 `kubectl get databricksaccounts -A` names the operators that exist, in the form
 the value takes. The rest is [docs/who-says-yes.md](who-says-yes.md).
@@ -182,13 +251,14 @@ directly — so this is an outage of issuing, not of working.
 
 ## Which object answers what
 
-| Look at                               | Answers                                                             |
-|---------------------------------------|---------------------------------------------------------------------|
-| `DatabricksAccount` `Ready`           | Whether this Databricks account was reached and read                |
-| `DatabricksAccount` `Prepared`        | Whether the operator can issue anything at all                      |
-| `DatabricksServiceAccount` `Ready`    | Whether the operator is getting this identity to where it should be |
-| `DatabricksServiceAccount` `Equipped` | Whether its pods carry what they need to reach Databricks           |
-| `IssuedDatabricksServicePrincipal`    | The same answers, on the object the operator actually acts on       |
+| Look at                               | Answers                                                               |
+|---------------------------------------|-----------------------------------------------------------------------|
+| `DatabricksAccount` `Ready`           | Whether this Databricks account was reached and read                  |
+| `DatabricksAccount` `Prepared`        | Whether the operator can issue anything at all                        |
+| `DatabricksAccount` `RequestsServed`  | Whether every request it can see is in a namespace this account names |
+| `DatabricksServiceAccount` `Ready`    | Whether the operator is getting this identity to where it should be   |
+| `DatabricksServiceAccount` `Equipped` | Whether its pods carry what they need to reach Databricks             |
+| `IssuedDatabricksServicePrincipal`    | The same answers, on the object the operator actually acts on         |
 
 What each of those objects is, who writes it, and what deleting it costs, is
 [docs/the-three-objects.md](the-three-objects.md) — read that before editing any

@@ -59,6 +59,31 @@ including the other operator, until it has finished.
 mechanism, including why the suspension is a different key from the cluster
 admin's `mint` label.
 
+## Two operators asked about the same ServiceAccount refuse only their own
+
+Each install carries its own `ValidatingWebhookConfiguration` on ServiceAccounts,
+so a write that introduces one of these annotations is put to both operators.
+They do not fight, and the reason is sharper than agreement: neither is asked
+about the other's request at all. Each reads only the keys whose value names its
+own `DatabricksAccount`, and a key naming the other operator is admitted without
+a thought — it is that operator's to answer, and standing in front of a decision
+that is not its own is the one thing a refusal here must not do. A key that will
+not parse names nobody, and is admitted by both for the same reason.
+
+So a ServiceAccount asking the finance operator and the risk operator from one
+namespace is refused by exactly the one whose account does not name it, and the
+message names that account rather than "the operator" — which is what makes it
+actionable, since the two are edited by different people.
+
+Neither operator's copy of it can carry a `namespaceSelector`, because the
+namespaces it exists for are exactly the ones nobody enrolled: a request in an enrolled
+namespace is answered, and it is the request in a namespace an account never
+named that goes unanswered. A selector would exempt the only case they exist for.
+What keeps that cheap instead is a CEL `matchConditions` evaluated in the API
+server, which sends on only a ServiceAccount carrying one of these keys — a
+handful of writes in the cluster rather than all of them. Both operators pay for
+their own, and neither pays for the other's.
+
 ## Two operators asked about the same pod agree without coordinating
 
 A pod can hold identities from more than one account — a workload reading from
