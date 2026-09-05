@@ -33,7 +33,7 @@ release presents, and `helm install` prints both.
 
 ```sh
 helm install dbxsp-operator \
-  oci://registry-1.docker.io/weidaolee/databricks-service-principal-operator \
+  oci://ghcr.io/workload-identity/charts/databricks-service-principal-operator \
   --version 0.14.0 \
   --namespace dbxsp-operator-system --create-namespace
 ```
@@ -113,25 +113,25 @@ server calls to the other account's operator.
 
 ## Values
 
-| Value                        | Default              | What it is                                                                          |
-|------------------------------|----------------------|-------------------------------------------------------------------------------------|
-| `image.repository`           | `controller`         | The placeholder. Names no registry; pass your own.                                  |
-| `image.tag`                  | `latest`             |                                                                                     |
-| `image.pullPolicy`           | `IfNotPresent`       |                                                                                     |
-| `replicaCount`               | `1`                  | A second replica is a warm standby; the leader lease means only one acts.           |
-| `fullnameOverride`           | `""`                 | Build names from this instead of the release name.                                  |
-| `namespace`                  | `""`                 | Where the objects go. Empty means the release's namespace.                          |
-| `serviceAccount.name`        | `""`                 | Half of the subject the federation policy names. Empty derives it from the release. |
-| `serviceAccount.annotations` | `{}`                 |                                                                                     |
-| `databricks.account`         | `databricks-account` | Which `DatabricksAccount` in this namespace to act on. `--databricks-account`.      |
-| `databricks.tokenAudience`   | `databricks`         | The `aud` of the operator's own token, and of its federation policy in Databricks.  |
-| `leaderElection.enabled`     | `true`               | Off also drops the `Role` and `RoleBinding` that go with it.                        |
-| `metrics.bindAddress`        | `:8443`              | The metrics `Service` takes its port from this.                                     |
-| `resources`                  | 500m/128Mi, 10m/64Mi |                                                                                     |
-| `podAnnotations`             | `{}`                 |                                                                                     |
-| `nodeSelector`               | `{}`                 |                                                                                     |
-| `tolerations`                | `[]`                 |                                                                                     |
-| `affinity`                   | `{}`                 |                                                                                     |
+| Value                        | Default              | What it is                                                                                                |
+|------------------------------|----------------------|-----------------------------------------------------------------------------------------------------------|
+| `image.repository`           | this project's image | `ghcr.io/workload-identity/databricks-service-principal-operator`. Pass your own to run a build of yours. |
+| `image.tag`                  | `""`                 | Empty means the chart's `appVersion`, so the version is written once.                                     |
+| `image.pullPolicy`           | `IfNotPresent`       |                                                                                                           |
+| `replicaCount`               | `1`                  | A second replica is a warm standby; the leader lease means only one acts.                                 |
+| `fullnameOverride`           | `""`                 | Build names from this instead of the release name.                                                        |
+| `namespace`                  | `""`                 | Where the objects go. Empty means the release's namespace.                                                |
+| `serviceAccount.name`        | `""`                 | Half of the subject the federation policy names. Empty derives it from the release.                       |
+| `serviceAccount.annotations` | `{}`                 |                                                                                                           |
+| `databricks.account`         | `databricks-account` | Which `DatabricksAccount` in this namespace to act on. `--databricks-account`.                            |
+| `databricks.tokenAudience`   | `databricks`         | The `aud` of the operator's own token, and of its federation policy in Databricks.                        |
+| `leaderElection.enabled`     | `true`               | Off also drops the `Role` and `RoleBinding` that go with it.                                              |
+| `metrics.bindAddress`        | `:8443`              | The metrics `Service` takes its port from this.                                                           |
+| `resources`                  | 500m/128Mi, 10m/64Mi |                                                                                                           |
+| `podAnnotations`             | `{}`                 |                                                                                                           |
+| `nodeSelector`               | `{}`                 |                                                                                                           |
+| `tolerations`                | `[]`                 |                                                                                                           |
+| `affinity`                   | `{}`                 |                                                                                                           |
 
 Every default is what `config/default` renders today. That is what makes the
 comparison test possible: rendered with no values, the chart and the kustomize

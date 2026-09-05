@@ -45,7 +45,7 @@ there is no overlay to write:
 
 ```sh
 helm install finance \
-  oci://registry-1.docker.io/weidaolee/databricks-service-principal-operator \
+  oci://ghcr.io/workload-identity/charts/databricks-service-principal-operator \
   --version 0.14.0 \
   --namespace finance-operator --create-namespace
 ```

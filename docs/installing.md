@@ -110,7 +110,7 @@ which give the second install names of its own.
 
 ```sh
 helm install dbxsp-operator \
-  oci://registry-1.docker.io/weidaolee/databricks-service-principal-operator \
+  oci://ghcr.io/workload-identity/charts/databricks-service-principal-operator \
   --version 0.14.0 \
   --namespace dbxsp-operator-system --create-namespace
 ```

@@ -122,7 +122,7 @@ kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
 
    ```sh
    helm install dbxsp-operator \
-     oci://registry-1.docker.io/weidaolee/databricks-service-principal-operator \
+     oci://ghcr.io/workload-identity/charts/databricks-service-principal-operator \
      --version 0.14.0 \
      --namespace dbxsp-operator-system --create-namespace
    ```
