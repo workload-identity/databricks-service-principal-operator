@@ -101,17 +101,57 @@ published under the same tag. It carries the three CRDs, the operator's
 Deployment, its RBAC, both admission webhooks, and the cert-manager Certificate
 and Issuer that serve them — everything in `config/default`, rendered once.
 
-It installs into `dbxsp-operator-system`. To run the operator somewhere else, or
-to run a second one for a second Databricks account, build the manifest yourself
-against your own kustomization rather than editing the rendered one:
+It installs into `dbxsp-operator-system`, and its names are fixed: everything
+cluster-scoped is called `databricks-service-principal-operator-<something>`. So
+this file installs one operator; a second one is either of the two below, both of
+which give the second install names of its own.
+
+### Or with Helm
 
 ```sh
-make build-installer IMG=weidaolee/databricks-service-principal-operator:v0.14.0
+helm install dbxsp-operator ./charts/databricks-service-principal-operator \
+  --namespace dbxsp-operator-system --create-namespace \
+  --set image.repository=<registry>/databricks-service-principal-operator \
+  --set image.tag=v0.14.0
 ```
 
-To run an image you built yourself — a fork, or a patch you have not published —
-`make deploy IMG=<your registry>/<image>:<tag>` applies the same manifest with
-your image in it. Nothing is written back into the repository either way.
+The same objects, with every cluster-scoped name derived from the release and the
+namespace rather than fixed. A second operator for a second Databricks account is
+then a second `helm install` under a different release name, with no file to
+edit; two releases that happen to share a name collide on nothing either, because
+the namespace is in the name as well.
+
+What the chart deliberately does not do: create the namespace it is told to
+install into, and create the `DatabricksAccount` of step 3. Both are covered in
+[the chart's own README](../charts/databricks-service-principal-operator/README.md),
+along with why the CRDs sit outside what `helm upgrade` and `helm uninstall`
+touch.
+
+### Or from a manifest you build yourself
+
+Write a kustomization naming what this install is to be called, and build
+`config/default` through it:
+
+```yaml
+resources:
+- <path to>/config/default
+namespace: finance-operator
+namePrefix: finance-
+images:
+- name: controller
+  newName: <registry>/databricks-service-principal-operator
+  newTag: <tag>
+```
+
+`kustomize build` that directory and apply it. The `namePrefix` is what gives
+this install its own cluster-scoped names, so this route holds two operators as
+well as the chart does — `test/e2e/sharing_test.go` installs its second operator
+exactly this way.
+
+For one install of your own image — a fork, or a patch you have not published —
+`make build-installer IMG=<your registry>/<image>:<tag>` renders the manifest and
+`make deploy IMG=<...>` applies it directly.
+Nothing is written back into the repository either way.
 
 ## 3. Point it at the account
 

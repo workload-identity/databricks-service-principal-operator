@@ -17,6 +17,48 @@ That is also why `host` and `accountId` cannot be edited on a `DatabricksAccount
 and a second account means a second install rather than a second object:
 [why they cannot be changed](installing.md#why-host-and-accountid-cannot-be-changed).
 
+## Installing the second one
+
+What a second install needs is a second set of cluster-scoped names —
+ClusterRoles, ClusterRoleBindings, and both admission webhook configurations —
+and its own namespace. Two ways to get them.
+
+A kustomize overlay naming both:
+
+```yaml
+resources:
+- ../../config/default
+namespace: finance-operator
+namePrefix: finance-
+images:
+- name: controller
+  newName: <registry>/databricks-service-principal-operator
+  newTag: <tag>
+```
+
+`kustomize build` that directory and apply it. `test/e2e/sharing_test.go`
+installs its second operator exactly this way, so the arrangement is exercised
+rather than only argued for.
+
+Or the Helm chart, which derives the same names from the release instead, so
+there is no overlay to write:
+
+```sh
+helm install finance ./charts/databricks-service-principal-operator \
+  --namespace finance-operator --create-namespace \
+  --set image.repository=<registry>/databricks-service-principal-operator \
+  --set image.tag=<tag>
+```
+
+What neither can be is the released `install.yaml` applied twice. Its names are
+fixed, so the second apply overwrites the first install's cluster-scoped objects
+— including the webhook configurations, which is the half that fails quietly:
+`failurePolicy` is `Ignore`, so the operator that lost simply stops being
+consulted.
+
+The two installs do not have to match. The prefix, the namespace and the image
+are each install's own, and nothing reads another install's names.
+
 ## An operator is named after the account, not after a team
 
 Several teams can share one Databricks account, and they then share one operator.
