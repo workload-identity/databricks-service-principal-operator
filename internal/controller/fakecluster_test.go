@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -137,6 +138,23 @@ func askingOf(namespace, name, value string) *corev1.ServiceAccount {
 	return serviceAccount
 }
 
+// stopsAsking takes the annotation off, which is the only thing that revokes.
+// The opposite of asking, and named for it: what a ServiceAccount takes back is
+// its request, which is a different act from the account removing the
+// federation policies in a namespace.
+func stopsAsking(t *testing.T, c client.Client) {
+	t.Helper()
+	serviceAccount := serviceAccountNamed(testNamespace, testName)
+	if err := c.Get(context.Background(),
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
+		t.Fatal(err)
+	}
+	serviceAccount.Annotations = nil
+	if err := c.Update(context.Background(), serviceAccount); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // testRecords is the operator's own namespace, where the records of what it
 // issued are kept. It is not a tenant's, and that is the whole reason a record
 // survives a tenant's namespace being torn down.
@@ -189,6 +207,33 @@ func recordFor(serviceAccount *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabri
 			},
 		},
 	}
+}
+
+func rawPodRunningAs(serviceAccount string, volumes ...corev1.Volume) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "runner-" + serviceAccount, Namespace: testNamespace,
+		},
+		Spec:   corev1.PodSpec{ServiceAccountName: serviceAccount, Volumes: volumes},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// cached is a pod as the reconciler actually receives it.
+//
+// Production reads pods from an informer that has put every one of them through
+// TrimPod; a test that hands the reconciler a whole pod is testing a shape that
+// never reaches it. A check that reads a field the trim drops passes here and
+// reports every pod in a real cluster wrongly.
+//
+// So every pod fixture goes through here. It is not a convenience -- it is the
+// only thing that makes the trim and the checks that depend on it fail together.
+func cached(pod *corev1.Pod) *corev1.Pod {
+	trimmed, err := TrimPod(pod)
+	if err != nil {
+		panic(err) // TrimPod cannot fail for a *corev1.Pod
+	}
+	return trimmed.(*corev1.Pod)
 }
 
 // writeToken writes a projected token carrying the given claims, so that the

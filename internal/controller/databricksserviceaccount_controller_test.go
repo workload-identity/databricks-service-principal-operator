@@ -26,21 +26,6 @@ import (
 	dbxwebhook "github.com/workload-identity/databricks-service-principal-operator/internal/webhook"
 )
 
-// principalOf returns the DatabricksServiceAccount, or nil if there is none.
-func principalOf(t *testing.T, c client.Client) *dbxv1alpha1.DatabricksServiceAccount {
-	t.Helper()
-	var got dbxv1alpha1.DatabricksServiceAccount
-	err := c.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, &got)
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &got
-}
-
 // TestAnAskingServiceAccountGetsAnIdentity covers the whole of the ordinary
 // path, and the two things about the object that are not obvious from it
 // working.
@@ -489,23 +474,6 @@ func TestOneThatIsThereIsNotBuiltAgain(t *testing.T) {
 // acceptable. A person can decide that; they remove the finalizer by hand,
 // having seen what is left.
 
-// stopsAsking takes the annotation off, which is the only thing that revokes.
-// The opposite of asking, and named for it: what a ServiceAccount takes back is
-// its request, which is a different act from the account removing the
-// federation policies in a namespace.
-func stopsAsking(t *testing.T, c client.Client) {
-	t.Helper()
-	serviceAccount := serviceAccountNamed(testNamespace, testName)
-	if err := c.Get(context.Background(),
-		types.NamespacedName{Namespace: testNamespace, Name: testName}, serviceAccount); err != nil {
-		t.Fatal(err)
-	}
-	serviceAccount.Annotations = nil
-	if err := c.Update(context.Background(), serviceAccount); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestAFailedDeleteHoldsTheRecord(t *testing.T) {
 	t.Parallel()
 	stub := &stubClients{}
@@ -573,33 +541,6 @@ func TestAnEmptyIssuerIsReportedRatherThanSent(t *testing.T) {
 
 // podRunningAs is a pod using one ServiceAccount, with no Databricks token —
 // what the webhook admits when it cannot answer.
-// cached is a pod as the reconciler actually receives it.
-//
-// Production reads pods from an informer that has put every one of them through
-// TrimPod; a test that hands the reconciler a whole pod is testing a shape that
-// never reaches it. A check that reads a field the trim drops passes here and
-// reports every pod in a real cluster wrongly.
-//
-// So every pod fixture goes through here. It is not a convenience -- it is the
-// only thing that makes the trim and the checks that depend on it fail together.
-func cached(pod *corev1.Pod) *corev1.Pod {
-	trimmed, err := TrimPod(pod)
-	if err != nil {
-		panic(err) // TrimPod cannot fail for a *corev1.Pod
-	}
-	return trimmed.(*corev1.Pod)
-}
-
-func rawPodRunningAs(serviceAccount string, volumes ...corev1.Volume) *corev1.Pod {
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "runner-" + serviceAccount, Namespace: testNamespace,
-		},
-		Spec:   corev1.PodSpec{ServiceAccountName: serviceAccount, Volumes: volumes},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-	}
-}
-
 func podRunningAs(serviceAccount string, volumes ...corev1.Volume) *corev1.Pod {
 	return cached(rawPodRunningAs(serviceAccount, volumes...))
 }

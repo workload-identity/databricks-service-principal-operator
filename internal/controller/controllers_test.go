@@ -110,6 +110,15 @@ func (c *controllers) records(t *testing.T) {
 	}
 }
 
+func reconcileDatabricksAccount(t *testing.T, r *DatabricksAccountReconciler, name string) {
+	t.Helper()
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: name},
+	}); err != nil {
+		t.Fatalf("reconciling %s: %v", name, err)
+	}
+}
+
 // issuedOf returns the record for one ServiceAccount, or nil if there is none.
 func (c *controllers) issuedOf(t *testing.T,
 	serviceAccount *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
@@ -126,6 +135,21 @@ func (c *controllers) issuedOf(t *testing.T,
 		t.Fatal(err)
 	}
 	return &issued
+}
+
+// principalOf returns the DatabricksServiceAccount, or nil if there is none.
+func principalOf(t *testing.T, c client.Client) *dbxv1alpha1.DatabricksServiceAccount {
+	t.Helper()
+	var got dbxv1alpha1.DatabricksServiceAccount
+	err := c.Get(context.Background(),
+		types.NamespacedName{Namespace: testNamespace, Name: testName}, &got)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &got
 }
 
 // identityIn is the first entry of a DatabricksServiceAccount.

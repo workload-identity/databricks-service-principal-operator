@@ -28,7 +28,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 	dbx "github.com/workload-identity/databricks-service-principal-operator/internal/databricks"
@@ -55,15 +54,6 @@ func newDatabricksAccountReconciler(t *testing.T, tokenPath string, verify func(
 		build:                           func(dbx.Config) (dbx.Clients, error) { return built, nil },
 		verify:                          func(context.Context, dbx.Clients) error { return verify() },
 	}, c, accountInUse
-}
-
-func reconcileDatabricksAccount(t *testing.T, r *DatabricksAccountReconciler, name string) {
-	t.Helper()
-	if _, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: name},
-	}); err != nil {
-		t.Fatalf("reconciling %s: %v", name, err)
-	}
 }
 
 func databricksAccountCondition(t *testing.T, c client.Client, name string) *metav1.Condition {
