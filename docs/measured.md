@@ -256,8 +256,8 @@ exchange. Neither can be derived from the other, so the operator records both.
 
 ## Timing
 
-**A write or a delete becomes visible to a read when it does, and how long that
-takes varies by an order of magnitude.** Measured across two days on one
+**A delete becomes visible to a read when it does, and how long that takes
+varies by an order of magnitude.** Measured across two days on one
 account: 235ms, 245ms, 273ms, 1.5s and 2.2s — the longest and one of the
 shortest on the same day — and **7.6s** for the same call with ten of these
 tests running at once. *(Measured 2026-09-01 and 2026-09-02, against a live
