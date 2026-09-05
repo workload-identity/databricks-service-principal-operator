@@ -59,3 +59,8 @@ issues.md
 # ignored, a single `git add -A` commits every worktree into the tree it was
 # made from.
 .claude/
+
+# The release artefact. `make build-installer` renders one consolidated manifest
+# naming a published image; it is attached to a GitHub release rather than
+# committed, so that what somebody applies is the one built from a tag.
+dist/
