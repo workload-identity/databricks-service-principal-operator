@@ -39,12 +39,17 @@ holding the Databricks account: [Three people have to say yes](docs/who-says-yes
 This operator grants nothing either — what that principal may read or run is
 decided in Databricks.
 
-> **Not released.** All of this has run — one pod on EKS holding two identities
-> the operator created, exchanging each of its two tokens and acting as a
-> different Databricks service principal with each — once, on one cluster,
-> against one account. Nobody has used it for anything.
-
 ## Why this
+
+This is the mechanism Databricks recommends — their own table ranks **OAuth
+token federation (Recommended)** above OAuth for service principals and for
+users, because it "eliminates the need for managing and rotating Databricks
+secrets" ([Authenticate access to Databricks using OAuth token
+federation](https://docs.databricks.com/aws/en/dev-tools/auth/oauth-federation),
+read 2026-09-05). Nothing here varies from it: the RFC 8693 exchange their SDKs
+make, a per-service-principal federation policy through their API, the stock SDK
+on its own `file-oidc` path. What the operator supplies is the part that is
+manual work, once per identity.
 
 - **No credential anywhere.** Not better Secret hygiene — nothing to rotate and
   nothing to leak, because there is no secret: the pod is given a token minted for
