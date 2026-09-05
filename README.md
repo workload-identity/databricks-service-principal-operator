@@ -111,7 +111,7 @@ kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
 2. Deploy ([step 2](docs/installing.md#2-deploy)):
 
    ```sh
-   kubectl apply -f https://github.com/workload-identity/databricks-service-principal-operator/releases/download/v0.14.0/install.yaml
+   kubectl apply -f https://github.com/workload-identity/databricks-service-principal-operator/releases/download/v0.15.0/install.yaml
    ```
 
    One manifest: the three CRDs, the operator, its RBAC, the two webhooks and
@@ -123,7 +123,7 @@ kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
    ```sh
    helm install dbxsp-operator \
      oci://ghcr.io/workload-identity/charts/databricks-service-principal-operator \
-     --version 0.14.0 \
+     --version 0.15.0 \
      --namespace dbxsp-operator-system --create-namespace
    ```
 
