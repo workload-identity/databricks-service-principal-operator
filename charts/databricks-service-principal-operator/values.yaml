@@ -1,8 +1,9 @@
-# Every default here is what config/default renders today, so that a chart
-# templated with no values and the kustomize output say the same thing. That
-# agreement is asserted by TestTheChartAndKustomizeAgree in
-# internal/controller/helm_rendered_test.go, and changing a default here without
-# changing config/ turns it red.
+# These defaults are what config/default renders, so that a chart templated with
+# no values and the kustomize output install the same operator. The tests in
+# internal/controller/helm_rendered_test.go compare the two rendered outputs, so
+# changing a default here and not config/ turns one of them red.
+#
+# image is the exception, and it is asserted as one: see the reason on it.
 
 image:
   # What this project publishes, at the version this chart installs. A chart is
