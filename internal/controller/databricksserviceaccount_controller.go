@@ -300,9 +300,16 @@ func (r *DatabricksServiceAccountReconciler) owner() client.FieldOwner {
 // to it and refuses to let another operator take them. That is what makes
 // several operators able to write one object without undoing each other -- the
 // failure two of them writing one DatabricksAccount's status produced, where
-// each undid the other forever -- and it is also what makes one label key on a
-// Namespace an exclusive claim, since the second operator to send it is
+// each undid the other forever -- and it is also what makes the destruction
+// claim on a Namespace exclusive, since the second operator to send it is
 // refused.
+//
+// It also bounds a DatabricksAccount's name, which nothing in the API does. A
+// field manager may be 128 bytes and this spends them on a fixed prefix, the
+// operator's own namespace and that name -- measured against a real API server,
+// a byte past it is refused as fieldManager: Too long, and every apply this
+// operator makes is sent under this manager. Installed in dbxsp-operator-system
+// that leaves 74 characters for the name.
 func fieldOwnerFor(databricksAccountNamespacedName types.NamespacedName) client.FieldOwner {
 	return client.FieldOwner("databricks.workload-identity.io/" + databricksAccountNamespacedName.String())
 }

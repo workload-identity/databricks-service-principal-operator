@@ -165,6 +165,18 @@ func clearManagerNamespace() {
 		"-l", "control-plane=controller-manager", "--ignore-not-found", "--wait=true")
 	_, _ = run(cmd)
 
+	// And then for the pods to go, which deleting the Deployment does not wait
+	// for: "kubectl delete --wait" waits for the object it was given, and the
+	// pods it owns are collected afterwards, so the manager goes on reconciling
+	// for its grace period. Measured: the patches below ran five seconds after
+	// the Deployment was deleted, a manager that was still running put the
+	// DatabricksAccount's finalizer straight back, and the namespace was left
+	// terminating for ever -- because by then nothing was left to act on the
+	// finalizer that had returned.
+	cmd = exec.Command("kubectl", "wait", "--for=delete", "pod", "-n", managerNamespace,
+		"-l", "control-plane=controller-manager", "--timeout=2m")
+	_, _ = run(cmd)
+
 	// Both kinds this operator holds with a finalizer. A record's is what the
 	// comment above is about; the DatabricksAccount's holds the object for as
 	// long as any record still names that account, and with the operator

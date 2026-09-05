@@ -111,9 +111,9 @@ could go on minting into the account it was removed from for as long as the
 destruction took.
 
 So the operator writes `databricks.workload-identity.io/destroying-identities` on
-the Namespace, naming itself in the value, and takes the key off again when it
-has finished. It is the operator's own bookkeeping, held for the length of one
-job — not a label a person sets, and not one a person has to clear.
+the Namespace, naming itself, and takes the key off again when it has finished.
+It is the operator's own bookkeeping, held for the length of one job — not a
+label a person sets, and not one a person has to clear.
 
 It is a different key from `mint` on purpose, and the reason is what makes it
 safe where two operators serve one namespace.
@@ -127,14 +127,27 @@ lifts it even though the namespace is still off its own list is the point — wh
 stops it minting there is the list, and holding the key any longer would only
 stop everybody else.
 
-Naming the holder in the value is what lets a second operator say who has it, and
-it is one key rather than one per operator so that only one destruction runs in a
-namespace at a time. The value spells the holder
-`<the operator's namespace>.<its DatabricksAccount's name>`, with a `.` where
-every other reference to an operator uses a `/`, because a label value cannot
-hold `/`. A companion annotation records when the holder last said it was still
-there, which makes the key a lease: an operator killed partway through does not
-leave a namespace unable to mint for ever.
+Naming the holder is what lets a second operator say who has it, and it is one
+key rather than one per operator so that only one destruction runs in a namespace
+at a time. The name arrives in two pieces: the label value is the operator's own
+namespace, and `databricks.workload-identity.io/destroying-identities-account`
+beside it is the name of its `DatabricksAccount`. Both are written in one apply
+and removed in one apply, so a namespace never carries half of a holder.
+
+The account name is an annotation because nothing selects on it. What the
+operator asks the cluster is which namespaces it claimed, and its own namespace
+answers that; the account name only tells two operators sharing one namespace
+apart, and that comparison is made on what came back. A label value holds 63
+bytes, an operator namespace is a DNS label and always fits, and a
+`DatabricksAccount` name may be 253 — so the two written as one value were
+refused outright once the name got long, and what is refused there is the claim
+itself: the namespace is never claimed, nothing in it is destroyed, and
+`IdentitiesDestroyed` stays False, which is also what it says while a destruction
+is merely slow.
+
+A second annotation records when the holder last said it was still there, which
+makes the key a lease: an operator killed partway through does not leave a
+namespace unable to mint for ever.
 
 [Several operators in one cluster](several-operators.md) is the rest of what two
 operators in one cluster do to each other.

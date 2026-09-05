@@ -716,15 +716,24 @@ func (r *DatabricksAccountReconciler) reportUnservedRequests(ctx context.Context
 // only this operator able to lift it. A namespace named again after the edit
 // leaves the same way: it is served, so no record puts it in the set, and the
 // claim taken while it was not served is still there.
+//
+// Selected on the operator's namespace and then narrowed on the account, because
+// only the first half of the holder's name is in a label. Two operators sharing
+// one namespace both match the selector, and what tells them apart is a
+// comparison on what came back -- so the account name never has to be short
+// enough for a label value.
 func (r *DatabricksAccountReconciler) namespacesClaimedForDestruction(ctx context.Context) ([]string, error) {
 	var namespaces corev1.NamespaceList
 	if err := r.List(ctx, &namespaces, client.MatchingLabels{
-		dbxv1alpha1.DestroyingIdentitiesLabel: destructionClaimedBy(r.DatabricksAccountNamespacedName),
+		dbxv1alpha1.DestroyingIdentitiesLabel: r.DatabricksAccountNamespacedName.Namespace,
 	}); err != nil {
 		return nil, err
 	}
 	claimed := make([]string, 0, len(namespaces.Items))
 	for i := range namespaces.Items {
+		if destructionHolderOf(&namespaces.Items[i]) != r.DatabricksAccountNamespacedName {
+			continue
+		}
 		claimed = append(claimed, namespaces.Items[i].Name)
 	}
 	return claimed, nil
@@ -733,12 +742,20 @@ func (r *DatabricksAccountReconciler) namespacesClaimedForDestruction(ctx contex
 // acquireDestructionClaim claims a namespace for this operator's destruction,
 // and says again on every pass that the claim is still wanted.
 //
-// The claim is one label key, and server-side apply is the whole of the mutual
-// exclusion. metadata.labels is a map whose keys are owned one at a time -- the
-// same mechanism status.identities already relies on -- so a second operator
-// applying this key over somebody else's value is refused a conflict. Being
-// refused is what it means to lose, and there is no register to keep and nothing
-// to unwind after a crash.
+// The claim is a label key and an annotation key, and server-side apply is the
+// whole of the mutual exclusion. Both maps have their keys owned one at a time
+// -- the same mechanism status.identities already relies on -- so an operator
+// applying either of them over somebody else's value is refused a conflict, and
+// an apply refused on one key writes neither. Being refused is what it means to
+// lose, and there is no register to keep and nothing to unwind after a crash.
+//
+// Two operators in one namespace agree on the label and differ on the
+// annotation, which is what the annotation is doing in the claim rather than
+// only in the message: without it their claims would be indistinguishable and
+// each would read the other's as its own. Measured against a real API server,
+// the second one is refused one conflict and it is on the annotation -- a label
+// value applied identically is co-owned rather than refused, so the label alone
+// would exclude nobody there.
 //
 // Never forced except over a claim nobody has refreshed. Forcing takes the field
 // whatever it says, which would leave nothing here excluding anything.
@@ -765,7 +782,7 @@ func (r *DatabricksAccountReconciler) acquireDestructionClaim(ctx context.Contex
 	// Whether this pass is taking the claim or saying again that it still wants
 	// one it already holds. The apply is the same either way, so without this the
 	// line below would repeat for as long as the removal takes.
-	taking := holder != destructionClaimedBy(r.DatabricksAccountNamespacedName)
+	taking := holder != r.DatabricksAccountNamespacedName
 
 	err = r.Apply(ctx, destructionClaimFor(name, r.DatabricksAccountNamespacedName, time.Now()), r.owner())
 	if !apierrors.IsConflict(err) {
@@ -787,7 +804,7 @@ func (r *DatabricksAccountReconciler) acquireDestructionClaim(ctx context.Contex
 	if err := r.Get(ctx, types.NamespacedName{Name: name}, &namespace); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	holder = namespace.Labels[dbxv1alpha1.DestroyingIdentitiesLabel]
+	holder = destructionHolderOf(&namespace)
 	said := namespace.Annotations[dbxv1alpha1.DestroyingIdentitiesSinceAnnotation]
 	logger.V(1).Info("Another operator holds the destruction claim",
 		"tenantNamespace", name, "holder", holder, "since", said)
@@ -830,7 +847,7 @@ func (r *DatabricksAccountReconciler) releaseDestructionClaim(ctx context.Contex
 	case err != nil:
 		return err
 	}
-	if namespace.Labels[dbxv1alpha1.DestroyingIdentitiesLabel] != destructionClaimedBy(r.DatabricksAccountNamespacedName) {
+	if destructionHolderOf(&namespace) != r.DatabricksAccountNamespacedName {
 		return nil
 	}
 
@@ -854,38 +871,52 @@ func (r *DatabricksAccountReconciler) releaseDestructionClaim(ctx context.Contex
 // wait for -- while a namespace that is there and unclaimed is one this operator
 // must claim before it destroys anything.
 func destructionHeldBy(ctx context.Context, reader client.Reader, name string) (
-	holder string, exists bool, err error) {
+	holder types.NamespacedName, exists bool, err error) {
 	var namespace corev1.Namespace
 	switch err := reader.Get(ctx, types.NamespacedName{Name: name}, &namespace); {
 	case apierrors.IsNotFound(err):
-		return "", false, nil
+		return types.NamespacedName{}, false, nil
 	case err != nil:
-		return "", false, err
+		return types.NamespacedName{}, false, err
 	}
-	return namespace.Labels[dbxv1alpha1.DestroyingIdentitiesLabel], true, nil
+	return destructionHolderOf(&namespace), true, nil
 }
 
-// destructionClaimFor is the claim as this operator sends it: the key, its own
-// name, and the time it is saying so.
+// destructionHolderOf reads the holder off a Namespace already in hand, and is
+// the zero value for one nobody holds.
+//
+// The label decides whether there is a holder at all, because it is the half
+// namespaceMints reads: an account annotation on a namespace carrying no label
+// suspends nothing, and naming a holder for it would name somebody nothing is
+// waiting on. The annotation only completes the name.
+func destructionHolderOf(namespace *corev1.Namespace) types.NamespacedName {
+	held := namespace.Labels[dbxv1alpha1.DestroyingIdentitiesLabel]
+	if held == "" {
+		return types.NamespacedName{}
+	}
+	return types.NamespacedName{
+		Namespace: held,
+		Name:      namespace.Annotations[dbxv1alpha1.DestroyingIdentitiesAccountAnnotation],
+	}
+}
+
+// destructionClaimFor is the claim as this operator sends it: its own name split
+// across a label and an annotation, and the time it is saying so.
+//
+// One apply carries all three, which is what makes the halves arrive and leave
+// together. Sent separately there would be a pass in which a namespace carried a
+// label naming a namespace and no account, and every reader of it would have to
+// have an answer for that.
 func destructionClaimFor(namespace string, databricksAccountNamespacedName types.NamespacedName,
 	at time.Time) *corev1ac.NamespaceApplyConfiguration {
 	return corev1ac.Namespace(namespace).
 		WithLabels(map[string]string{
-			dbxv1alpha1.DestroyingIdentitiesLabel: destructionClaimedBy(databricksAccountNamespacedName),
+			dbxv1alpha1.DestroyingIdentitiesLabel: databricksAccountNamespacedName.Namespace,
 		}).
 		WithAnnotations(map[string]string{
-			dbxv1alpha1.DestroyingIdentitiesSinceAnnotation: at.UTC().Format(time.RFC3339),
+			dbxv1alpha1.DestroyingIdentitiesAccountAnnotation: databricksAccountNamespacedName.Name,
+			dbxv1alpha1.DestroyingIdentitiesSinceAnnotation:   at.UTC().Format(time.RFC3339),
 		})
-}
-
-// destructionClaimedBy is how one operator names itself to another in a label
-// value.
-//
-// A "." where every other reference to an operator in this API uses a "/",
-// because a label value may not hold one. Both halves are read back by people,
-// not parsed: what a loser does with the name is print it.
-func destructionClaimedBy(databricksAccountNamespacedName types.NamespacedName) string {
-	return databricksAccountNamespacedName.Namespace + "." + databricksAccountNamespacedName.Name
 }
 
 func (r *DatabricksAccountReconciler) owner() client.FieldOwner {

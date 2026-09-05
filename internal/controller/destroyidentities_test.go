@@ -50,6 +50,13 @@ const otherNamespace = "team-b"
 // look the same.
 var otherOperator = types.NamespacedName{Namespace: "other-operators", Name: "elsewhere"}
 
+// siblingOperator is a second operator in this one's own namespace: two
+// Deployments over one namespace, each given a different DatabricksAccount by
+// its --databricks-account flag. It shares the half of the holder's name that
+// is in a label, so telling it from this operator is the whole of what the
+// account annotation is for.
+var siblingOperator = types.NamespacedName{Namespace: operatorNamespace, Name: "second-account"}
+
 // databricksAccounts wires the account controller onto the same fake cluster.
 //
 // All three controllers over one fake client, because the destruction is not in
@@ -118,12 +125,23 @@ func claims(t *testing.T, c client.Client, namespace string,
 	}
 }
 
-// claimOn is the operator named on a namespace, or "" for one nobody has
-// claimed.
-func claimOn(t *testing.T, c client.Client, name string) string {
+// claimOn is the operator named on a namespace, or nobody for one no operator
+// has claimed.
+//
+// Read through the production helper rather than off the label, because the
+// holder's name is in two places now and a test that assembled it itself would
+// pass while the operator read it back wrong.
+func claimOn(t *testing.T, c client.Client, name string) types.NamespacedName {
 	t.Helper()
-	return labelsOf(t, c, name)[dbxv1alpha1.DestroyingIdentitiesLabel]
+	var namespace corev1.Namespace
+	if err := c.Get(context.Background(), types.NamespacedName{Name: name}, &namespace); err != nil {
+		t.Fatal(err)
+	}
+	return destructionHolderOf(&namespace)
 }
+
+// nobody is what claimOn says about a namespace no operator holds.
+var nobody types.NamespacedName
 
 // claimedSince is when the holder of a namespace last said it was still there.
 func claimedSince(t *testing.T, c client.Client, name string) time.Time {
@@ -214,9 +232,9 @@ func TestANamespaceTakenOutOfScopeIsClaimedAndKeepsItsPermission(t *testing.T) {
 
 	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
-	if got := claimOn(t, c.Client, testNamespace); got != destructionClaimedBy(testOperatorRef) {
+	if got := claimOn(t, c.Client, testNamespace); got != testOperatorRef {
 		t.Errorf("%s is claimed by %q, want %q; identities can still be minted there while this "+
-			"operator destroys the ones it has", testNamespace, got, destructionClaimedBy(testOperatorRef))
+			"operator destroys the ones it has", testNamespace, got, testOperatorRef)
 	}
 	minting, err := namespaceMints(context.Background(), c.Client, testNamespace)
 	if err != nil {
@@ -235,7 +253,7 @@ func TestANamespaceTakenOutOfScopeIsClaimedAndKeepsItsPermission(t *testing.T) {
 		}
 	}
 
-	if got := claimOn(t, c.Client, otherNamespace); got != "" {
+	if got := claimOn(t, c.Client, otherNamespace); got != nobody {
 		t.Errorf("%s is claimed by %q, and it is still one this account names; one team leaving "+
 			"stopped another team's minting", otherNamespace, got)
 	}
@@ -260,7 +278,7 @@ func TestANamespaceThisOperatorNeverEnteredIsLeftAlone(t *testing.T) {
 
 	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
-	if got := claimOn(t, c.Client, otherNamespace); got != "" {
+	if got := claimOn(t, c.Client, otherNamespace); got != nobody {
 		t.Errorf("%s is claimed by %q, and this operator has never issued anything there; "+
 			"whoever mints there does so for somebody else", otherNamespace, got)
 	}
@@ -383,7 +401,7 @@ func TestANamespaceStillOnTheListIsUntouchedWhileAnotherIsEmptied(t *testing.T) 
 		t.Errorf("the record in %s is gone; one team leaving the list destroyed another team's "+
 			"identity", otherNamespace)
 	}
-	if got := claimOn(t, c.Client, otherNamespace); got != "" {
+	if got := claimOn(t, c.Client, otherNamespace); got != nobody {
 		t.Errorf("%s is claimed by %q and it is still on the list; its minting is suspended for "+
 			"somebody else's destruction", otherNamespace, got)
 	}
@@ -479,7 +497,7 @@ func TestARecordWhoseServicePrincipalIsAlreadyGoneStillGoes(t *testing.T) {
 		t.Errorf("the record is still there, saying %v; it names nothing in Databricks and is "+
 			"counted as something left to destroy for as long as it exists", got.Status)
 	}
-	if got := claimOn(t, c.Client, testNamespace); got != "" {
+	if got := claimOn(t, c.Client, testNamespace); got != nobody {
 		t.Errorf("%s is still claimed by %q with nothing left in it; no operator mints there "+
 			"until a person acts", testNamespace, got)
 	}
@@ -510,7 +528,7 @@ func TestNothingIsDestroyedWhileTheNamespaceIsUnclaimed(t *testing.T) {
 	// The account controller has not run, so nothing has claimed the namespace
 	// and it still mints.
 	c.records(t)
-	if claimOn(t, c.Client, testNamespace) != "" {
+	if claimOn(t, c.Client, testNamespace) != nobody {
 		t.Fatal("the namespace was claimed before this ran; the ordering this test is about " +
 			"was not the one it exercised")
 	}
@@ -745,7 +763,7 @@ func TestAnUnreachableDatabricksLeavesTheIdentitiesCountedAndNothingReleased(t *
 			"the only place an identity stranded by an account nobody can reach is visible",
 			conditionIdentitiesDestroyed, destroyed.Message, testNamespace)
 	}
-	if claimOn(t, c.Client, testNamespace) != destructionClaimedBy(testOperatorRef) {
+	if claimOn(t, c.Client, testNamespace) != testOperatorRef {
 		t.Errorf("%s is no longer claimed by this operator while identities of its account are "+
 			"still there; minting would resume into a set this destruction has not finished "+
 			"with", testNamespace)
@@ -781,7 +799,7 @@ func TestANamespaceThisOperatorCannotClaimSaysSo(t *testing.T) {
 
 	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
-	if claimOn(t, c.Client, testNamespace) != "" {
+	if claimOn(t, c.Client, testNamespace) != nobody {
 		t.Fatal("the write was not refused, so this test asserts nothing")
 	}
 	destroyed := identitiesDestroyedCondition(t, c.Client)
@@ -820,10 +838,10 @@ func TestASecondOperatorWaitsWhileTheFirstHoldsTheNamespace(t *testing.T) {
 	c.records(t)
 	c.records(t)
 
-	if got := claimOn(t, c.Client, testNamespace); got != destructionClaimedBy(otherOperator) {
+	if got := claimOn(t, c.Client, testNamespace); got != otherOperator {
 		t.Errorf("%s is claimed by %q, want %q; the second operator took a claim the first was "+
 			"still using, and both are now destroying from a set the other is changing",
-			testNamespace, got, destructionClaimedBy(otherOperator))
+			testNamespace, got, otherOperator)
 	}
 	if len(stub.deleted) != 0 {
 		t.Errorf("deleted %v without holding %s; losing the claim is the whole of what stops a "+
@@ -839,7 +857,7 @@ func TestASecondOperatorWaitsWhileTheFirstHoldsTheNamespace(t *testing.T) {
 		t.Fatalf("Ready is %v, want %s -- waiting on another operator is a thing somebody has to "+
 			"be able to see", ready, reasonAnotherDestruction)
 	}
-	if !strings.Contains(ready.Message, destructionClaimedBy(otherOperator)) {
+	if !strings.Contains(ready.Message, otherOperator.String()) {
 		t.Errorf("Ready says %q and does not name who it is waiting for, so finding out means "+
 			"reading a Namespace by hand", ready.Message)
 	}
@@ -848,6 +866,56 @@ func TestASecondOperatorWaitsWhileTheFirstHoldsTheNamespace(t *testing.T) {
 	if destroyed == nil || destroyed.Status != metav1.ConditionFalse {
 		t.Errorf("%s is %v, want False -- nothing has been destroyed and the account says it has",
 			conditionIdentitiesDestroyed, destroyed)
+	}
+}
+
+// TestAnOperatorSharingThisOnesNamespaceIsStillAnotherOperator covers the one
+// pair of operators the label alone cannot tell apart.
+//
+// The label carries a namespace, and two Deployments in one namespace pointed at
+// two DatabricksAccounts write the same value into it -- so a claim read as its
+// label alone reads as this operator's own, and this operator goes on to destroy
+// identities in a namespace somebody else is working through. What separates
+// them is the account annotation, which is why the holder is read as both halves
+// everywhere it is compared.
+func TestAnOperatorSharingThisOnesNamespaceIsStillAnotherOperator(t *testing.T) {
+	t.Parallel()
+	stub := &stubClients{}
+	asker := asking(testNamespace, testName)
+	c := newControllers(t, stub, mintingNamespace(testNamespace), asker)
+	c.settle(t)
+	issued := c.issuedOf(t, asker)
+
+	claims(t, c.Client, testNamespace, siblingOperator, time.Now())
+	nowServing(t, c.Client)
+	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
+	c.records(t)
+	c.records(t)
+
+	if got := claimOn(t, c.Client, testNamespace); got != siblingOperator {
+		t.Errorf("%s is claimed by %s, want %s; a claim held by another account in this "+
+			"operator's own namespace was taken as this operator's own", testNamespace, got,
+			siblingOperator)
+	}
+	if len(stub.deleted) != 0 {
+		t.Errorf("deleted %v while %s holds %s; two operators in one namespace are each "+
+			"destroying from a set the other is still changing", stub.deleted, siblingOperator,
+			dbxv1alpha1.DestroyingIdentitiesLabel)
+	}
+	if got := c.issuedOf(t, asker); got == nil || !got.DeletionTimestamp.IsZero() {
+		t.Errorf("the record is %v; it was put on its way out while another operator holds the "+
+			"namespace", got)
+	}
+
+	ready := readyOf(t, c.Client, issued)
+	if ready == nil || ready.Reason != reasonAnotherDestruction {
+		t.Fatalf("Ready is %v, want %s -- this operator is waiting on one it cannot tell from "+
+			"itself", ready, reasonAnotherDestruction)
+	}
+	if !strings.Contains(ready.Message, siblingOperator.String()) {
+		t.Errorf("Ready says %q and does not name the account it is waiting for. Both operators "+
+			"are in %s, so the namespace on its own names neither", ready.Message,
+			operatorNamespace)
 	}
 }
 
@@ -867,7 +935,7 @@ func TestAnOperatorWhoseClaimWasTakenStopsDestroying(t *testing.T) {
 
 	nowServing(t, c.Client)
 	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
-	if claimOn(t, c.Client, testNamespace) != destructionClaimedBy(testOperatorRef) {
+	if claimOn(t, c.Client, testNamespace) != testOperatorRef {
 		t.Fatal("this operator never held the namespace, so there was nothing for the other " +
 			"one to take")
 	}
@@ -877,10 +945,10 @@ func TestAnOperatorWhoseClaimWasTakenStopsDestroying(t *testing.T) {
 	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 	c.records(t)
 
-	if got := claimOn(t, c.Client, testNamespace); got != destructionClaimedBy(otherOperator) {
+	if got := claimOn(t, c.Client, testNamespace); got != otherOperator {
 		t.Errorf("%s is claimed by %q, want %q; the operator that lost the namespace wrote its "+
 			"own name back over the one that took it", testNamespace, got,
-			destructionClaimedBy(otherOperator))
+			otherOperator)
 	}
 	if got := c.issuedOf(t, asker); got == nil || !got.DeletionTimestamp.IsZero() {
 		t.Errorf("the record is %v; this operator went on destroying after losing the namespace, "+
@@ -923,9 +991,9 @@ func TestAClaimNobodyHasRefreshedCanBeTakenAndAFreshOneCannot(t *testing.T) {
 			nowServing(t, c.Client)
 			reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
-			if got := claimOn(t, c.Client, testNamespace); got != destructionClaimedBy(held.want) {
+			if got := claimOn(t, c.Client, testNamespace); got != held.want {
 				t.Errorf("%s is claimed by %q, want %q after %s without a word from its holder",
-					testNamespace, got, destructionClaimedBy(held.want), held.since)
+					testNamespace, got, held.want, held.since)
 			}
 		})
 	}
@@ -957,9 +1025,9 @@ func TestAHolderSaysAgainOnEveryPassThatItIsStillThere(t *testing.T) {
 	nowServing(t, c.Client)
 	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
-	if got := claimOn(t, c.Client, testNamespace); got != destructionClaimedBy(testOperatorRef) {
+	if got := claimOn(t, c.Client, testNamespace); got != testOperatorRef {
 		t.Fatalf("%s is claimed by %q, want %q -- there is no claim of this operator's to refresh",
-			testNamespace, got, destructionClaimedBy(testOperatorRef))
+			testNamespace, got, testOperatorRef)
 	}
 	if said := claimedSince(t, c.Client, testNamespace); !said.After(stopped) {
 		t.Errorf("the claim still says %s, which is what it said before this pass. One that is "+
@@ -1011,7 +1079,7 @@ func TestReleasingLetsTheOtherOperatorMintAgain(t *testing.T) {
 	c.records(t)
 	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
-	if got := claimOn(t, c.Client, testNamespace); got != "" {
+	if got := claimOn(t, c.Client, testNamespace); got != nobody {
 		t.Fatalf("%s is still claimed by %q after the destruction finished; every other operator "+
 			"serving it waits for a person", testNamespace, got)
 	}
@@ -1048,14 +1116,14 @@ func TestANamespaceNamedAgainMidDestructionIsGivenBack(t *testing.T) {
 
 	nowServing(t, c.Client)
 	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
-	if claimOn(t, c.Client, testNamespace) != destructionClaimedBy(testOperatorRef) {
+	if claimOn(t, c.Client, testNamespace) != testOperatorRef {
 		t.Fatal("the namespace was never claimed, so there is nothing here to give back")
 	}
 
 	nowServing(t, c.Client, testNamespace)
 	reconcileDatabricksAccount(t, c.databricksAccounts(t), databricksAccountName)
 
-	if got := claimOn(t, c.Client, testNamespace); got != "" {
+	if got := claimOn(t, c.Client, testNamespace); got != nobody {
 		t.Errorf("%s is claimed by %q and this account names it again; nothing mints there and "+
 			"only this operator can end that", testNamespace, got)
 	}
