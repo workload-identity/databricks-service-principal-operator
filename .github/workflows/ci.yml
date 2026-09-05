@@ -55,12 +55,15 @@ jobs:
     - run: go vet -tags sharing ./...
     - run: go vet -tags databricks ./...
 
+    # The log goes outside the checkout. Written into it, it is an untracked file
+    # that the drift check below reads as a change -- git status sees an
+    # untracked file and git diff does not, so the failure names nothing.
     - name: make test
       run: |
-        make test 2>&1 | tee test.log
-        if grep -q -- '--- SKIP' test.log; then
+        make test 2>&1 | tee "$RUNNER_TEMP/test.log"
+        if grep -q -- '--- SKIP' "$RUNNER_TEMP/test.log"; then
           echo "::error::a test skipped. Nothing here is allowed to skip: the chart and manifest comparisons skip when helm or bin/kustomize is missing, and a skip there is a guard that stopped guarding without saying so."
-          grep -- '--- SKIP' test.log
+          grep -- '--- SKIP' "$RUNNER_TEMP/test.log"
           exit 1
         fi
 
