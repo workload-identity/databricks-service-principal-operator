@@ -686,7 +686,7 @@ func (r *DatabricksAccountReconciler) reportUnservedRequests(ctx context.Context
 	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionRequestsServed,
 		metav1.ConditionFalse, reasonRequestsNotServed,
 		fmt.Sprintf("ServiceAccounts in %s ask this operator for an identity and are in namespaces "+
-			"spec.namespaces does not name, counted as <namespace> (<how many ask there>). Nothing "+
+			"spec.namespaces does not name. Nothing "+
 			"is being made for them and nothing in their own namespace says so -- there is no "+
 			"DatabricksServiceAccount to carry a condition and no event on anything -- so this line "+
 			"is the whole of what anybody can read about it. Either name the namespace in "+
