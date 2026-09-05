@@ -2,9 +2,14 @@ apiVersion: v2
 name: databricks-service-principal-operator
 description: Gives a Kubernetes workload a Databricks identity with no credential anywhere
 type: application
-# The chart's own version, which moves when the chart changes and not when the
-# operator does. appVersion below is the operator.
-version: 0.1.0
+# One version, released together: the chart names the operator it installs and
+# the two move as a pair, so `helm install --version 0.14.0` and the v0.14.0
+# release are the same thing and nobody has to hold a table of which chart goes
+# with which operator. They differ only in the `v`, which Helm does not allow in
+# a chart version and this project uses everywhere else.
+#
+# TestTheChartAndTheOperatorShareAVersion holds them together.
+version: 0.14.0
 appVersion: "v0.14.0"
 # 1.30, because the ValidatingWebhookConfiguration this chart installs carries
 # matchConditions, and that is what stands in for the namespaceSelector it

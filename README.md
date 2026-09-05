@@ -121,10 +121,10 @@ kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
    ([the chart](charts/databricks-service-principal-operator/README.md)):
 
    ```sh
-   helm install dbxsp-operator ./charts/databricks-service-principal-operator \
-     --namespace dbxsp-operator-system --create-namespace \
-     --set image.repository=<registry>/databricks-service-principal-operator \
-     --set image.tag=v0.14.0
+   helm install dbxsp-operator \
+     oci://registry-1.docker.io/weidaolee/databricks-service-principal-operator \
+     --version 0.14.0 \
+     --namespace dbxsp-operator-system --create-namespace
    ```
 
 3. Point it at the account ([step 3](docs/installing.md#3-point-it-at-the-account)):

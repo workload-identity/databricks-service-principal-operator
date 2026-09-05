@@ -43,6 +43,11 @@ import (
 // like this operator and is not.
 const chartDir = "charts/databricks-service-principal-operator"
 
+// chartImageRegistry is where this project publishes, which is the only registry
+// a default in the chart may name: anywhere else is an account somebody else
+// pays for and can take away.
+const chartImageRegistry = "ghcr.io/workload-identity/"
+
 // What the chart is rendered under here, and the choice is what makes the
 // comparison readable rather than what makes it pass.
 //
@@ -167,6 +172,37 @@ var clusterScoped = map[string]bool{
 	"ClusterRoleBinding":             true,
 	"MutatingWebhookConfiguration":   true,
 	"ValidatingWebhookConfiguration": true,
+}
+
+// TestTheChartAndTheOperatorShareAVersion covers the pair that is released
+// together.
+//
+// The chart names the operator it installs, and the two are versioned as one
+// thing: `helm install --version 0.14.0` and the v0.14.0 release are the same
+// release. Letting them drift means a table somewhere of which chart goes with
+// which operator, and the first person to need that table is the one who already
+// installed the wrong pair.
+//
+// They differ by the `v`, which Helm refuses in a chart version and this project
+// uses in every other version it writes.
+func TestTheChartAndTheOperatorShareAVersion(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join("..", "..", chartDir, "Chart.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chart struct {
+		Version    string `json:"version"`
+		AppVersion string `json:"appVersion"`
+	}
+	if err := yaml.Unmarshal(data, &chart); err != nil {
+		t.Fatal(err)
+	}
+	if want := "v" + chart.Version; chart.AppVersion != want {
+		t.Errorf("the chart is version %q and installs appVersion %q, want %q. They are released "+
+			"together, so a reader who has the chart version knows the operator version and needs "+
+			"nothing else", chart.Version, chart.AppVersion, want)
+	}
 }
 
 // TestTheChartShipsTheGeneratedCRDs covers the copy nothing regenerates.
@@ -303,10 +339,26 @@ func TestTheChartStartsTheManagerTheSameWay(t *testing.T) {
 			got, want)
 	}
 
-	if fromChart.Image != fromKustomize.Image {
-		t.Errorf("the chart's default image is %q and config/default's is %q; the placeholder is "+
-			"what a clone should find, because a registry hostname names an account",
-			fromChart.Image, fromKustomize.Image)
+	// The two name different images on purpose, and each default is right for
+	// how that path is used. config/default is rewritten by `make deploy` with
+	// whoever is deploying, so what a clone finds there has to name nobody -- a
+	// registry hostname names an account, which is what
+	// TestTheShippedManifestNamesNobodysRegistry keeps out. The chart is the
+	// published artifact: `helm install` with no values is how somebody installs
+	// this, so its default is the image this project publishes, and a placeholder
+	// there would mean a chart whose ordinary install pulls nothing.
+	//
+	// What both must be is this project's own, so neither is checked in naming a
+	// registry somebody else pays for.
+	if !strings.HasPrefix(fromChart.Image, chartImageRegistry) {
+		t.Errorf("the chart's default image is %q, want it under %q -- the chart is what people "+
+			"install, so its default has to be an image this project publishes",
+			fromChart.Image, chartImageRegistry)
+	}
+	if strings.Contains(fromKustomize.Image, "/") {
+		t.Errorf("config/default's image is %q; a clone has to find a placeholder there, because "+
+			"`make deploy` rewrites it and a registry hostname names an account",
+			fromKustomize.Image)
 	}
 
 	if !slices.Equal(fromChart.Command, fromKustomize.Command) {

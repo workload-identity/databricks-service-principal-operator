@@ -44,10 +44,10 @@ Or the Helm chart, which derives the same names from the release instead, so
 there is no overlay to write:
 
 ```sh
-helm install finance ./charts/databricks-service-principal-operator \
-  --namespace finance-operator --create-namespace \
-  --set image.repository=<registry>/databricks-service-principal-operator \
-  --set image.tag=<tag>
+helm install finance \
+  oci://registry-1.docker.io/weidaolee/databricks-service-principal-operator \
+  --version 0.14.0 \
+  --namespace finance-operator --create-namespace
 ```
 
 What neither can be is the released `install.yaml` applied twice. Its names are

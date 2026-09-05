@@ -32,16 +32,20 @@ release presents, and `helm install` prints both.
 ## Install
 
 ```sh
-helm install dbxsp-operator charts/databricks-service-principal-operator \
-  --namespace dbxsp-operator-system --create-namespace \
-  --set image.repository=<registry>/databricks-service-principal-operator \
-  --set image.tag=v0.14.0
+helm install dbxsp-operator \
+  oci://registry-1.docker.io/weidaolee/databricks-service-principal-operator \
+  --version 0.14.0 \
+  --namespace dbxsp-operator-system --create-namespace
 ```
 
-`image.repository` defaults to `controller`, which is the placeholder
-`config/manager/kustomization.yaml` carries and names no registry — a registry
-hostname names an account, so what is checked in names nobody. Nothing will pull
-until you pass your own.
+No values are needed. `image.repository` defaults to the image this project
+publishes and `image.tag` to the chart's `appVersion`, so the chart and the
+operator it installs cannot be given different versions by editing one of them.
+`--set image.repository=<your registry>/<image>` runs a build of your own
+instead.
+
+The chart version is the operator version without its `v`: chart `0.14.0`
+installs `v0.14.0`, and there is no table of which goes with which.
 
 The chart does not create the namespace. Helm's `--create-namespace` does, and
 leaves it outside the release, which is what you want: a namespace owned by the

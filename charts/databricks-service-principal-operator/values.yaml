@@ -5,12 +5,17 @@
 # changing config/ turns it red.
 
 image:
-  # The placeholder config/manager/kustomization.yaml carries, and for the same
-  # reason: a registry hostname names an account, so what is checked in names
-  # nobody and whoever installs passes their own. There is nothing to pull at
-  # this default.
-  repository: controller
-  tag: latest
+  # What this project publishes, at the version this chart installs. A chart is
+  # what somebody installs, so `helm install` with no values has to pull
+  # something -- which is the opposite of config/manager/kustomization.yaml,
+  # where a checked-in registry hostname would name whoever last ran
+  # `make deploy` and their account.
+  #
+  # The tag is empty rather than repeated: it defaults to the chart's appVersion,
+  # so the chart and the image it installs cannot be given different versions by
+  # editing one of them.
+  repository: ghcr.io/workload-identity/databricks-service-principal-operator
+  tag: ""
   pullPolicy: IfNotPresent
 
 # One. The operator takes a leader lease either way, so a second replica is a

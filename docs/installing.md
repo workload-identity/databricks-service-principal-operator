@@ -109,10 +109,10 @@ which give the second install names of its own.
 ### Or with Helm
 
 ```sh
-helm install dbxsp-operator ./charts/databricks-service-principal-operator \
-  --namespace dbxsp-operator-system --create-namespace \
-  --set image.repository=<registry>/databricks-service-principal-operator \
-  --set image.tag=v0.14.0
+helm install dbxsp-operator \
+  oci://registry-1.docker.io/weidaolee/databricks-service-principal-operator \
+  --version 0.14.0 \
+  --namespace dbxsp-operator-system --create-namespace
 ```
 
 The same objects, with every cluster-scoped name derived from the release and the
