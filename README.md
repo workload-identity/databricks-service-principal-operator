@@ -230,6 +230,44 @@ already replace the operator's image. A namespace cannot add itself to the list,
 and a team that wants in asks the team holding the account rather than editing
 anything of their own.
 
+### Taking a namespace off the list destroys the identities in it
+
+**This is destructive and it cannot be undone from here.** Every service
+principal this account issued in that namespace is deleted in Databricks, every
+grant anybody made on one goes with it, and the records go. Emptying the list
+does it for every namespace at once.
+
+**Naming the namespace again is not a restore.** It issues new service principals,
+with new client ids and no grants. Everything that was granted has to be granted
+again, by whoever granted it.
+
+So the list means one thing in each of the three states a namespace can be in:
+
+| The namespace is   | This account                             |
+|--------------------|------------------------------------------|
+| on the list        | issues identities there and manages them |
+| taken off the list | destroys every identity it issued there  |
+| never on the list  | has nothing there                        |
+
+Which buys one thing a person can check: **every service principal carrying this
+operator's marker is in a namespace on the list.**
+
+**The promise is eventual.** The destroying is done against Databricks, so while
+Databricks cannot be reached the namespace is off the list and the identities are
+still there. `IdentitiesDestroyed` on the `DatabricksAccount` says how many are
+left and in which namespaces, and it is what says whether it has finished:
+
+```sh
+kubectl -n dbxsp-operator-system get databricksaccount databricks-account \
+  -o jsonpath='{.status.conditions[?(@.type=="IdentitiesDestroyed")].message}'
+```
+
+While it is running, the operator suspends minting in the namespace — it writes
+`databricks.workload-identity.io/destroying-identities` on the Namespace, naming
+itself — so that the set it is destroying stops growing. It takes that key off
+again when it has finished, and any other operator serving that namespace goes on
+minting with nothing for a person to do.
+
 ### Two Databricks accounts in one cluster
 
 One operator serves one Databricks account, because it holds that account's
@@ -253,8 +291,9 @@ spec:
 `team-a` and `team-b` use the finance account, so that operator serves both;
 `risk` is named on the other operator's account instead.
 
-A namespace this operator does not serve is left entirely alone — not served, and
-not revoked.
+A namespace that was never on the list is left entirely alone: nothing there
+belongs to this account. A namespace **taken off** the list is not the same
+thing, and the section below says what it is.
 
 Both operators are asked about the same pods, and they agree without
 coordinating: each reads the same `DatabricksServiceAccount`, which carries
@@ -491,6 +530,12 @@ Ending one of several is deleting that one key, and the others are untouched:
 **Deleting the ServiceAccount does the same thing, for the same reason. So does
 deleting the namespace.**
 
+**One thing else destroys one, and it is not yours to do:** the team holding the
+account taking your namespace off `spec.namespaces`. That destroys every identity
+this account issued in it, and re-adding the namespace issues new ones rather
+than bringing those back — see
+[Taking a namespace off the list](#taking-a-namespace-off-the-list-destroys-the-identities-in-it).
+
 **Nothing else destroys one.** Removing the namespace's `mint` label stops new
 identities and leaves existing ones alone. Deleting the
 `DatabricksServiceAccount` in your namespace does nothing at all: that object
@@ -599,7 +644,5 @@ which:
 | `NotFound`                 | Databricks looked and the thing named is not there. Something has to be restored or re-pointed                                                                                                                                                                                    |
 | `DatabricksUnavailable`    | Databricks did not answer, whatever it was asked. Nothing has been concluded from it and it is retried                                                                                                                                                                            |
 | `DeleteFailed`             | Deletion is being held because the service principal is still there. This is reported on the record, in the operator's namespace                                                                                                                                                  |
-| `NotServed`                | This identity is in a namespace the operator's account no longer names. Its trust has been removed, so no token from this cluster can be exchanged for it. Nothing was destroyed: naming the namespace again puts the trust back on the same client id, with every grant on it    |
-| `MintingNotSuspended`      | The removal has not started, because nothing has stopped that namespace from minting yet. Nothing has been asked of Databricks and nothing about it is concluded                                                                                                                  |
-| `AnotherRemoval`           | Another operator serving that namespace is removing its own federation policies there and holds the key that says so. One removal happens at a time, and this one waits for the other to finish                                                                                   |
-| `RemovePoliciesFailed`     | Taking the trust off did not go through. This cluster can still be exchanged for the identity, which is the opposite of what the edit asked for                                                                                                                                   |
+| `MintingNotSuspended`      | This identity is in a namespace the account no longer names and is to be destroyed, and nothing has stopped that namespace from minting yet. Nothing has been destroyed and nothing has been asked of Databricks                                                                  |
+| `AnotherDestruction`       | Another operator serving that namespace is destroying its own identities there and holds the key that says so. One happens at a time, and this one waits for the other to finish                                                                                                  |

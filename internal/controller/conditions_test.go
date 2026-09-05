@@ -40,11 +40,11 @@ import (
 // makes visible is the deliberate one: it cannot be made without editing this
 // table too, and that edit is a line in a review that says the API changed.
 var conditionTypes = map[string]string{
-	"conditionReady":                     "Ready",
-	"conditionEquipped":                  "Equipped",
-	"conditionPrepared":                  "Prepared",
-	"conditionRecordsReleased":           "RecordsReleased",
-	"conditionFederationPoliciesRemoved": "FederationPoliciesRemoved",
+	"conditionReady":               "Ready",
+	"conditionEquipped":            "Equipped",
+	"conditionPrepared":            "Prepared",
+	"conditionRecordsReleased":     "RecordsReleased",
+	"conditionIdentitiesDestroyed": "IdentitiesDestroyed",
 }
 
 var conditionReasons = map[string]string{
@@ -66,17 +66,15 @@ var conditionReasons = map[string]string{
 	"reasonRecordsRemain":            "RecordsRemain",
 	"reasonDeleteFailed":             "DeleteFailed",
 	"reasonCreateUnconfirmed":        "CreateUnconfirmed",
-	"reasonNotServed":                "NotServed",
 	"reasonMintingNotSuspended":      "MintingNotSuspended",
-	"reasonAnotherRemoval":           "AnotherRemoval",
-	"reasonRemovePoliciesFailed":     "RemovePoliciesFailed",
-	"reasonPoliciesRemoved":          "PoliciesRemoved",
-	"reasonRemovingPolicies":         "RemovingPolicies",
+	"reasonAnotherDestruction":       "AnotherDestruction",
+	"reasonIdentitiesDestroyed":      "IdentitiesDestroyed",
+	"reasonDestroyingIdentities":     "DestroyingIdentities",
 	"reasonAwaitingServicePrincipal": "AwaitingServicePrincipal",
 }
 
 // TestEveryConditionTypeAndReasonIsTheStringItWas holds the published spelling
-// of all 30 constants against an accidental edit.
+// of all 28 constants against an accidental edit.
 func TestEveryConditionTypeAndReasonIsTheStringItWas(t *testing.T) {
 	t.Parallel()
 	declared := conditionConstantsIn(t, "conditions.go")
@@ -108,8 +106,8 @@ func TestEveryConditionTypeAndReasonIsInTheTable(t *testing.T) {
 	t.Parallel()
 	declared := conditionConstantsIn(t, "conditions.go")
 
-	if len(conditionTypes) != 5 || len(conditionReasons) != 25 {
-		t.Errorf("the table holds %d condition types and %d reasons, want 5 and 25",
+	if len(conditionTypes) != 5 || len(conditionReasons) != 23 {
+		t.Errorf("the table holds %d condition types and %d reasons, want 5 and 23",
 			len(conditionTypes), len(conditionReasons))
 	}
 	if len(declared) != len(conditionTypes)+len(conditionReasons) {

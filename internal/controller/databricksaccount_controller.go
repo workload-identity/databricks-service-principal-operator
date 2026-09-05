@@ -25,7 +25,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -63,7 +62,7 @@ const (
 	// once, with nothing saying why.
 	databricksAccountRetryAfterSettled = 10 * time.Minute
 
-	// policyRemovalClaimStale is how long a namespace may go without its holder
+	// destructionClaimStale is how long a namespace may go without its holder
 	// saying it is still there before another operator may take it. Five
 	// databricksAccountRetryAfterAwaited intervals: the holder rewrites the
 	// timestamp on every pass, so one missed pass is a slow one and five is an
@@ -75,7 +74,7 @@ const (
 	// namespace off it can still reach Databricks -- and both talk to the same
 	// account, so an outage that stops one stops the other, and the handover
 	// costs nothing because neither can act.
-	policyRemovalClaimStale = 5 * time.Minute
+	destructionClaimStale = 5 * time.Minute
 )
 
 // DatabricksAccountReconciler turns one DatabricksAccount into the clients the
@@ -119,9 +118,9 @@ type DatabricksAccountReconciler struct {
 
 // The only object this operator writes that it does not own -- the
 // DatabricksServiceAccounts beside it are its own kind, which it makes and
-// deletes. What it writes is one label key of its own, saying it is removing
-// federation policies in a namespace this account has stopped naming, and it
-// takes that key off again when it has finished. MintLabel and InjectLabel are
+// deletes. What it writes is one label key of its own, saying it is destroying
+// the identities it issued in a namespace this account has stopped naming, and
+// it takes that key off again when it has finished. MintLabel and InjectLabel are
 // the cluster's, given to every operator serving the namespace at once, and
 // nothing here reads or moves them.
 //
@@ -226,7 +225,10 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// knowability: suspending minting needs nothing from Databricks, and a
 	// namespace this account has stopped naming must not go on minting into it
 	// for as long as Databricks happens to be unreachable.
-	removed := r.removeFederationPoliciesIn(ctx, &databricksAccount, records)
+	destroyed, err := r.destroyIdentitiesIn(ctx, &databricksAccount, records)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	cfg := r.OwnToken.ForAccount(databricksAccount.Spec.Host,
 		databricksAccount.Spec.AccountID, databricksAccount.Spec.ClientID)
@@ -293,12 +295,12 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// reason it is not blanked above: the value is not wrong, it was not read.
 	result, err := r.reportReady(ctx, &databricksAccount, metav1.ConditionTrue, reasonAccountReady,
 		fmt.Sprintf("acting in account %s as %s", databricksAccount.Spec.AccountID, databricksAccount.Status.Subject))
-	if !removed {
+	if !destroyed {
 		// The settled interval is long because a working account has nobody
-		// waiting on it. A removal that has not finished has somebody waiting
+		// waiting on it. A destruction that has not finished has somebody waiting
 		// on it, and what would finish it -- a namespace this operator could not
-		// claim, a record whose trust is still in place -- raises no event here
-		// either.
+		// claim, a record whose service principal is still there -- raises no
+		// event here either.
 		result.RequeueAfter = databricksAccountRetryAfterAwaited
 	}
 	return result, err
@@ -446,10 +448,10 @@ func (r *DatabricksAccountReconciler) reportHeld(databricksAccount *dbxv1alpha1.
 // Not served refuses to make anything -- no DatabricksAccount, or one naming no
 // namespaces, mints nothing, since acting on an absent answer would be this
 // operator spending an account admin credential somewhere nobody said it could.
-// Not served is also what takes the trust off an identity that exists, and
-// there an absent answer must not be acted on at all: an object that has been
-// deleted, or that this pass has not read yet, is this operator knowing nothing,
-// and knowing nothing is never a reason to take something back.
+// Not served is also what destroys an identity that exists, and there an absent
+// answer must not be acted on at all: an object that has been deleted, or that
+// this pass has not read yet, is this operator knowing nothing, and knowing
+// nothing is never a reason to destroy anything.
 //
 // One function rather than a method on each controller that asks. Both the
 // DatabricksServiceAccount controller and the record's decide what to do from
@@ -470,9 +472,9 @@ func databricksAccountServes(ctx context.Context, reader client.Reader,
 	return true, databricksAccount.Spec.Serves(namespace), nil
 }
 
-// removeFederationPoliciesIn suspends minting in every namespace this operator
-// issued something in and this account no longer names, and reports whether the
-// removal has finished.
+// destroyIdentitiesIn suspends minting in every namespace this operator issued
+// something in and this account no longer names, and reports whether the
+// destruction has finished.
 //
 // The set is derived from the records rather than remembered from a previous
 // spec. Nothing here holds the list as it was before the edit, and it does not
@@ -482,43 +484,55 @@ func databricksAccountServes(ctx context.Context, reader client.Reader,
 // to survive a restart, and the one thing that must not depend on this
 // operator's memory is which identities are still trusted.
 //
-// Nothing is destroyed. The service principals stay, with every grant made on
-// them, and so do the records and their ids -- what goes is, on the records
-// themselves, the trust that lets a token from this cluster be exchanged. That
-// is the only thing a cluster can take back: a running pod already holds its
-// token, and Databricks alone decides whether to accept it.
+// Nothing is destroyed here. What this does is claim the namespace and count
+// what is left in it; the destroying is on the records, whose own controller
+// deletes each one and whose finalizer deletes the service principal. So this
+// suspends minting first and reports afterwards, and between those two it does
+// nothing at all.
 //
-// The suspension goes too, as soon as there is nothing left to take back. It is
-// this operator saying "not while I am working", not a verdict on the namespace,
-// and holding it any longer would leave every other operator serving that
-// namespace unable to mint for a removal that had finished.
-func (r *DatabricksAccountReconciler) removeFederationPoliciesIn(ctx context.Context,
+// The suspension goes as soon as there is nothing left to destroy. It is this
+// operator saying "not while I am working", not a verdict on the namespace: the
+// namespace stays off this account's list, so this operator mints nothing there
+// whatever the key says, and holding it any longer would leave every other
+// operator serving that namespace unable to mint for a destruction that had
+// finished.
+func (r *DatabricksAccountReconciler) destroyIdentitiesIn(ctx context.Context,
 	databricksAccount *dbxv1alpha1.DatabricksAccount,
-	records []dbxv1alpha1.IssuedDatabricksServicePrincipal) bool {
-	// Every namespace out of scope, and how many identities in it this cluster
-	// can still be exchanged for. The namespace is entered whether or not any of
-	// them is outstanding, because a count of zero is what says the suspension
-	// can be lifted -- a namespace missing from this map is one nothing is known
-	// about, which is not the same answer.
+	records []dbxv1alpha1.IssuedDatabricksServicePrincipal) (bool, error) {
+	// Every namespace out of scope, and how many identities this account still
+	// has in it. A record that exists is an identity that exists: a record on its
+	// way out is held by its finalizer until Databricks has confirmed the service
+	// principal is gone, so counting records is counting what is left in the
+	// account rather than what has been asked for.
 	holding := map[string]int{}
 	for i := range records {
 		namespace := records[i].Spec.ServiceAccount.Namespace
 		if databricksAccount.Spec.Serves(namespace) {
 			continue
 		}
+		holding[namespace]++
+	}
+
+	// Read from the cluster, because the records no longer say it. A namespace
+	// whose last record is gone has left the map above, and it is exactly the one
+	// whose claim has to come off -- so the claims this operator holds are found
+	// where they are written. Entered with a count of zero, which is what the
+	// loop below reads as "nothing left here".
+	claimed, err := r.namespacesClaimedForDestruction(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, namespace := range claimed {
 		if _, seen := holding[namespace]; !seen {
 			holding[namespace] = 0
-		}
-		if !policiesRemovedFromDatabricks(&records[i]) {
-			holding[namespace]++
 		}
 	}
 
 	if len(holding) == 0 {
-		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionFederationPoliciesRemoved,
-			metav1.ConditionTrue, reasonPoliciesRemoved,
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionIdentitiesDestroyed,
+			metav1.ConditionTrue, reasonIdentitiesDestroyed,
 			"every namespace this operator issued an identity in is one this account names")
-		return true
+		return true, nil
 	}
 
 	namespaces := make([]string, 0, len(holding))
@@ -527,92 +541,94 @@ func (r *DatabricksAccountReconciler) removeFederationPoliciesIn(ctx context.Con
 	}
 	slices.Sort(namespaces)
 
-	// Taken before anything is removed and given back once nothing is left to
-	// remove, one namespace at a time. A namespace whose count is zero is one
-	// every record has already been let go of in, so nothing there is waiting on
-	// this operator any more.
-	var unclaimed, stillHeld, trusted []string
+	// Taken before anything is destroyed and given back once nothing is left,
+	// one namespace at a time.
+	var unclaimed, stillHeld, remaining []string
 	for _, namespace := range namespaces {
 		if holding[namespace] > 0 {
-			trusted = append(trusted, fmt.Sprintf("%s (%d)", namespace, holding[namespace]))
-			if err := r.acquirePolicyRemoval(ctx, namespace); err != nil {
+			remaining = append(remaining, fmt.Sprintf("%s (%d)", namespace, holding[namespace]))
+			if err := r.acquireDestructionClaim(ctx, namespace); err != nil {
 				unclaimed = append(unclaimed, fmt.Sprintf("%s (%v)", namespace, err))
 			}
 			continue
 		}
-		if err := r.releasePolicyRemoval(ctx, namespace); err != nil {
+		if err := r.releaseDestructionClaim(ctx, namespace); err != nil {
 			stillHeld = append(stillHeld, fmt.Sprintf("%s (%v)", namespace, err))
 		}
 	}
 
-	if len(unclaimed) == 0 && len(stillHeld) == 0 && len(trusted) == 0 {
-		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionFederationPoliciesRemoved,
-			metav1.ConditionTrue, reasonPoliciesRemoved,
-			fmt.Sprintf("this account no longer serves %s: no token from this cluster can be "+
-				"exchanged for the identities it issued there, and minting is no longer "+
-				"suspended, so any other operator serving those namespaces goes on as before. "+
-				"Their service principals and every grant on them are untouched, so naming a "+
-				"namespace here again restores the exchange on the same client ids.",
+	if len(unclaimed) == 0 && len(stillHeld) == 0 && len(remaining) == 0 {
+		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionIdentitiesDestroyed,
+			metav1.ConditionTrue, reasonIdentitiesDestroyed,
+			fmt.Sprintf("this account no longer serves %s: every identity it issued there is "+
+				"destroyed, and minting is no longer suspended, so any other operator serving "+
+				"those namespaces goes on as before. Naming a namespace here again issues new "+
+				"service principals, with new client ids and no grants.",
 				strings.Join(namespaces, ", ")))
-		return true
+		return true, nil
 	}
 
 	var said []string
 	if len(unclaimed) > 0 {
-		// Named separately from the trust below because they are fixed by
+		// Named separately from the count below because they are fixed by
 		// different people: this one by whoever can write a Namespace, or by
 		// whoever runs the operator named in the message, and neither is
 		// necessarily whoever holds this account.
 		said = append(said, fmt.Sprintf(
-			"this operator does not hold %s on %s, so it has removed nothing there: it will "+
-				"not take the trust off identities in a namespace that can still mint them",
-			dbxv1alpha1.RemovingPoliciesLabel, strings.Join(unclaimed, ", ")))
+			"this operator does not hold %s on %s, so it has destroyed nothing there: it will "+
+				"not destroy identities in a namespace that can still mint them",
+			dbxv1alpha1.DestroyingIdentitiesLabel, strings.Join(unclaimed, ", ")))
 	}
 	if len(stillHeld) > 0 {
-		// The trust is gone and only the suspension is left, which is why this is
-		// said apart from everything above: nothing is waiting on Databricks, and
-		// what it costs is every other operator serving these namespaces, whose
-		// minting does not resume until the key comes off.
+		// Nothing is left in these and only the suspension remains, which is why
+		// this is said apart from everything above: nothing is waiting on
+		// Databricks, and what it costs is every other operator serving these
+		// namespaces, whose minting does not resume until the key comes off.
 		said = append(said, fmt.Sprintf(
-			"there is nothing left to remove in %s and this operator could not take %s off "+
+			"there is nothing left to destroy in %s and this operator could not take %s off "+
 				"them again, so no operator is minting there",
-			strings.Join(stillHeld, ", "), dbxv1alpha1.RemovingPoliciesLabel))
+			strings.Join(stillHeld, ", "), dbxv1alpha1.DestroyingIdentitiesLabel))
 	}
-	if len(trusted) > 0 {
+	if len(remaining) > 0 {
 		said = append(said, fmt.Sprintf(
-			"identities in %s can still be exchanged for from this cluster; their records say "+
-				"why under Ready, in namespace %s",
-			strings.Join(trusted, ", "), r.DatabricksAccountNamespacedName.Namespace))
+			"identities issued in %s are still in Databricks; their records say why under "+
+				"Ready, in namespace %s",
+			strings.Join(remaining, ", "), r.DatabricksAccountNamespacedName.Namespace))
 	}
-	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionFederationPoliciesRemoved,
-		metav1.ConditionFalse, reasonRemovingPolicies,
-		fmt.Sprintf("%s. Nothing has been destroyed by this and nothing is destroyed by its not "+
-			"finishing: every service principal and every grant on it is where it was.",
+	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionIdentitiesDestroyed,
+		metav1.ConditionFalse, reasonDestroyingIdentities,
+		fmt.Sprintf("%s. Every count here is an identity this account still has in a namespace "+
+			"it no longer names, which is what this list promises there are none of.",
 			strings.Join(said, ". ")))
-	return false
+	return false, nil
 }
 
-// policiesRemovedFromDatabricks reports whether this cluster can still be
-// exchanged for the identity this record names.
+// namespacesClaimedForDestruction is every namespace this operator has suspended
+// minting in, read from the cluster.
 //
-// Read from the condition the record already writes rather than from a field
-// beside it. A second place saying the same thing is a second place for the two
-// to disagree, and the disagreement that matters is this account reporting a
-// removal finished while the record it counted says the trust is still there.
-//
-// RemovedInDatabricks counts as removed because the service principal itself
-// is gone, and its federation policies went with it -- measured against a live
-// account. There is nothing left to take back.
-func policiesRemovedFromDatabricks(issued *dbxv1alpha1.IssuedDatabricksServicePrincipal) bool {
-	ready := meta.FindStatusCondition(issued.Status.Conditions, conditionReady)
-	if ready == nil {
-		return false
+// It is what makes the suspension liftable at all. The claim is taken while
+// records are being destroyed and the records are what say which namespaces
+// those are -- so the moment the last one goes, nothing left anywhere says this
+// operator is holding a namespace, and the key would stay on it for ever with
+// only this operator able to lift it. A namespace named again after the edit
+// leaves the same way: it is served, so no record puts it in the set, and the
+// claim taken while it was not served is still there.
+func (r *DatabricksAccountReconciler) namespacesClaimedForDestruction(ctx context.Context) ([]string, error) {
+	var namespaces corev1.NamespaceList
+	if err := r.List(ctx, &namespaces, client.MatchingLabels{
+		dbxv1alpha1.DestroyingIdentitiesLabel: destructionClaimedBy(r.DatabricksAccountNamespacedName),
+	}); err != nil {
+		return nil, err
 	}
-	return ready.Reason == reasonNotServed || ready.Reason == reasonRemovedInDatabricks
+	claimed := make([]string, 0, len(namespaces.Items))
+	for i := range namespaces.Items {
+		claimed = append(claimed, namespaces.Items[i].Name)
+	}
+	return claimed, nil
 }
 
-// acquirePolicyRemoval claims a namespace for this operator's removal, and says
-// again on every pass that the claim is still wanted.
+// acquireDestructionClaim claims a namespace for this operator's destruction,
+// and says again on every pass that the claim is still wanted.
 //
 // The claim is one label key, and server-side apply is the whole of the mutual
 // exclusion. metadata.labels is a map whose keys are owned one at a time -- the
@@ -628,15 +644,14 @@ func policiesRemovedFromDatabricks(issued *dbxv1alpha1.IssuedDatabricksServicePr
 // move when the applied content is identical -- measured against a live cluster
 // -- so an unchanging annotation would say when the claim was made and never
 // that its holder is still running.
-func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, name string) error {
+func (r *DatabricksAccountReconciler) acquireDestructionClaim(ctx context.Context, name string) error {
 	logger := log.FromContext(ctx)
 
 	// Read before the apply because this operator holds no create on Namespaces:
 	// an apply naming one that is not there is a create, and a namespace that is
 	// gone is one nothing can be minted into and so one with nothing to claim.
-	// Its records stay, and their trust is taken back on their own controller's
-	// pass.
-	holder, exists, err := policyRemovalHeldBy(ctx, r.Client, name)
+	// Its records stay, and each is destroyed on its own controller's pass.
+	holder, exists, err := destructionHeldBy(ctx, r.Client, name)
 	switch {
 	case err != nil:
 		return err
@@ -647,15 +662,16 @@ func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, 
 	// Whether this pass is taking the claim or saying again that it still wants
 	// one it already holds. The apply is the same either way, so without this the
 	// line below would repeat for as long as the removal takes.
-	taking := holder != removedPoliciesBy(r.DatabricksAccountNamespacedName)
+	taking := holder != destructionClaimedBy(r.DatabricksAccountNamespacedName)
 
-	err = r.Apply(ctx, removingPoliciesBy(name, r.DatabricksAccountNamespacedName, time.Now()), r.owner())
+	err = r.Apply(ctx, destructionClaimFor(name, r.DatabricksAccountNamespacedName, time.Now()), r.owner())
 	if !apierrors.IsConflict(err) {
 		switch {
 		case err != nil:
-			logger.Error(err, "Could not claim a namespace for federation policy removal", "tenantNamespace", name)
+			logger.Error(err, "Could not claim a namespace to destroy the identities in it",
+				"tenantNamespace", name)
 		case taking:
-			logger.Info("Claimed a namespace for federation policy removal", "tenantNamespace", name)
+			logger.Info("Claimed a namespace to destroy the identities in it", "tenantNamespace", name)
 		}
 		return err
 	}
@@ -668,9 +684,9 @@ func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, 
 	if err := r.Get(ctx, types.NamespacedName{Name: name}, &namespace); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	holder = namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel]
-	said := namespace.Annotations[dbxv1alpha1.RemovingPoliciesSinceAnnotation]
-	logger.V(1).Info("Another operator holds the federation policy removal claim",
+	holder = namespace.Labels[dbxv1alpha1.DestroyingIdentitiesLabel]
+	said := namespace.Annotations[dbxv1alpha1.DestroyingIdentitiesSinceAnnotation]
+	logger.V(1).Info("Another operator holds the destruction claim",
 		"tenantNamespace", name, "holder", holder, "since", said)
 
 	since, unreadable := time.Parse(time.RFC3339, said)
@@ -682,7 +698,7 @@ func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, 
 		return fmt.Errorf("held by %s, which has not said when: %q", holder, said)
 	}
 	age := time.Since(since)
-	if age < policyRemovalClaimStale {
+	if age < destructionClaimStale {
 		return fmt.Errorf("held by %s, last seen %s ago", holder, age.Truncate(time.Second))
 	}
 
@@ -690,19 +706,20 @@ func (r *DatabricksAccountReconciler) acquirePolicyRemoval(ctx context.Context, 
 	// ago that waiting for it is waiting for nothing, and the operator it is
 	// taken from finds out the same way anybody else does: its next apply is
 	// refused, because the field is no longer its own.
-	logger.Info("Taking the federation policy removal claim from an operator that stopped refreshing it",
+	logger.Info("Taking the destruction claim from an operator that stopped refreshing it",
 		"tenantNamespace", name, "holder", holder, "lastSeen", age.Truncate(time.Second))
-	return r.Apply(ctx, removingPoliciesBy(name, r.DatabricksAccountNamespacedName, time.Now()),
+	return r.Apply(ctx, destructionClaimFor(name, r.DatabricksAccountNamespacedName, time.Now()),
 		r.owner(), client.ForceOwnership)
 }
 
-// releasePolicyRemoval gives a namespace back, by applying the same object
+// releaseDestructionClaim gives a namespace back, by applying the same object
 // without the key: an apply keeps only what it sends.
 //
 // Only by the operator that holds it. An operator that was never the holder, or
 // that was taken over by another, has nothing here to give back, and sending
-// this anyway would be one operator ending another's removal halfway through.
-func (r *DatabricksAccountReconciler) releasePolicyRemoval(ctx context.Context, name string) error {
+// this anyway would be one operator ending another's destruction halfway
+// through.
+func (r *DatabricksAccountReconciler) releaseDestructionClaim(ctx context.Context, name string) error {
 	var namespace corev1.Namespace
 	switch err := r.Get(ctx, types.NamespacedName{Name: name}, &namespace); {
 	case apierrors.IsNotFound(err):
@@ -710,29 +727,30 @@ func (r *DatabricksAccountReconciler) releasePolicyRemoval(ctx context.Context, 
 	case err != nil:
 		return err
 	}
-	if namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel] != removedPoliciesBy(r.DatabricksAccountNamespacedName) {
+	if namespace.Labels[dbxv1alpha1.DestroyingIdentitiesLabel] != destructionClaimedBy(r.DatabricksAccountNamespacedName) {
 		return nil
 	}
 
 	logger := log.FromContext(ctx)
 	if err := r.Apply(ctx, corev1ac.Namespace(name), r.owner()); err != nil {
-		logger.Error(err, "Could not release the claim on a namespace whose federation policies are all removed",
+		logger.Error(err, "Could not release the claim on a namespace whose identities are all destroyed",
 			"tenantNamespace", name)
 		return err
 	}
-	logger.Info("Released the claim on a namespace: nothing is left to remove there", "tenantNamespace", name)
+	logger.Info("Released the claim on a namespace: nothing of this account's is left there",
+		"tenantNamespace", name)
 	return nil
 }
 
-// policyRemovalHeldBy is the operator that has suspended minting in this
+// destructionHeldBy is the operator that has suspended minting in this
 // namespace, and whether there is a namespace at all.
 //
 // The two are separate answers because a namespace that is gone is not a
 // namespace nobody holds. Nothing can be minted into one that does not exist, so
-// there is nothing for a claim to protect there and a removal has nothing to
+// there is nothing for a claim to protect there and a destruction has nothing to
 // wait for -- while a namespace that is there and unclaimed is one this operator
-// must claim before it removes anything.
-func policyRemovalHeldBy(ctx context.Context, reader client.Reader, name string) (
+// must claim before it destroys anything.
+func destructionHeldBy(ctx context.Context, reader client.Reader, name string) (
 	holder string, exists bool, err error) {
 	var namespace corev1.Namespace
 	switch err := reader.Get(ctx, types.NamespacedName{Name: name}, &namespace); {
@@ -741,29 +759,29 @@ func policyRemovalHeldBy(ctx context.Context, reader client.Reader, name string)
 	case err != nil:
 		return "", false, err
 	}
-	return namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel], true, nil
+	return namespace.Labels[dbxv1alpha1.DestroyingIdentitiesLabel], true, nil
 }
 
-// removingPoliciesBy is the claim as this operator sends it: the key, its own
+// destructionClaimFor is the claim as this operator sends it: the key, its own
 // name, and the time it is saying so.
-func removingPoliciesBy(namespace string, databricksAccountNamespacedName types.NamespacedName,
+func destructionClaimFor(namespace string, databricksAccountNamespacedName types.NamespacedName,
 	at time.Time) *corev1ac.NamespaceApplyConfiguration {
 	return corev1ac.Namespace(namespace).
 		WithLabels(map[string]string{
-			dbxv1alpha1.RemovingPoliciesLabel: removedPoliciesBy(databricksAccountNamespacedName),
+			dbxv1alpha1.DestroyingIdentitiesLabel: destructionClaimedBy(databricksAccountNamespacedName),
 		}).
 		WithAnnotations(map[string]string{
-			dbxv1alpha1.RemovingPoliciesSinceAnnotation: at.UTC().Format(time.RFC3339),
+			dbxv1alpha1.DestroyingIdentitiesSinceAnnotation: at.UTC().Format(time.RFC3339),
 		})
 }
 
-// removedPoliciesBy is how one operator names itself to another in a label
+// destructionClaimedBy is how one operator names itself to another in a label
 // value.
 //
 // A "." where every other reference to an operator in this API uses a "/",
 // because a label value may not hold one. Both halves are read back by people,
 // not parsed: what a loser does with the name is print it.
-func removedPoliciesBy(databricksAccountNamespacedName types.NamespacedName) string {
+func destructionClaimedBy(databricksAccountNamespacedName types.NamespacedName) string {
 	return databricksAccountNamespacedName.Namespace + "." + databricksAccountNamespacedName.Name
 }
 
@@ -862,13 +880,12 @@ func verifyAccount(ctx context.Context, clients databricks.Clients) error {
 // interval would leave the operator looking broken for a minute after it was
 // fixed.
 //
-// Which namespaces it serves: taking one off that list removes the federation
-// policies there, and the records in it are where that is carried out. Nothing
-// else says so --
-// the edit changes no record, no ServiceAccount and no Namespace -- so without
-// this the trust stays in place until each record comes round on its own
-// interval, which for a settled identity is ten minutes. Putting a namespace
-// back has the same shape and the same wait.
+// Which namespaces it serves: taking one off that list destroys the identities
+// there, and the records in it are where that is carried out. Nothing else says
+// so -- the edit changes no record, no ServiceAccount and no Namespace -- so
+// without this they stay until each record comes round on its own interval,
+// which for a settled identity is ten minutes. Putting a namespace back has the
+// same shape and the same wait.
 //
 // Everything else is skipped, and that is what keeps this from being a loop:
 // every reconcile of an account writes its status, and waking every record on
@@ -916,10 +933,10 @@ func databricksAccountChanged(databricksAccountNamespacedName types.NamespacedNa
 // acted in, or that it no longer serves the namespace one of them is in.
 //
 // Without it, an operator whose account was just fixed stays visibly broken, and
-// a namespace taken out of scope keeps its trust, for as long as each object's
-// own retry interval -- ten minutes for a settled identity. Nothing else
-// reports either change: one happened in Databricks and the other is an edit to
-// a field no record watches.
+// the identities in a namespace taken out of scope go on existing, for as long
+// as each object's own retry interval -- ten minutes for a settled identity.
+// Nothing else reports either change: one happened in Databricks and the other
+// is an edit to a field no record watches.
 //
 // Every record is woken and not only the ones affected, because which ones those
 // are cannot be worked out from the event: the list before the edit is not

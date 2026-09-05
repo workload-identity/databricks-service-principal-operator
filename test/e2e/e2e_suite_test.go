@@ -45,6 +45,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/databricks/databricks-sdk-go/service/iam"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -118,6 +119,13 @@ func TestE2E(t *testing.T) {
 var _ = SynchronizedBeforeSuite(func() []byte {
 	readInputs()
 	By("starting from a served-namespace list that is empty and exists")
+	// Destructive, and deliberately so: emptying the list destroys every
+	// identity this account issued in every namespace on it. What that clears is
+	// what a run of this suite left behind by failing partway, which is the only
+	// thing this account is ever pointed at. It is written down here because the
+	// same command run against an account somebody's workloads use would destroy
+	// their identities and every grant on them.
+	//
 	// Exists, because what each container adds to it is a JSON patch append,
 	// and an append has nowhere to go when the field is absent.
 	_, err := kubectl("-n", operatorNamespace, "patch", "databricksaccount", databricksAccountName,
@@ -166,7 +174,8 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 			"tests an installed operator; it does not install one", operatorNamespace)
 })
 
-// Left as it was found, once, after every process has finished with it.
+// Left as it was found, once, after every process has finished with it, which
+// destroys every identity this run made and any it made and lost track of.
 var _ = SynchronizedAfterSuite(func() {}, func() {
 	_, _ = kubectl("-n", operatorNamespace, "patch", "databricksaccount", databricksAccountName,
 		"--type", "merge", "-p", `{"spec":{"namespaces":[]}}`)
@@ -339,14 +348,45 @@ func removeTeam(team string) {
 //
 // A JSON patch append is one operation at the API server, so there is nothing to
 // lose. The field is a set, so a duplicate is refused rather than silently
-// accumulated. Nothing removes an entry: a container that has finished has
-// deleted its namespace, and serving a namespace that is not there costs the
-// operator nothing. The list is emptied once, after every process is done.
+// accumulated. Only stopServing removes an entry, and only the one spec that is
+// about removing one: a container that has finished has deleted its namespace,
+// and serving a namespace that is not there costs the operator nothing. The list
+// is emptied once, after every process is done.
 func serve(name string) {
 	_, err := kubectl("-n", operatorNamespace, "patch", "databricksaccount", databricksAccountName,
 		"--type", "json", "-p",
 		fmt.Sprintf(`[{"op":"add","path":"/spec/namespaces/-","value":%q}]`, name))
 	Expect(err).NotTo(HaveOccurred(), "declaring that this operator serves %s", name)
+}
+
+// stopServing takes one namespace off the list, which destroys every identity
+// this account issued there.
+//
+// One entry and not the whole field, for the reason serve appends: the
+// containers of this suite share the object and run in parallel, so a list
+// computed from a read and written back loses whatever another container added
+// in between -- and here what is lost is a namespace whose identities are then
+// destroyed while its spec is still using them.
+//
+// A JSON patch cannot name a value to remove, only an index, so the index is
+// read and sent with a `test` guarding it. The API server applies the pair
+// atomically and refuses the whole patch if the index has moved, which is what
+// makes this safe to retry rather than a read-modify-write with better odds.
+func stopServing(name string) {
+	Eventually(func() error {
+		served := strings.Fields(kubectlOut("-n", operatorNamespace, "get", "databricksaccount",
+			databricksAccountName, "-o", "jsonpath={.spec.namespaces[*]}"))
+		at := slices.Index(served, name)
+		if at < 0 {
+			return nil
+		}
+		_, err := kubectl("-n", operatorNamespace, "patch", "databricksaccount", databricksAccountName,
+			"--type", "json", "-p", fmt.Sprintf(
+				`[{"op":"test","path":"/spec/namespaces/%d","value":%q},`+
+					`{"op":"remove","path":"/spec/namespaces/%d"}]`, at, name, at))
+		return err
+	}, time.Minute, 2*time.Second).Should(Succeed(),
+		"taking %s off the list of namespaces this operator serves", name)
 }
 
 // applyTeam creates the tenant's half: a namespace enabled for both minting and
@@ -558,6 +598,40 @@ func destroyIfLeft(servicePrincipalID string) {
 		"removing service principal %s, which this run made and left behind\n", servicePrincipalID)
 	Expect(clients.DeleteServicePrincipal(context.Background(), servicePrincipalID)).To(Succeed(),
 		"service principal %s was made by this run and is still in the account", servicePrincipalID)
+}
+
+// identitiesThisClusterIssuedIn is every service principal in the account that
+// carries this cluster's marker and was made for a ServiceAccount in one
+// namespace, named as Databricks holds them.
+//
+// The account is read whole rather than the operator asked. Everything else in
+// this suite checks the operator against ids the operator itself reported, which
+// cannot show an identity it made and lost track of -- and that is exactly what
+// "every service principal carrying this operator's marker is in a namespace on
+// the list" is a promise about.
+//
+// Two filters, because the marker answers only half of it. externalId begins
+// with the hash of this cluster's issuer, which is what tells this cluster's
+// identities from another cluster's sharing the account; it holds no namespace,
+// so which namespace one was made for is read off the display name the operator
+// wrote -- DisplayNameFor with no ServiceAccount name is the prefix every display
+// name in that namespace begins with. A display name is editable in Databricks
+// and nothing here edits one.
+func identitiesThisClusterIssuedIn(team string) []string {
+	all, err := clients.AccountClient().ServicePrincipalsV2.ListAll(context.Background(),
+		iam.ListAccountServicePrincipalsRequest{})
+	Expect(err).NotTo(HaveOccurred(), "listing the account's service principals")
+
+	marker := databricks.ClusterMarker(clusterIssuer())
+	made := databricks.DisplayNameFor(team, "", "")
+	var found []string
+	for _, one := range all {
+		if strings.HasPrefix(one.ExternalId, marker) && strings.HasPrefix(one.DisplayName, made) {
+			found = append(found, fmt.Sprintf("%s (%s, externalId %s)",
+				one.Id, one.DisplayName, one.ExternalId))
+		}
+	}
+	return found
 }
 
 // makeOrphan puts an identity in the account that trusts this namespace and name

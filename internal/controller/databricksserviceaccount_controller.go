@@ -114,13 +114,11 @@ func (r *DatabricksServiceAccountReconciler) Reconcile(ctx context.Context, req 
 	// Read once for the whole pass. It decides whether a record may be made here,
 	// and nothing else -- in particular it does not end the pass.
 	//
-	// What this object holds is a copy of records that go on existing after a
-	// namespace is taken out of scope -- their service principals are not
-	// destroyed and their ids are intact -- and their federation policies are
-	// removed, which makes every one of them stop being exchangeable. Stopping
-	// here would freeze this copy at the last thing that was true, so the team
-	// whose workloads have just stopped reaching Databricks would read Ready on
-	// the one object in their own namespace that is supposed to tell them.
+	// What this object holds is a copy of records that are being destroyed after
+	// a namespace is taken out of scope, one pass at a time. Stopping here would
+	// freeze this copy at the last thing that was true, so the team whose
+	// workloads have just stopped reaching Databricks would read Ready on the one
+	// object in their own namespace that is supposed to tell them.
 	declared, served, err := databricksAccountServes(ctx, r.Client, r.DatabricksAccountNamespacedName, serviceAccount.Namespace)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -185,11 +183,17 @@ func (r *DatabricksServiceAccountReconciler) Reconcile(ctx context.Context, req 
 	})
 
 	if len(entries) == 0 {
-		// Every identity asked for is in a namespace nobody opened. Nothing, and
-		// nothing said: that is the ordinary state of every namespace in the
-		// cluster, and an object in each of them saying so would be this operator
-		// answering a question nobody asked.
-		return ctrl.Result{}, nil
+		// Nothing of this operator's to write here. Usually that is a namespace
+		// nobody opened, where there is no object either and this does nothing:
+		// an object in every namespace saying a ServiceAccount was issued nothing
+		// would be this operator answering a question nobody asked.
+		//
+		// It is also where a namespace taken off the account's list ends up, once
+		// every record it had is destroyed. Then there is an object, and what it
+		// holds are entries naming client ids that resolve to nothing -- which the
+		// webhook would go on writing into every new pod here. So the entries go
+		// the same way they go when nobody asks any more.
+		return ctrl.Result{}, r.removeIdentities(ctx, &serviceAccount)
 	}
 
 	// All of them in one apply. Applying one at a time would have each write
@@ -843,12 +847,11 @@ func (r *DatabricksServiceAccountReconciler) injecting(ctx context.Context, name
 // things. A namespace where minting was never opened gets no identities; one
 // where it is closed keeps the identities it has. See MintLabel.
 //
-// No while any operator is removing federation policies here, whichever
-// operator that is. What it is doing is taking the trust off a set of
-// identities, and a set that can still grow while it works is one it finishes
-// without having covered -- so minting stops for everybody until the removal is
-// over and the key comes off. The permission underneath is untouched and needs
-// nobody to give it again.
+// No while any operator is destroying its identities here, whichever operator
+// that is. A set that can still grow while it is being destroyed is one the
+// destruction finishes without having covered -- so minting stops for everybody
+// until it is over and the key comes off. The permission underneath is untouched
+// and needs nobody to give it again.
 //
 // A namespace that is not there mints nothing.
 func namespaceMints(ctx context.Context, reader client.Reader, name string) (bool, error) {
@@ -859,7 +862,7 @@ func namespaceMints(ctx context.Context, reader client.Reader, name string) (boo
 	case err != nil:
 		return false, err
 	}
-	if _, removingPolicies := namespace.Labels[dbxv1alpha1.RemovingPoliciesLabel]; removingPolicies {
+	if _, destroying := namespace.Labels[dbxv1alpha1.DestroyingIdentitiesLabel]; destroying {
 		return false, nil
 	}
 	return namespace.Labels[dbxv1alpha1.MintLabel] == dbxv1alpha1.Enabled, nil

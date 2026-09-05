@@ -82,8 +82,9 @@ const (
 	// one namespace, and this key is the cluster's permission to both of them --
 	// so one of them taking it off is one operator revoking the other's
 	// permission, which nothing puts back without a person. An operator that
-	// needs minting to stop while it works suspends it with RemovingPoliciesLabel
-	// instead, which is its own to write and its own to lift.
+	// needs minting to stop while it works suspends it with
+	// DestroyingIdentitiesLabel instead, which is its own to write and its own to
+	// lift.
 	//
 	// It is not a security boundary, and that decides what withdrawing it does.
 	// The identity a ServiceAccount can ask for is
@@ -126,13 +127,13 @@ const (
 	// admitting the operator's own pod from depending on the operator running.
 	InjectLabel = "databricks.workload-identity.io/inject"
 
-	// RemovingPoliciesLabel on a Namespace suspends minting there while one
-	// operator takes the federation policies off the identities it issued
-	// there. Its value names the holder, as
+	// DestroyingIdentitiesLabel on a Namespace suspends minting there while one
+	// operator destroys the identities it issued there, which is what taking the
+	// namespace off its account's list means. Its value names the holder, as
 	// <the operator's namespace>.<its DatabricksAccount's name>.
 	//
 	// One key for every operator on the cluster, so that only one of them
-	// removes policies in a namespace at a time. Server-side apply is what
+	// destroys identities in a namespace at a time. Server-side apply is what
 	// enforces that: metadata.labels is a map and its keys are owned one by
 	// one, so the second operator to claim this one is refused a conflict, and
 	// being refused is what it means to lose. Nothing consults a register and
@@ -143,18 +144,22 @@ const (
 	// once, and an operator that removed it to stop its own minting would be
 	// revoking somebody else's -- for good, since no operator may write it back.
 	// This one is suspension: it is lifted by the operator that took it, and
-	// everybody's minting resumes with nothing for a person to do.
+	// everybody's minting resumes with nothing for a person to do. It is lifted
+	// even though the namespace stays off that operator's own list, because
+	// what stops that operator minting there is the list itself, and holding
+	// this key any longer would only stop everybody else.
 	//
 	// A value rather than a bare presence because losing is only useful if the
 	// loser can say who won. A label value cannot hold "/", which is why the
 	// holder is spelled with a "." where every other reference to an operator in
 	// this API uses "/".
-	RemovingPoliciesLabel = "databricks.workload-identity.io/removing-policies"
+	DestroyingIdentitiesLabel = "databricks.workload-identity.io/destroying-identities"
 
-	// RemovingPoliciesSinceAnnotation is when the holder of RemovingPoliciesLabel
-	// last said it was still there, RFC3339. It makes the label a lease: past a
-	// threshold the operator that wants it may take it, so that an operator
-	// killed partway through does not leave a namespace unable to mint for ever.
+	// DestroyingIdentitiesSinceAnnotation is when the holder of
+	// DestroyingIdentitiesLabel last said it was still there, RFC3339. It makes
+	// the label a lease: past a threshold the operator that wants it may take it,
+	// so that an operator killed partway through does not leave a namespace
+	// unable to mint for ever.
 	//
 	// An annotation and not part of the label value, because a label value holds
 	// 63 characters and a namespace, a name and a timestamp do not fit in them.
@@ -165,7 +170,7 @@ const (
 	// every timestamp in the object standing. Written once, this would say when
 	// the claim was made and never that its holder is still alive -- and past any
 	// threshold a slow holder and a dead one would read the same.
-	RemovingPoliciesSinceAnnotation = "databricks.workload-identity.io/removing-policies-since"
+	DestroyingIdentitiesSinceAnnotation = "databricks.workload-identity.io/destroying-identities-since"
 
 	// Enabled is the value the two Namespace labels must carry. The labels
 	// switch an action on -- minting, injecting -- and are written by somebody

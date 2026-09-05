@@ -25,6 +25,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 )
 
 // The whole chain, once, on the two identities a workload asks for.
@@ -550,5 +552,95 @@ var _ = Describe("A ServiceAccount taking a name an orphaned identity still trus
 		Expect(got).To(Equal(clientIDOf(team, serviceAccount, profile)),
 			"the pod exchanged for something other than the identity this ServiceAccount was issued")
 		Expect(got).NotTo(Equal(orphanClient), "the pod exchanged for the orphan")
+	})
+})
+
+// The one edit whose promise is about the whole account rather than one object.
+//
+// Every other spec here checks the operator against ids the operator reported.
+// This one reads the account whole, because what is being checked is that
+// nothing carrying this cluster's marker is left in a namespace the account no
+// longer names -- and an identity the operator made and lost track of is exactly
+// what the operator cannot be asked about.
+//
+// The namespace and its ServiceAccount are left standing throughout. Nothing a
+// tenant does is part of this: the identity is destroyed because the platform
+// team stopped naming the namespace, while the workload goes on asking for it.
+var _ = Describe("A namespace taken off the account's list", Ordered, func() {
+	const (
+		team           = "e2e-unserved"
+		serviceAccount = "etl"
+	)
+	var profile, issuedID, issuedClient string
+
+	BeforeAll(func() {
+		profile = unnamedProfile()
+		removeTeam(team)
+		serve(team)
+		applyTeam(team, serviceAccount, unnamed)
+
+		Eventually(func() string {
+			return servicePrincipalIDOf(team, serviceAccount, profile)
+		}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
+			"nothing was issued, so there is nothing here for a removal to destroy")
+		issuedID = servicePrincipalIDOf(team, serviceAccount, profile)
+		issuedClient = clientIDOf(team, serviceAccount, profile)
+		Expect(exists(issuedID)).To(BeTrue())
+	})
+
+	AfterAll(func() {
+		// The entry comes off the shared list whether or not the spec that was
+		// supposed to take it off ran, so that a failure here does not leave the
+		// object naming a namespace that is gone. destroyIfLeft covers the run
+		// that failed before anything was destroyed.
+		removeTeam(team)
+		stopServing(team)
+		destroyIfLeft(issuedID)
+	})
+
+	It("destroys the identity it issued there, with the ServiceAccount still asking", func() {
+		stopServing(team)
+
+		Eventually(func() bool {
+			return exists(issuedID)
+		}, 5*time.Minute, 5*time.Second).Should(BeFalse(),
+			"%s is not on the account's list any more and service principal %s is still in "+
+				"Databricks, with everything anybody granted it", team, issuedID)
+	})
+
+	It("says so on the account, and leaves the namespace able to mint again", func() {
+		Eventually(func() string {
+			return kubectlOut("-n", operatorNamespace, "get", "databricksaccount", databricksAccountName,
+				"-o", "jsonpath={.status.conditions[?(@.type=='IdentitiesDestroyed')].status}")
+		}, 5*time.Minute, 5*time.Second).Should(Equal("True"),
+			"the account does not say the destruction finished. Its message is the only place "+
+				"an identity left behind by a namespace off the list is visible: %s",
+			kubectlOut("-n", operatorNamespace, "get", "databricksaccount", databricksAccountName,
+				"-o", "jsonpath={.status.conditions[?(@.type=='IdentitiesDestroyed')].message}"))
+
+		Expect(kubectlOut("get", "namespace", team, "-o", "jsonpath={.metadata.labels}")).
+			NotTo(ContainSubstring(dbxv1alpha1.DestroyingIdentitiesLabel),
+				"%s is still claimed for a destruction that has finished, so no operator serving "+
+					"it can mint there and only this one can end that", team)
+	})
+
+	It("leaves nothing in the account carrying this cluster's marker for that namespace", func() {
+		// The assertion the whole meaning of the list rests on, and the only one
+		// made against Databricks rather than against what the operator said.
+		Eventually(func() []string {
+			return identitiesThisClusterIssuedIn(team)
+		}, 5*time.Minute, 10*time.Second).Should(BeEmpty(),
+			"the account still holds service principals this cluster made for %s, which is no "+
+				"longer a namespace this account names. Every one of them is reachable from this "+
+				"cluster by whoever holds that ServiceAccount", team)
+	})
+
+	It("takes the client id out of the tenant's namespace with it", func() {
+		Eventually(func() string {
+			return clientIDOf(team, serviceAccount, profile)
+		}, 3*time.Minute, 5*time.Second).Should(BeEmpty(),
+			"the DatabricksServiceAccount still hands out %s, whose service principal is gone. "+
+				"Every pod created here is equipped with a client id that resolves to nothing",
+			issuedClient)
 	})
 })

@@ -28,12 +28,6 @@ package v1alpha1
 // them: they are what was true at the moment this operator created a service
 // principal, and their whole use is to be compared against what is true now.
 type IssuedDatabricksServicePrincipalSpecApplyConfiguration struct {
-	// accountId is the Databricks account the service principal was created in.
-	//
-	// Recorded because an id means nothing anywhere else. An operator pointed at
-	// another account that acted on this record would delete something it never
-	// made, or read a 404 that means "not here" as "gone".
-	AccountID *string `json:"accountId,omitempty"`
 	// subject is the sub claim written into the federation policy, verbatim.
 	//
 	// Stored rather than reassembled from the names above. It is what Databricks
@@ -60,14 +54,6 @@ type IssuedDatabricksServicePrincipalSpecApplyConfiguration struct {
 // apply.
 func IssuedDatabricksServicePrincipalSpec() *IssuedDatabricksServicePrincipalSpecApplyConfiguration {
 	return &IssuedDatabricksServicePrincipalSpecApplyConfiguration{}
-}
-
-// WithAccountID sets the AccountID field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the AccountID field is set to the value of the last call.
-func (b *IssuedDatabricksServicePrincipalSpecApplyConfiguration) WithAccountID(value string) *IssuedDatabricksServicePrincipalSpecApplyConfiguration {
-	b.AccountID = &value
-	return b
 }
 
 // WithSubject sets the Subject field in the declarative configuration to the given value

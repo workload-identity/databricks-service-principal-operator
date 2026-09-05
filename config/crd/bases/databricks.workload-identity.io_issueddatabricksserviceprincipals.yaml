@@ -86,14 +86,6 @@ spec:
               them: they are what was true at the moment this operator created a service
               principal, and their whole use is to be compared against what is true now.
             properties:
-              accountId:
-                description: |-
-                  accountId is the Databricks account the service principal was created in.
-
-                  Recorded because an id means nothing anywhere else. An operator pointed at
-                  another account that acted on this record would delete something it never
-                  made, or read a 404 that means "not here" as "gone".
-                type: string
               identity:
                 description: |-
                   identity is what the ServiceAccount called this one, and is empty when it
@@ -157,7 +149,6 @@ spec:
                   not what would be sent if it were sent today.
                 type: string
             required:
-            - accountId
             - serviceAccount
             - subject
             type: object

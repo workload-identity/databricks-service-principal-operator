@@ -99,7 +99,31 @@ type DatabricksAccountSpec struct {
 	// +required
 	ClientID string `json:"clientId"`
 
-	// namespaces are the namespaces this operator will serve, by name.
+	// namespaces are the namespaces this operator issues identities in and
+	// manages them in, by name.
+	//
+	// Taking a namespace off this list destroys every identity this account
+	// issued there. The service principals are deleted in Databricks and every
+	// grant anybody made on them goes with them, the records go, and the client
+	// ids stop resolving to anything. It is not a pause and it cannot be
+	// undone from here.
+	//
+	// Naming the namespace again is not a restore. It issues new service
+	// principals with new client ids and no grants, and every grant made on the
+	// ones that were destroyed has to be made again by whoever made it.
+	//
+	// The guarantee is eventual, not instant. The destruction is carried out
+	// against Databricks, so while Databricks cannot be reached the namespace is
+	// off this list and the identities it issued there still exist. The
+	// IdentitiesDestroyed condition on this object says how many are left and in
+	// which namespaces, and it is what says whether the destruction has finished.
+	//
+	// What the list means, in the three states a namespace can be in: on it,
+	// this account issues identities there and manages them; taken off it, every
+	// identity this account issued there is destroyed; never on it, nothing
+	// there belongs to this account. That buys one thing a person can check --
+	// every service principal carrying this operator's marker is in a namespace
+	// on this list.
 	//
 	// This is where a platform team says what their account admin credential may
 	// be spent on. It is theirs and nobody else's: the object lives in their own
@@ -108,23 +132,18 @@ type DatabricksAccountSpec struct {
 	// Empty serves nothing, and that is the default rather than an oversight. A
 	// permissive default would have an operator installed for one team quietly
 	// answering every ServiceAccount in the cluster that happened to name it.
+	// Emptying a list that had entries in it destroys the identities in every one
+	// of them.
 	//
-	// Taking a namespace off this list means this account no longer serves it,
-	// and it destroys nothing. The operator suspends minting there -- it labels
-	// the Namespace with its own name, which is a claim no second operator can
-	// take while it is held -- and then removes every federation policy it wrote
-	// for identities in it, in that order, because a removal made while
-	// identities can still be minted there would leave behind the ones minted
-	// after it. Then it lifts the label, and whoever else serves the namespace
-	// goes on minting with nothing for a person to do. The service principals
-	// stay, with every grant made on them, and so do the records and their ids.
-	// What goes is the one thing a cluster can take back: a token from here can
-	// no longer be exchanged. A token already in a running pod is not recalled
-	// by any of this -- the pod holds it, and Databricks alone decides whether to
-	// accept it.
-	//
-	// Naming a namespace here again puts the trust back on the same service
-	// principals, with the same client ids and every grant intact.
+	// The order the destruction is carried out in is the whole of why it is safe
+	// to interrupt. The operator suspends minting in the namespace first -- it
+	// labels the Namespace with its own name, which is a claim no second operator
+	// can take while it is held -- and only then destroys, because a destruction
+	// begun while identities can still be minted there would leave behind the
+	// ones minted after it. Then it lifts the label, and whoever else serves the
+	// namespace goes on minting with nothing for a person to do. A token already
+	// in a running pod is not recalled by any of this -- the pod holds it, and it
+	// stops working because the service principal it names is gone.
 	//
 	// Names rather than a label selector. Neither is safer -- a namespace coming
 	// into scope still needs the cluster's mint label open and a ServiceAccount

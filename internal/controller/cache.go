@@ -33,7 +33,7 @@ import (
 //
 // Everything watched cluster-wide here is watched to be read. The one write this
 // operator makes on an object it does not own is worth naming beside them: a
-// Namespace gains one label of this operator's own while it takes back what it
+// Namespace gains one label of this operator's own while it destroys what it
 // issued there, and loses it again when it has finished. The cluster's own
 // labels are read and never written, so nothing here lets a team in or shuts one
 // out, and the permission behind it is patch on Namespaces alone for that

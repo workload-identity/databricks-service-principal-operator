@@ -84,24 +84,23 @@ const (
 	// deletion nobody has got to yet.
 	conditionRecordsReleased = "RecordsReleased"
 
-	// conditionFederationPoliciesRemoved, on a DatabricksAccount, says whether
-	// every namespace this operator issued in and this account no longer names
-	// has actually been let go of: this cluster's trust removed from every
-	// identity it issued there, and the namespace released again afterwards.
+	// conditionIdentitiesDestroyed, on a DatabricksAccount, says whether every
+	// namespace this operator issued in and this account no longer names has
+	// actually been emptied: every identity it issued there destroyed, and the
+	// namespace released again afterwards.
 	//
 	// It is on this object for the reason conditionRecordsReleased is. The edit
-	// that starts the removal is made here, the work of it happens on records
+	// that starts the destruction is made here, the work of it happens on records
 	// in another kind and on Namespaces in another scope, and none of them is
 	// somewhere the person who made the edit would think to look. Without this,
-	// a removal that stalled on one namespace out of five would be found by
+	// a destruction that stalled on one namespace out of five would be found by
 	// reading every record's status one at a time.
 	//
-	// False is not a failure of the account: nothing it names is wrong, and
-	// nothing anywhere has been destroyed. It is a removal that has not
-	// finished, which is a thing to wait for or to act on, and it is written
-	// here so that waiting is a choice somebody makes rather than one they make
-	// by not knowing.
-	conditionFederationPoliciesRemoved = "FederationPoliciesRemoved"
+	// While it is False its message carries the count, per namespace, of the
+	// identities still there. That is the only place an identity stranded by an
+	// account nobody can reach is visible: the promise this list makes is
+	// eventual, and this is what says how far from kept it is.
+	conditionIdentitiesDestroyed = "IdentitiesDestroyed"
 )
 
 // Condition reasons. They are part of the status API -- people match on them and
@@ -200,52 +199,35 @@ const (
 	// and the message carries the marker to search Databricks with.
 	reasonCreateUnconfirmed = "CreateUnconfirmed"
 
-	// reasonNotServed is an identity in a namespace this operator's account no
-	// longer names. Its trust has been removed, so no token from this cluster
-	// can be exchanged for it -- which is False rather than anything else,
-	// because the one thing Ready promises is exactly that exchange.
-	//
-	// It is not RemovedInDatabricks next to it, and the difference is what
-	// happens on the way back: nothing was destroyed here, so naming the
-	// namespace again puts the trust back on the same service principal, with
-	// the same client id and every grant on it.
-	reasonNotServed = "NotServed"
-
-	// reasonMintingNotSuspended is a removal that has not started, because
+	// reasonMintingNotSuspended is a destruction that has not started, because
 	// nothing has stopped the namespace it is for from minting. Unknown rather
-	// than False: nothing has been asked of Databricks, so there is nothing to
-	// conclude, and False would report an exchange as ended on the strength of an
-	// intention.
+	// than False: nothing has been destroyed and nothing has been asked of
+	// Databricks, so there is nothing to conclude, and this record is still
+	// exchangeable while it says so.
 	//
 	// It is its own reason and not silence, because waiting is what somebody
-	// waiting for the policies to go has to be able to see. What ends it is this
-	// operator claiming the namespace, which it does on its account's own pass --
-	// so a record sitting here is either a moment old or a Namespace this
+	// waiting for the identities to go has to be able to see. What ends it is
+	// this operator claiming the namespace, which it does on its account's own
+	// pass -- so a record sitting here is either a moment old or a Namespace this
 	// operator could not write, and the account it left says which.
 	reasonMintingNotSuspended = "MintingNotSuspended"
 
-	// reasonAnotherRemoval is a namespace two operators serve, where the other
-	// one is removing its federation policies there and holds the key that says
-	// so. One removal at a time is the point of there being one key: each takes
-	// the trust off its own identities, and the set either is working through
-	// must not grow under it while the other reopens minting.
+	// reasonAnotherDestruction is a namespace two operators serve, where the
+	// other one is destroying the identities it issued there and holds the key
+	// that says so. One at a time is the point of there being one key: each
+	// destroys its own identities, and the set either is working through must not
+	// grow under it while the other reopens minting.
 	//
 	// Unknown, and nothing was asked of Databricks. Waiting costs nothing here --
 	// the other operator lets go when it has finished, and if it dies instead its
 	// claim goes stale and this one takes it.
-	reasonAnotherRemoval = "AnotherRemoval"
+	reasonAnotherDestruction = "AnotherDestruction"
 
-	// reasonRemovePoliciesFailed is that removal not having gone through. The
-	// trust is still in place and this cluster can still exchange for the
-	// identity, which is the opposite of what the edit asked for, so it is
-	// reported rather than left to look like the removal above.
-	reasonRemovePoliciesFailed = "RemovePoliciesFailed"
-
-	// reasonPoliciesRemoved is every namespace this account stopped serving
-	// having been let go of; reasonRemovingPolicies is at least one that has
-	// not, with the message naming which and what is outstanding.
-	reasonPoliciesRemoved  = "PoliciesRemoved"
-	reasonRemovingPolicies = "RemovingPolicies"
+	// reasonIdentitiesDestroyed is every namespace this account stopped serving
+	// having been emptied; reasonDestroyingIdentities is at least one that has
+	// not, with the message naming which and how many identities are left in it.
+	reasonIdentitiesDestroyed  = "IdentitiesDestroyed"
+	reasonDestroyingIdentities = "DestroyingIdentities"
 
 	// reasonAwaitingServicePrincipal is a DatabricksServiceAccount whose record
 	// exists and has not been acted on yet. It is the ordinary first moment of an

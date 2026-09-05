@@ -57,13 +57,10 @@ type stubClients struct {
 	// order that matters: a service principal made, and something after it not.
 	policyErr error
 
-	// removeErr fails only RemoveFederationPolicies, so a test can see what a
-	// removal that did not land says about itself, and that it does not say
-	// it is finished.
-	removeErr error
-
 	// policiesRemoved is every service principal this operator asked to have the
-	// trust taken off, in the order it asked.
+	// trust taken off, in the order it asked. Nothing in this operator asks any
+	// more -- an identity out of scope is destroyed rather than made
+	// unexchangeable -- so a test reads this to say that nothing did.
 	policiesRemoved []string
 
 	// policyPanics and createPanics stand in for the process dying inside that
@@ -154,6 +151,10 @@ func (s *stubClients) ServicePrincipalExists(_ context.Context, servicePrincipal
 	return true, nil
 }
 
+// DeleteServicePrincipal takes the federation policies with it, which is what
+// Databricks does: everything recorded against a service principal goes when it
+// does. A stub that kept them would let a test assert that nothing can be
+// exchanged for a destroyed identity without that being what it checked.
 func (s *stubClients) DeleteServicePrincipal(_ context.Context, servicePrincipalID string) error {
 	if s.err != nil {
 		return s.err
@@ -162,6 +163,9 @@ func (s *stubClients) DeleteServicePrincipal(_ context.Context, servicePrincipal
 		return s.deleteErr
 	}
 	s.deleted = append(s.deleted, servicePrincipalID)
+	s.policies = slices.DeleteFunc(s.policies, func(policy string) bool {
+		return strings.HasPrefix(policy, servicePrincipalID+" ")
+	})
 	return nil
 }
 
@@ -193,9 +197,6 @@ func (s *stubClients) EnsureFederationPolicy(_ context.Context, servicePrincipal
 func (s *stubClients) RemoveFederationPolicies(_ context.Context, servicePrincipalID, issuer, subject string) error {
 	if s.err != nil {
 		return s.err
-	}
-	if s.removeErr != nil {
-		return s.removeErr
 	}
 	s.policiesRemoved = append(s.policiesRemoved, servicePrincipalID)
 	prefix := servicePrincipalID + " " + issuer + " " + subject + " "

@@ -138,9 +138,6 @@ var schemaYAML = typed.YAMLObject(`types:
 - name: com.github.workload-identity.databricks-service-principal-operator.api.v1alpha1.IssuedDatabricksServicePrincipalSpec
   map:
     fields:
-    - name: accountId
-      type:
-        scalar: string
     - name: identity
       type:
         scalar: string

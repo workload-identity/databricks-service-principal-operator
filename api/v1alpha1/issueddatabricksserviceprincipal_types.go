@@ -68,13 +68,6 @@ type IssuedServiceAccount struct {
 // them: they are what was true at the moment this operator created a service
 // principal, and their whole use is to be compared against what is true now.
 type IssuedDatabricksServicePrincipalSpec struct {
-	// accountId is the Databricks account the service principal was created in.
-	//
-	// Recorded because an id means nothing anywhere else. An operator pointed at
-	// another account that acted on this record would delete something it never
-	// made, or read a 404 that means "not here" as "gone".
-	AccountID string `json:"accountId"`
-
 	// subject is the sub claim written into the federation policy, verbatim.
 	//
 	// Stored rather than reassembled from the names above. It is what Databricks
