@@ -1,0 +1,111 @@
+name: CI
+
+# Everything here runs without a credential. The two suites that need one --
+# test-e2e and test-sharing, which act in a real Databricks account -- are
+# deliberately absent: a workflow holding an account admin credential would hand
+# it to whoever opens a pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: build, vet, test, lint
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    # helm is not fetched by the Makefile, and the chart comparison tests skip
+    # rather than fail when it is absent -- so a runner without it reports
+    # success while testing nothing. The make test step below fails on a skip
+    # for the same reason.
+    - uses: azure/setup-helm@v4
+      with:
+        version: v3.15.0
+
+    # kustomize, controller-gen, envtest, golangci-lint and ginkgo are
+    # downloaded by the Makefile into bin/, pinned to versions it names.
+    - name: Cache the tools the Makefile fetches
+      uses: actions/cache@v4
+      with:
+        path: bin
+        key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
+
+    - run: go build ./...
+
+    # Most of this repository lives behind a build tag and `make lint` does not
+    # pass them, so a change can be green and still not compile. Each tag is its
+    # own step so a failure names which one.
+    - run: go vet -tags e2e ./...
+    - run: go vet -tags cluster ./...
+    - run: go vet -tags sharing ./...
+    - run: go vet -tags databricks ./...
+
+    - name: make test
+      run: |
+        make test 2>&1 | tee test.log
+        if grep -q -- '--- SKIP' test.log; then
+          echo "::error::a test skipped. Nothing here is allowed to skip: the chart and manifest comparisons skip when helm or bin/kustomize is missing, and a skip there is a guard that stopped guarding without saying so."
+          grep -- '--- SKIP' test.log
+          exit 1
+        fi
+
+    - run: make lint
+
+    - name: gofmt
+      run: |
+        unformatted=$(gofmt -l internal api cmd test)
+        if [ -n "$unformatted" ]; then
+          echo "::error::gofmt: $unformatted"
+          exit 1
+        fi
+
+    # An API type changed and the CRDs not regenerated is invisible until the
+    # API server prunes the field nobody declared.
+    - name: make manifests generate leaves nothing behind
+      run: |
+        make manifests generate
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "::error::regenerating changed checked-in files; run make manifests generate and commit the result"
+          git --no-pager diff --stat
+          exit 1
+        fi
+
+    - name: helm
+      run: make helm-lint
+
+  cluster:
+    name: kind
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    - name: Cache the tools the Makefile fetches
+      uses: actions/cache@v4
+      with:
+        path: bin
+        key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
+
+    # Creates its own kind cluster, installs cert-manager into it, builds the
+    # image and deploys. It reaches nothing outside the runner, which is why it
+    # can run on a pull request from anybody.
+    - name: make test-cluster
+      run: make test-cluster
