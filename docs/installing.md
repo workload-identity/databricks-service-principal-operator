@@ -93,13 +93,19 @@ what the operator is. That is why it does not grant, and will not:
 ## 2. Deploy
 
 ```sh
-kubectl apply -f https://github.com/workload-identity/databricks-service-principal-operator/releases/download/v0.15.0/install.yaml
+kubectl apply -f https://github.com/workload-identity/databricks-service-principal-operator/releases/latest/download/install.yaml
 ```
 
 That manifest is built from the tag it is attached to and names the image
 published under the same tag. It carries the three CRDs, the operator's
 Deployment, its RBAC, both admission webhooks, and the cert-manager Certificate
 and Issuer that serve them — everything in `config/default`, rendered once.
+
+`latest` is the newest release, whichever that is. To install a particular one,
+put its tag where `latest` is — `releases/download/<tag>/install.yaml` — and the
+[releases
+page](https://github.com/workload-identity/databricks-service-principal-operator/releases)
+is the list of them.
 
 It installs into `dbxsp-operator-system`, and its names are fixed: everything
 cluster-scoped is called `databricks-service-principal-operator-<something>`. So
@@ -111,9 +117,12 @@ which give the second install names of its own.
 ```sh
 helm install dbxsp-operator \
   oci://ghcr.io/workload-identity/charts/databricks-service-principal-operator \
-  --version 0.15.0 \
   --namespace dbxsp-operator-system --create-namespace
 ```
+
+The newest release again, and `--version` pins one. The chart version is the
+operator version without its `v`, and the two are released together, so knowing
+one is knowing the other.
 
 The same objects, with every cluster-scoped name derived from the release and the
 namespace rather than fixed. A second operator for a second Databricks account is
