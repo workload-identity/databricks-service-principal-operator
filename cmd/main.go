@@ -329,6 +329,19 @@ func main() {
 		},
 	})
 
+	// The webhook that refuses an identity asked for in a namespace this
+	// account does not name, at the moment somebody writes the annotation.
+	// Refused later, in the controller, it produces no object and no condition,
+	// so nothing anywhere says the request was seen -- and whoever wrote it
+	// waits for an identity that is never coming.
+	mgr.GetWebhookServer().Register(dbxwebhook.RequestPath, &webhook.Admission{
+		Handler: &dbxwebhook.ServiceAccountRequestRefuser{
+			Client:                          mgr.GetClient(),
+			Decoder:                         admission.NewDecoder(mgr.GetScheme()),
+			DatabricksAccountNamespacedName: databricksAccountNamespacedName,
+		},
+	})
+
 	// +kubebuilder:scaffold:builder
 
 	// Liveness is a ping: a process that is running is not one to kill.

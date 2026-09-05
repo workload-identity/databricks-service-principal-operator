@@ -253,6 +253,19 @@ replacements:
       delimiter: "/"
       index: 0
       create: true
+  # Both configurations, because both are served by the one webhook server and
+  # the API server verifies each one's certificate separately. Omitted here, the
+  # ValidatingWebhookConfiguration ships with no CA to trust, every call to it
+  # fails the TLS handshake, and failurePolicy Ignore swallows that -- so it
+  # would look installed and refuse nothing, forever.
+  - select:
+      kind: ValidatingWebhookConfiguration
+    fieldPaths:
+    - .metadata.annotations.[cert-manager.io/inject-ca-from]
+    options:
+      delimiter: "/"
+      index: 0
+      create: true
 - source:
     kind: Certificate
     group: cert-manager.io
@@ -262,6 +275,14 @@ replacements:
   targets:
   - select:
       kind: MutatingWebhookConfiguration
+    fieldPaths:
+    - .metadata.annotations.[cert-manager.io/inject-ca-from]
+    options:
+      delimiter: "/"
+      index: 1
+      create: true
+  - select:
+      kind: ValidatingWebhookConfiguration
     fieldPaths:
     - .metadata.annotations.[cert-manager.io/inject-ca-from]
     options:

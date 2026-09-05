@@ -284,20 +284,7 @@ func TestWhatThisOperatorMayReachIsBoundedByItsNamespace(t *testing.T) {
 // first wrote, which is the behaviour a pod already carrying this volume gets.
 func TestTheWebhookIsAskedAgainWhenThePodChanges(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join("..", "..", "config", "webhook", "manifests.yaml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var configuration admissionv1.MutatingWebhookConfiguration
-	if err := yaml.Unmarshal(data, &configuration); err != nil {
-		t.Fatalf("parsing %s: %v", path, err)
-	}
-	if len(configuration.Webhooks) != 1 {
-		t.Fatalf("%d webhooks in %s, want one", len(configuration.Webhooks), path)
-	}
-
-	policy := configuration.Webhooks[0].ReinvocationPolicy
+	policy := mutatingWebhook(t).Webhooks[0].ReinvocationPolicy
 	if policy == nil || *policy != admissionv1.IfNeededReinvocationPolicy {
 		t.Errorf("reinvocationPolicy is %v, want IfNeeded -- containers added after this webhook "+
 			"ran get nothing, in a pod that reports as equipped because the volume is there",
@@ -357,20 +344,136 @@ func TestTheWebhookIsAskedOnlyAboutEnrolledNamespaces(t *testing.T) {
 	}
 }
 
-// mutatingWebhook reads the hand-written configuration these tests are about.
-func mutatingWebhook(t *testing.T) admissionv1.MutatingWebhookConfiguration {
+// TestTheRefusalIsServedWhereTheManifestSendsServiceAccounts is the same drift
+// TestTheWebhookIsServedWhereTheManifestSendsPods exists for, on the other
+// webhook in the same hand-written file.
+//
+// It is silent in the same way and worse in what it hides. failurePolicy is
+// Ignore, so a ServiceAccount sent to a path with no handler is admitted with
+// the error swallowed -- which is precisely the behaviour this webhook was
+// built to end, so the manifest and the operator would both look right while
+// nothing was ever refused.
+func TestTheRefusalIsServedWhereTheManifestSendsServiceAccounts(t *testing.T) {
+	t.Parallel()
+	sent := validatingWebhook(t).Webhooks[0].ClientConfig.Service
+	if sent == nil {
+		t.Fatal("the manifest names no Service; nothing reaches this operator at all")
+	}
+	if sent.Path == nil || *sent.Path != dbxwebhook.RequestPath {
+		t.Errorf("ServiceAccounts are sent to %q and the handler is registered on %q. The call "+
+			"lands on no handler, failurePolicy Ignore swallows it, and every request written in "+
+			"a namespace this account does not name is admitted with nothing anywhere saying so",
+			ptr.Deref(sent.Path, ""), dbxwebhook.RequestPath)
+	}
+}
+
+// TestAnOutageOfThisOperatorDoesNotStopServiceAccountWrites covers the field
+// whose blast radius is the whole cluster.
+//
+// This webhook has no namespaceSelector -- it cannot have one, because the
+// namespaces it exists for are the ones nobody enrolled -- so it stands on the
+// write path of every ServiceAccount there is. With Fail, an outage of this
+// operator would stop anybody from creating a ServiceAccount anywhere,
+// including in namespaces that have never heard of Databricks.
+//
+// What Ignore costs is nothing that was not already the case: the controller
+// enforces the account's namespace list either way, and this only moves the
+// refusal to where somebody is standing.
+func TestAnOutageOfThisOperatorDoesNotStopServiceAccountWrites(t *testing.T) {
+	t.Parallel()
+	policy := validatingWebhook(t).Webhooks[0].FailurePolicy
+	if policy == nil || *policy != admissionv1.Ignore {
+		t.Errorf("failurePolicy is %q, want Ignore -- this webhook is on the write path of every "+
+			"ServiceAccount in the cluster, so Fail makes an outage of this operator an outage of "+
+			"ServiceAccount creation everywhere",
+			ptr.Deref(policy, admissionv1.FailurePolicyType("")))
+	}
+}
+
+// TestTheAPIServerFiltersServiceAccountsBeforeAskingThisOperator covers what
+// stands in for the namespaceSelector this webhook cannot have.
+//
+// Losing it breaks nothing visible: every ServiceAccount write in the cluster
+// would be sent here, and almost all of them admitted, so the only symptom is
+// this operator on the critical path of writes it has nothing to say about.
+// That is exactly the kind of failure nobody finds.
+//
+// The expression has to name the annotation prefix this operator actually
+// reads. One that named a prefix nothing writes would filter every request away
+// and refuse nothing, which looks identical to a cluster where nobody made a
+// mistake.
+func TestTheAPIServerFiltersServiceAccountsBeforeAskingThisOperator(t *testing.T) {
+	t.Parallel()
+	conditions := validatingWebhook(t).Webhooks[0].MatchConditions
+	if len(conditions) == 0 {
+		t.Fatal("matchConditions is empty; every ServiceAccount write in the cluster is now sent " +
+			"to this operator")
+	}
+
+	var names bool
+	for _, condition := range conditions {
+		if strings.Contains(condition.Expression, dbxv1alpha1.ServicePrincipalAnnotation) {
+			names = true
+		}
+	}
+	if !names {
+		t.Errorf("no matchCondition names %q, so what reaches this webhook is not what asks it "+
+			"for an identity: %+v", dbxv1alpha1.ServicePrincipalAnnotation, conditions)
+	}
+}
+
+// webhookDocument is the one document of a kind in the hand-written manifest.
+//
+// Selected by kind, because the file holds both configurations and neither is
+// the only thing in it any more. Nothing complains about the alternative, which
+// is why it is worth saying: measured, sigs.k8s.io/yaml given the whole file
+// returns a nil error and the first document alone. So a helper reading the file
+// whole answers questions about whichever configuration happens to be written
+// first, and reordering the file would move every assertion here onto the other
+// webhook without a word.
+func webhookDocument(t *testing.T, kind string) []byte {
 	t.Helper()
 	path := filepath.Join("..", "..", "config", "webhook", "manifests.yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	for doc := range strings.SplitSeq(string(data), "\n---\n") {
+		var probe struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &probe); err != nil || probe.Kind != kind {
+			continue
+		}
+		return []byte(doc)
+	}
+	t.Fatalf("no %s in %s", kind, path)
+	return nil
+}
+
+// mutatingWebhook reads the hand-written configuration that equips pods.
+func mutatingWebhook(t *testing.T) admissionv1.MutatingWebhookConfiguration {
+	t.Helper()
 	var configuration admissionv1.MutatingWebhookConfiguration
-	if err := yaml.Unmarshal(data, &configuration); err != nil {
-		t.Fatalf("parsing %s: %v", path, err)
+	if err := yaml.Unmarshal(webhookDocument(t, "MutatingWebhookConfiguration"), &configuration); err != nil {
+		t.Fatalf("parsing the MutatingWebhookConfiguration: %v", err)
 	}
 	if len(configuration.Webhooks) != 1 {
-		t.Fatalf("%d webhooks in %s, want one", len(configuration.Webhooks), path)
+		t.Fatalf("%d webhooks in the MutatingWebhookConfiguration, want one", len(configuration.Webhooks))
+	}
+	return configuration
+}
+
+// validatingWebhook reads the hand-written configuration that refuses a request
+// this operator cannot answer.
+func validatingWebhook(t *testing.T) admissionv1.ValidatingWebhookConfiguration {
+	t.Helper()
+	var configuration admissionv1.ValidatingWebhookConfiguration
+	if err := yaml.Unmarshal(webhookDocument(t, "ValidatingWebhookConfiguration"), &configuration); err != nil {
+		t.Fatalf("parsing the ValidatingWebhookConfiguration: %v", err)
+	}
+	if len(configuration.Webhooks) != 1 {
+		t.Fatalf("%d webhooks in the ValidatingWebhookConfiguration, want one", len(configuration.Webhooks))
 	}
 	return configuration
 }

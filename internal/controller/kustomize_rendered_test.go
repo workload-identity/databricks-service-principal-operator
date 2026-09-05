@@ -128,19 +128,29 @@ func TestTheCertificateReachesItsIssuer(t *testing.T) {
 // The API server is the only client of this webhook, and it trusts it only
 // because cert-manager writes a caBundle in — which it does when this annotation
 // names the Certificate. A stale name here fails exactly as above: silently.
+//
+// Both configurations, because the annotation is per object and the replacement
+// that writes it has to name each kind. One certificate serves both — they are
+// two paths on one server — but a ValidatingWebhookConfiguration left out of
+// that replacement ships with no CA at all, every call to it fails
+// verification, and failurePolicy Ignore swallows that: it looks installed and
+// refuses nothing.
 func TestTheWebhookIsToldWhichCertificateToTrust(t *testing.T) {
 	t.Parallel()
 	objects := rendered(t)
 	certificate := only(t, objects, "Certificate")
-	webhook := only(t, objects, "MutatingWebhookConfiguration")
-
-	meta, _ := webhook["metadata"].(map[string]any)
-	annotations, _ := meta["annotations"].(map[string]any)
-	got, _ := annotations["cert-manager.io/inject-ca-from"].(string)
-
 	want := namespace(certificate) + "/" + name(certificate)
-	if got != want {
-		t.Errorf("inject-ca-from is %q, want %q", got, want)
+
+	for _, kind := range []string{"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"} {
+		webhook := only(t, objects, kind)
+
+		meta, _ := webhook["metadata"].(map[string]any)
+		annotations, _ := meta["annotations"].(map[string]any)
+		got, _ := annotations["cert-manager.io/inject-ca-from"].(string)
+
+		if got != want {
+			t.Errorf("inject-ca-from on the %s is %q, want %q", kind, got, want)
+		}
 	}
 }
 
