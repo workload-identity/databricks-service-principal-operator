@@ -26,13 +26,6 @@ import (
 	dbxwebhook "github.com/workload-identity/databricks-service-principal-operator/internal/webhook"
 )
 
-const (
-	testNamespace = "team-a"
-	testName      = "etl"
-	testIssuer    = "https://oidc.example/cluster"
-	testAudience  = "databricks"
-)
-
 // principalOf returns the DatabricksServiceAccount, or nil if there is none.
 func principalOf(t *testing.T, c client.Client) *dbxv1alpha1.DatabricksServiceAccount {
 	t.Helper()

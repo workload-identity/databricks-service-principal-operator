@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"encoding/base64"
+	"os"
+	"path/filepath"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +17,18 @@ import (
 
 	dbxv1alpha1 "github.com/workload-identity/databricks-service-principal-operator/api/v1alpha1"
 	dbx "github.com/workload-identity/databricks-service-principal-operator/internal/databricks"
+)
+
+const (
+	operatorNamespace     = "databricks-operator-system"
+	databricksAccountName = "databricks-account"
+	testAccountID         = "aaaaaaaa-0000-0000-0000-000000000000"
+	testClientID          = "bbbbbbbb-0000-0000-0000-000000000000"
+
+	testNamespace = "team-a"
+	testName      = "etl"
+	testIssuer    = "https://oidc.example/cluster"
+	testAudience  = "databricks"
 )
 
 func newFakeClient(t *testing.T, objects ...client.Object) (client.Client, *runtime.Scheme) {
@@ -101,6 +116,19 @@ func asking(namespace, name string) *corev1.ServiceAccount {
 	return askingFor(namespace, name, "")
 }
 
+// askingFor is a ServiceAccount naming this operator once per identity: one
+// annotation key each, which is what makes no longer asking for one and
+// mistyping one different edits.
+func askingFor(namespace, name string, identities ...string) *corev1.ServiceAccount {
+	serviceAccount := serviceAccountNamed(namespace, name)
+	serviceAccount.Annotations = make(map[string]string, len(identities))
+	for _, identity := range identities {
+		serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor(identity)] =
+			testOperatorRef.String()
+	}
+	return serviceAccount
+}
+
 // askingOf is the same with the bare key's value written out, for tests about
 // what it says rather than about what follows from it.
 func askingOf(namespace, name, value string) *corev1.ServiceAccount {
@@ -118,6 +146,17 @@ func askingOf(namespace, name, value string) *corev1.ServiceAccount {
 // them apart would let the account controller list records it would find in a
 // cluster and find none here.
 const testRecords = operatorNamespace
+
+func databricksAccountNamed(name string) *dbxv1alpha1.DatabricksAccount {
+	return &dbxv1alpha1.DatabricksAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: operatorNamespace},
+		Spec: dbxv1alpha1.DatabricksAccountSpec{
+			Host:      "https://accounts.cloud.databricks.com",
+			AccountID: testAccountID,
+			ClientID:  testClientID,
+		},
+	}
+}
 
 // databricksAccountServing is this operator's DatabricksAccount, declaring which
 // namespaces it will act in.
@@ -150,4 +189,24 @@ func recordFor(serviceAccount *corev1.ServiceAccount) *dbxv1alpha1.IssuedDatabri
 			},
 		},
 	}
+}
+
+// writeToken writes a projected token carrying the given claims, so that the
+// controller reads them the way it will in a cluster rather than being handed
+// them.
+func writeToken(t *testing.T, subject, audience string) string {
+	return writeTokenAs(t, "https://oidc.example/id/X", subject, audience)
+}
+
+// writeTokenAs is the same, with the issuer said out loud. The issuer is what
+// every federation policy names, so a test about one has to choose it.
+func writeTokenAs(t *testing.T, issuer, subject, audience string) string {
+	t.Helper()
+	payload := `{"iss":"` + issuer + `","sub":"` + subject + `","aud":["` + audience + `"]}`
+	token := "header." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".signature"
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

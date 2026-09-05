@@ -18,9 +18,7 @@ package controller
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,43 +35,8 @@ import (
 )
 
 const (
-	operatorNamespace     = "databricks-operator-system"
-	databricksAccountName = "databricks-account"
-	testAccountID         = "aaaaaaaa-0000-0000-0000-000000000000"
-	testClientID          = "bbbbbbbb-0000-0000-0000-000000000000"
-	testSubject           = "system:serviceaccount:databricks-operator-system:databricks-operator-controller-manager"
+	testSubject = "system:serviceaccount:databricks-operator-system:databricks-operator-controller-manager"
 )
-
-// writeToken writes a projected token carrying the given claims, so that the
-// controller reads them the way it will in a cluster rather than being handed
-// them.
-func writeToken(t *testing.T, subject, audience string) string {
-	return writeTokenAs(t, "https://oidc.example/id/X", subject, audience)
-}
-
-// writeTokenAs is the same, with the issuer said out loud. The issuer is what
-// every federation policy names, so a test about one has to choose it.
-func writeTokenAs(t *testing.T, issuer, subject, audience string) string {
-	t.Helper()
-	payload := `{"iss":"` + issuer + `","sub":"` + subject + `","aud":["` + audience + `"]}`
-	token := "header." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".signature"
-	path := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func databricksAccountNamed(name string) *dbxv1alpha1.DatabricksAccount {
-	return &dbxv1alpha1.DatabricksAccount{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: operatorNamespace},
-		Spec: dbxv1alpha1.DatabricksAccountSpec{
-			Host:      "https://accounts.cloud.databricks.com",
-			AccountID: testAccountID,
-			ClientID:  testClientID,
-		},
-	}
-}
 
 // newDatabricksAccountReconciler wires a reconciler whose client building and account call
 // are both under the test's control, so nothing here reaches Databricks.

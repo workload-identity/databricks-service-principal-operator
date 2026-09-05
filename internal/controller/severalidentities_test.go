@@ -32,19 +32,6 @@ import (
 	dbxwebhook "github.com/workload-identity/databricks-service-principal-operator/internal/webhook"
 )
 
-// askingFor is a ServiceAccount naming this operator once per identity: one
-// annotation key each, which is what makes no longer asking for one and
-// mistyping one different edits.
-func askingFor(namespace, name string, identities ...string) *corev1.ServiceAccount {
-	serviceAccount := serviceAccountNamed(namespace, name)
-	serviceAccount.Annotations = make(map[string]string, len(identities))
-	for _, identity := range identities {
-		serviceAccount.Annotations[dbxv1alpha1.ServicePrincipalAnnotationFor(identity)] =
-			testOperatorRef.String()
-	}
-	return serviceAccount
-}
-
 // recordsOf is every record this operator holds for one ServiceAccount.
 func recordsOf(t *testing.T, c client.Client, namespace, name string) []dbxv1alpha1.IssuedDatabricksServicePrincipal {
 	t.Helper()
