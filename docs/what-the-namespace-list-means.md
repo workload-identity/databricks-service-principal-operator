@@ -23,13 +23,12 @@ the third is not the first:
 
 "Never on the list" and "taken off the list" are entirely different acts. One is
 an account that was never asked; the other is an account withdrawing, which means
-deleting what it made. They used to be indistinguishable from inside the
-namespace — no identities either way, and nothing anywhere saying which — and
-that is no longer so. A ServiceAccount write that introduces an annotation asking
-this operator, in a namespace this list does not name, is refused at admission
-with a message telling the asker to come to you first. A namespace that was on
-the list and came off does not bounce anything: the annotation is already there,
-and what is happening is a destruction.
+deleting what it made. They are told apart from inside the namespace by what
+happens to a request written there. A ServiceAccount write that introduces an
+annotation asking this operator, in a namespace this list does not name, is
+refused at admission with a message telling the asker to come to you first. A
+namespace that was on the list and came off does not bounce anything: the
+annotation is already there, and what is happening is a destruction.
 
 The list is short and each line of it is a decision, which buys one thing a
 person can check: **every service principal carrying this operator's marker is in

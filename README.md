@@ -45,7 +45,8 @@ decided in Databricks.
 ## Why this
 
 - **No credential anywhere.** Not better Secret hygiene — nothing to rotate and
-  nothing to leak, because there is no secret, only the token the pod already has
+  nothing to leak, because there is no secret: the pod is given a token minted for
+  Databricks, and kubelet replaces it before it expires
   ([measured](docs/measured.md#the-token-exchange)).
 - **One annotation, in the shape people already know.** GKE, EKS and Azure all
   hand a workload a cloud identity this way; Databricks has the OIDC federation

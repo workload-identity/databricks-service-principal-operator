@@ -28,8 +28,8 @@ the ServiceAccount — so what there is to check is the two places themselves.
 
 ## Two of the three are ordered
 
-They belong to three people, but they are no longer three things that can be said
-in any order. A ServiceAccount write that introduces an annotation asking an
+They belong to three people, and two of them have to be said in one order. A
+ServiceAccount write that introduces an annotation asking an
 operator whose `DatabricksAccount` does not name the namespace is refused by an
 admission webhook, and the refusal names the namespace, names the account, and
 says which to edit first: `spec.namespaces`, and the annotation after that.
@@ -38,11 +38,11 @@ The order is not arbitrary and it is not the operator being fussy. The list is
 what says an account has identities in a namespace, and taking a namespace off it
 destroys every one of them — so the list is a statement about the present, and an
 annotation written before the namespace is on it is a request addressed to an
-operator that has not been told it works there. Before the webhook, that request
-was answered by nothing at all, and the asker had nowhere to look.
+operator that has not been told it works there. Without the refusal that request
+would be answered by nothing at all, and the asker would have nowhere to look.
 
 The cluster admin's `mint` label is not ordered against either of the other two,
-and withholding it is still silent. The webhook does not read it, and the
+and withholding it is silent. The webhook does not read it, and the
 account's own status deliberately says nothing about it: that refusal is the
 cluster's, given to every operator serving the namespace at once, so reporting it
 on one account would put that account's name on somebody else's decision.

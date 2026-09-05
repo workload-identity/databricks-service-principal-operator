@@ -10,9 +10,9 @@ ending are one page — the second half is the first half read backwards.
 
 The annotation is a request, not a permission. Two other people have to have said
 yes before it does anything, neither yes is yours to give, and neither is visible
-from your namespace: [Two people have to say yes first](who-says-yes.md). One of
-the two is now checked as you write, so the order matters and the cluster will
-tell you if you have it wrong — below. What
+from your namespace: [Three people have to say yes](who-says-yes.md). One of the
+two is checked as you write, so the order matters and the cluster will tell you
+if you have it wrong — below. What
 the identity may then read or run in Databricks is decided in Databricks, by
 somebody else again: [Issuing an identity, not a permission](identity-not-permission.md).
 
