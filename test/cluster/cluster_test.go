@@ -350,43 +350,54 @@ var _ = Describe("Identities", Ordered, func() {
 		serveNamespaces()
 	})
 
-	It("mints nothing in a namespace nobody enabled", func() {
-		applyTeam(team, serviceAccount, unnamed)
+	It("refuses the request outright while this account does not name the namespace", func() {
+		applyTeam(team, serviceAccount)
+		awaitAdmission(team, serviceAccount)
+
+		err := askForIdentity(team, serviceAccount, unnamed, operatorRef)
+		Expect(err).To(HaveOccurred(),
+			"the annotation was accepted in a namespace this account does not name, so whoever "+
+				"wrote it is waiting for an identity that is never coming, with nothing anywhere "+
+				"to read")
+		Expect(err.Error()).To(ContainSubstring("spec.namespaces"),
+			"the write was refused and the message does not name the object to go and edit: %v", err)
 
 		Consistently(func() string {
 			return identityNames(team)
 		}, 10*time.Second, time.Second).Should(BeEmpty(),
-			"an identity was minted in a namespace nobody allowed to ask")
+			"an identity was minted for a request the API server refused")
 	})
 
-	It("mints nothing once enabled while this operator serves it not", func() {
-		// The order a team is onboarded in: annotated first by the team, enabled
-		// afterwards by somebody with cluster-wide access. Nothing touches the
-		// ServiceAccount again, and a namespace label is an event on no
-		// ServiceAccount.
+	It("mints nothing once this account names it, while nobody has enabled the namespace", func() {
+		// The order this is onboarded in, and the only order the API server
+		// allows: the account names the namespace, and the annotation follows.
+		serveNamespaces(team)
+		Expect(askForIdentity(team, serviceAccount, unnamed, operatorRef)).To(Succeed())
+
+		// The team holding the account has committed its credential here. The
+		// cluster has not said this namespace may be served at all, and that is
+		// somebody else's to say.
+		Consistently(func() string {
+			return identityNames(team)
+		}, 10*time.Second, time.Second).Should(BeEmpty(),
+			"an identity was minted in a namespace no cluster admin ever enabled")
+	})
+
+	It("wakes when the namespace is enabled, without anything else changing", func() {
+		// Nothing touches the ServiceAccount again, and a namespace label is an
+		// event on no ServiceAccount -- so this passes only because the operator
+		// watches namespaces and wakes what is in them.
 		cmd := exec.Command("kubectl", "label", "namespace", team,
 			"databricks.workload-identity.io/inject=enabled",
 			"databricks.workload-identity.io/mint=enabled")
 		_, err := run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 
-		// The cluster has said this namespace may be served by somebody. It has
-		// not said by whom, and it cannot: only the team holding the account
-		// admin credential can commit it.
-		Consistently(func() string {
-			return identityNames(team)
-		}, 10*time.Second, time.Second).Should(BeEmpty(),
-			"an identity was minted for an operator that was never told to serve this namespace")
-	})
-
-	It("wakes when this operator is told to serve it, without anything else changing", func() {
-		serveNamespaces(team)
-
 		Eventually(func() string {
 			return identityNames(team)
 		}, time.Minute, time.Second).Should(ContainSubstring(serviceAccount),
-			"widening this operator's reach woke nothing; every ServiceAccount in the "+
-				"namespace stays unserved until something unrelated happens to touch one")
+			"enabling the namespace woke nothing; every ServiceAccount in it stays unserved "+
+				"until something unrelated happens to touch one")
 	})
 
 	It("writes the record before anything is created, in its own namespace", func() {
@@ -468,13 +479,17 @@ var _ = Describe("Several identities", Ordered, func() {
 	BeforeAll(func() {
 		removeTeam(team)
 		applyAccount()
+		// Named before anybody asks. A ServiceAccount write that introduces one
+		// of this operator's annotation keys in a namespace this account does
+		// not name is refused at admission, so this is the order every setup
+		// here works in and the order a team is onboarded in.
+		serveNamespaces(team)
 		applyTeam(team, serviceAccount, "reader", "writer")
 		cmd := exec.Command("kubectl", "label", "namespace", team,
 			"databricks.workload-identity.io/inject=enabled",
 			"databricks.workload-identity.io/mint=enabled")
 		_, err := run(cmd)
 		Expect(err).NotTo(HaveOccurred())
-		serveNamespaces(team)
 	})
 	AfterAll(func() {
 		removeTeam(team)
@@ -572,13 +587,13 @@ var _ = Describe("A key this operator will not act on", Ordered, func() {
 	BeforeAll(func() {
 		removeTeam(team)
 		applyAccount()
+		serveNamespaces(team)
 		applyTeam(team, serviceAccount, kept)
 		cmd := exec.Command("kubectl", "label", "namespace", team,
 			"databricks.workload-identity.io/inject=enabled",
 			"databricks.workload-identity.io/mint=enabled")
 		_, err := run(cmd)
 		Expect(err).NotTo(HaveOccurred())
-		serveNamespaces(team)
 
 		Eventually(func() []string {
 			return recordsStillWanted()
@@ -786,53 +801,65 @@ var _ = Describe("What a pod is equipped with", Ordered, func() {
 // nobody's work but this test's.
 //
 // The DatabricksServiceAccount is written whole, status included, because the
-// operator is never told to serve this namespace and so never writes one. A
-// client id is what the webhook waits for -- an identity without one cannot be
-// exchanged for anything -- so these carry one, and it stands for a minted
-// identity in the only way this cluster allows.
+// operator is never told to serve this namespace and so never writes one.
 //
-// The identities are profile names, which is what the webhook reads and what the
-// entries are keyed by. Each is written as this operator's because an entry has
-// to name one: operator is required in the CRD, so an entry without it is not an
-// entry this can write.
+// Each entry carries a servicePrincipalId, which is what makes it usable: the
+// webhook equips a pod with the identities ProjectedIdentity.Usable reports, and
+// that reads the service principal's id and whether it has been removed. A
+// client id alone equips nothing, whatever else the entry says.
+//
+// The entries name an operator that is not this one, and the ServiceAccount is
+// created last. Both are about the same thing: a ServiceAccount that asks for
+// nothing makes the operator take off every entry it owns and delete the object
+// outright when none of somebody else's are left. That is correct, and it is
+// unraceable -- an object written and then given a status is empty for as long
+// as it takes to write one, and the reconcile always wins.
+//
+// So the object gets its identities while there is no ServiceAccount to
+// reconcile against: the pass triggered by writing it finds none and returns
+// without touching anything. By the time one exists the entries are there,
+// somebody else's, and the operator leaves them alone.
 func equipTeam(team, serviceAccount string, identities ...string) {
-	manifest := fmt.Sprintf(`apiVersion: v1
+	apply := func(what, manifest string) {
+		cmd := exec.Command("kubectl", "apply", "-f", "-")
+		cmd.Stdin = strings.NewReader(manifest)
+		_, err := run(cmd)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to create %s", what)
+	}
+
+	apply("the namespace and the object its identities are written on", fmt.Sprintf(`apiVersion: v1
 kind: Namespace
 metadata:
   name: %s
   labels:
     databricks.workload-identity.io/inject: enabled
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: %s
-  namespace: %s
----
 apiVersion: databricks.workload-identity.io/v1alpha1
 kind: DatabricksServiceAccount
 metadata:
   name: %s
   namespace: %s
-`, team, serviceAccount, team, serviceAccount, team)
-
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(manifest)
-	_, err := run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to create the namespace pods are equipped in")
+`, team, serviceAccount, team))
 
 	entries := make([]string, 0, len(identities))
 	for i, identity := range identities {
 		entries = append(entries, fmt.Sprintf(
-			`{"profile":%q,"operator":%q,`+
+			`{"profile":%q,"operator":%q,"servicePrincipalId":"7000000000000%d",`+
 				`"clientId":"0000000%d-0000-0000-0000-000000000000","audience":"databricks"}`,
-			identity, operatorRef, i+1))
+			identity, someoneElsesOperator, i+1, i+1))
 	}
-	cmd = exec.Command("kubectl", "-n", team, "patch", "databricksserviceaccount", serviceAccount,
-		"--subresource", "status", "--type", "merge",
-		"-p", fmt.Sprintf(`{"status":{"identities":[%s]}}`, strings.Join(entries, ",")))
-	_, err = run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to write the identities the pod is equipped with")
+	_, err := run(exec.Command("kubectl", "-n", team, "patch",
+		"databricksserviceaccount", serviceAccount, "--subresource", "status", "--type", "merge",
+		"-p", fmt.Sprintf(`{"status":{"identities":[%s]}}`, strings.Join(entries, ","))))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(),
+		"Failed to write the identities the pod is equipped with")
+
+	apply("the ServiceAccount the pod runs as", fmt.Sprintf(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: %s
+  namespace: %s
+`, serviceAccount, team))
 }
 
 // awaitOperator waits for the operator to be up, which is as much of the
@@ -848,6 +875,35 @@ func awaitOperator() {
 		"-n", namespace, "--timeout=3m")
 	_, err := run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "the operator never became available")
+}
+
+// awaitAdmission waits until the ValidatingWebhookConfiguration is consulted and
+// answers, which is a different thing from the operator being up.
+//
+// A webhook is effective only once the API server has the certificate to reach
+// it over, and cert-manager injects that some time after the manifest lands.
+// Until then `failurePolicy: Ignore` admits everything -- so a test asserting a
+// refusal does not fail, it passes the wrong way round and reports that nothing
+// is being refused.
+//
+// Probed by making the write and reading the answer, because that is the only
+// thing that reports it: a caBundle that is present says the API server can
+// reach the webhook, not that it did.
+func awaitAdmission(team, serviceAccount string) {
+	Eventually(func() error {
+		err := askForIdentity(team, serviceAccount, unnamed, operatorRef)
+		if err == nil {
+			// Admitted, so the webhook was not consulted yet. Put the
+			// ServiceAccount back as it was: a removal is always admitted, and
+			// leaving the key on would make the next attempt a write that
+			// introduces nothing.
+			stopAskingForIdentity(team, serviceAccount, unnamed)
+			return fmt.Errorf("the write was admitted; the webhook is not answering yet")
+		}
+		return nil
+	}, 2*time.Minute, 2*time.Second).Should(Succeed(),
+		"the ValidatingWebhookConfiguration never refused anything, so nothing below it can "+
+			"tell a webhook that works from one the API server cannot reach")
 }
 
 // runPod creates a pod that stays up long enough to be looked inside, replacing
@@ -951,6 +1007,13 @@ const operatorRef = namespace + "/databricks-account"
 // operator's only identity, which is what nearly every ServiceAccount wants. Its
 // profile name, having none of its own, is operatorRef.
 const unnamed = ""
+
+// someoneElsesOperator is an operator reference that is not the one under test.
+//
+// An entry naming it is one this operator will not touch, which is what a
+// fixture writing identities by hand needs: this operator takes its own entries
+// off a ServiceAccount that asks for nothing.
+const someoneElsesOperator = "other-operators/other-account"
 
 // applyTeam creates the namespace and a ServiceAccount asking this operator for
 // the identities named, one annotation key each, written as apply so that it
