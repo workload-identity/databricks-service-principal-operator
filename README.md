@@ -182,18 +182,18 @@ the two `export` lines. That is the whole of it
 
 ## Docs
 
-| For                  | Read                                                                     | About                                                                        |
-|----------------------|--------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| The account holder   | [Installing the operator](docs/installing.md)                            | Putting this into a cluster for the first time                               |
-|                      | [Three people have to say yes](docs/who-says-yes.md)                     | Who has to agree before any identity exists, and the cluster admin to ask    |
-|                      | [What the namespace list means](docs/what-the-namespace-list-means.md)   | What `spec.namespaces` promises, and why taking one off destroys             |
-|                      | [Several operators in one cluster](docs/several-operators.md)            | A second Databricks account in a cluster that already has one                |
-|                      | [The Helm chart](charts/databricks-service-principal-operator/README.md) | Installing a second operator without editing a file, and what it does not do |
-|                      | [Finding out what a service principal is](docs/finding-an-identity-in-databricks.md) | You are looking at one in Databricks and want to know what made it |
-| The namespace holder | [Asking for an identity, and ending one](docs/asking-for-an-identity.md) | The annotation, and the key you withdraw to end it                           |
-|                      | [Several identities for one ServiceAccount](docs/several-identities.md)  | One workload acting as more than one Databricks service principal            |
-|                      | [What the pod gets](docs/what-the-pod-gets.md)                           | What an equipped pod holds, and the one line your code names                 |
-| Everybody            | [The three objects](docs/the-three-objects.md)                           | What each custom resource is, before you touch one                           |
-|                      | [When something is wrong](docs/when-something-is-wrong.md)               | You have a symptom and not yet an object to look at                          |
-| Evaluating this      | [Issuing an identity, not a permission](docs/identity-not-permission.md) | What the boundary is, why it is load-bearing, and what it costs              |
-|                      | [What was measured](docs/measured.md)                                    | Every claim this rests on, what was asked, and what came back                |
+| For                  | Read                                                                                 | About                                                                        |
+|----------------------|--------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| The account holder   | [Installing the operator](docs/installing.md)                                        | Putting this into a cluster for the first time                               |
+|                      | [Three people have to say yes](docs/who-says-yes.md)                                 | Who has to agree before any identity exists, and the cluster admin to ask    |
+|                      | [What the namespace list means](docs/what-the-namespace-list-means.md)               | What `spec.namespaces` promises, and why taking one off destroys             |
+|                      | [Several operators in one cluster](docs/several-operators.md)                        | A second Databricks account in a cluster that already has one                |
+|                      | [The Helm chart](charts/databricks-service-principal-operator/README.md)             | Installing a second operator without editing a file, and what it does not do |
+|                      | [Finding out what a service principal is](docs/finding-an-identity-in-databricks.md) | You are looking at one in Databricks and want to know what made it           |
+| The namespace holder | [Asking for an identity, and ending one](docs/asking-for-an-identity.md)             | The annotation, and the key you withdraw to end it                           |
+|                      | [Several identities for one ServiceAccount](docs/several-identities.md)              | One workload acting as more than one Databricks service principal            |
+|                      | [What the pod gets](docs/what-the-pod-gets.md)                                       | What an equipped pod holds, and the one line your code names                 |
+| Everybody            | [The three objects](docs/the-three-objects.md)                                       | What each custom resource is, before you touch one                           |
+|                      | [When something is wrong](docs/when-something-is-wrong.md)                           | You have a symptom and not yet an object to look at                          |
+| Evaluating this      | [Issuing an identity, not a permission](docs/identity-not-permission.md)             | What the boundary is, why it is load-bearing, and what it costs              |
+|                      | [What was measured](docs/measured.md)                                                | Every claim this rests on, what was asked, and what came back                |
