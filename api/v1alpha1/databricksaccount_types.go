@@ -54,8 +54,13 @@ type DatabricksAccountSpec struct {
 	//
 	// On unified deployments the account and its workspaces share one host, so
 	// this is not always an "accounts." name.
+	//
+	// It cannot be changed, for the reason accountId cannot: one account has one
+	// host, so an edit here is either a correction or a move, and a move is the
+	// same thing accountId's own immutability refuses.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:Pattern=`^https://`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="host is immutable: one account has one host, so an edit here is either a correction or a move to another account, and a move would leave every id this operator recorded naming nothing. Delete this object and create the one you meant, or install a second operator for the other account."
 	// +required
 	Host string `json:"host"`
 
@@ -66,7 +71,21 @@ type DatabricksAccountSpec struct {
 	// It is in the account console URL, and in the CLI's own profile:
 	//
 	//	databricks auth describe -p <account profile>
+	//
+	// It cannot be changed. A service principal id means nothing outside the
+	// account it was made in, so an operator pointed at another one would delete
+	// something it never made, or read the 404 that means "not here" as the one
+	// that means "gone" -- for every identity in the cluster, in one reconcile
+	// interval, with nothing anywhere reporting an error.
+	//
+	// This is one of three doors, and closing it alone would not be worth much.
+	// Deleting the object and creating another naming a different account is the
+	// same edit with a longer handle, which is what AccountFinalizer refuses,
+	// and pointing a running operator at a second object is a third, which is
+	// checked when it starts. Together they make the account this operator acts
+	// in fixed for its lifetime, and an id it wrote down always meaningful.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="accountId is immutable: a service principal id means nothing outside the account it was made in, so this operator acts in one Databricks account for its whole life. Delete this object and create the one you meant, or install a second operator for the other account."
 	// +required
 	AccountID string `json:"accountId"`
 

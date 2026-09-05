@@ -75,24 +75,21 @@ const (
 	// the mistake conditionEquipped was renamed to stop making.
 	conditionPrepared = "Prepared"
 
-	// conditionAccountsAgree, on a DatabricksAccount, says whether the
-	// identities in this cluster were made in the account it names.
+	// conditionRecordsReleased, on a DatabricksAccount somebody has deleted,
+	// says whether any record still names the Databricks account it declares.
 	//
-	// It is here because the object whose edit causes them to disagree is the
-	// one that says nothing about it. Every affected identity reports
-	// AccountMismatch, and none of them fails: their workloads keep working,
-	// because exchanging a token does not go through this operator. So nothing
-	// alerts, nothing resolves on its own, and finding out means reading every
-	// identity's status one at a time. This is the count, on the object that
-	// was edited.
-	conditionAccountsAgree = "AccountsAgree"
+	// It is what the object says while its finalizer holds it, and it is only
+	// ever False: the moment nothing names the account the finalizer goes and so
+	// does the object. Without it, a deletion that does not happen looks like a
+	// deletion nobody has got to yet.
+	conditionRecordsReleased = "RecordsReleased"
 
 	// conditionFederationPoliciesRemoved, on a DatabricksAccount, says whether
 	// every namespace this operator issued in and this account no longer names
 	// has actually been let go of: this cluster's trust removed from every
 	// identity it issued there, and the namespace released again afterwards.
 	//
-	// It is on this object for the reason conditionAccountsAgree is. The edit
+	// It is on this object for the reason conditionRecordsReleased is. The edit
 	// that starts the removal is made here, the work of it happens on records
 	// in another kind and on Namespaces in another scope, and none of them is
 	// somewhere the person who made the edit would think to look. Without this,
@@ -176,24 +173,10 @@ const (
 	// reasonEquipped is every pod under this ServiceAccount carrying the token.
 	reasonEquipped = "Equipped"
 
-	// reasonElsewhere is identities recorded against a different Databricks
-	// account than the one this DatabricksAccount names. reasonHere is none.
-	reasonElsewhere = "IdentitiesElsewhere"
-	reasonHere      = "AllHere"
-
-	// reasonAccountMismatch is an identity recorded against one Databricks
-	// account while the operator is acting in another.
-	//
-	// Unknown rather than False: the identity has not failed and is not known to
-	// be wrong. Nothing about it can be established from here, which is the
-	// whole point of saying so instead of concluding.
-	reasonAccountMismatch = "AccountMismatch"
-
-	// reasonAccountUnknown is a record naming a service principal and not the
-	// Databricks account it was made in. It is not AccountMismatch: nothing is
-	// known to differ. Nothing is known at all, which is why the operator
-	// neither concludes nor acts.
-	reasonAccountUnknown = "AccountUnknown"
+	// reasonRecordsRemain is a deleted DatabricksAccount whose Databricks
+	// account records here still name. The message carries the count and the way
+	// out, because an account that can no longer be reached never drains.
+	reasonRecordsRemain = "RecordsRemain"
 
 	// reasonDeleteFailed is the service principal still being there after its
 	// record was asked to go: DeleteServicePrincipal did not confirm, and the

@@ -138,6 +138,18 @@ It is the second of the two yeses below, and
 [Saying where the account may be spent](#saying-where-the-account-may-be-spent)
 is the rest of it.
 
+`host` and `accountId` cannot be changed afterwards, and the API server refuses
+the edit. A service principal id means nothing outside the account it was made
+in, so an operator acts in one Databricks account for its whole life: correcting
+either value means deleting this object and writing the one you meant, and a
+second account means a second operator. Deleting is itself refused while any
+record in this namespace still names that account — the object says how many, and
+how to get out of it when the account can no longer be reached — and an operator
+whose records name an account other than the one `--databricks-account` selects
+refuses to start, naming the record and both accounts in its log. An install that
+never reached Databricks recorded no account anywhere, so a typo here is undone
+by deleting the object and writing it again.
+
 Check it:
 
 ```sh
@@ -578,7 +590,6 @@ which:
 | `Exchangeable`             | This subject's token can be exchanged for this service principal                                                                                                                                                                                                                  |
 | `RemovedInDatabricks`      | Somebody deleted the service principal there. It is not replaced; `status.servicePrincipalRemovedAt` says when that was noticed and `status.servicePrincipalId` is still the id to search the audit log for. Remove that identity's key and write it again to be issued a new one |
 | `CreateUnconfirmed`        | A create was sent for this identity and no service principal carrying its marker has appeared. Nothing is created and nothing is deleted here: the message names the marker to search the account for                                                                             |
-| `AccountMismatch`          | This identity was made in a different Databricks account than the operator is acting in. Nothing is done for it and nothing about it is concluded                                                                                                                                 |
 | `Denied`                   | The operator lacks a Databricks permission. No retry supplies it                                                                                                                                                                                                                  |
 | `AwaitingServicePrincipal` | The record was just written and has not been acted on yet                                                                                                                                                                                                                         |
 | `NotConfigured`            | There is no usable `DatabricksAccount` yet                                                                                                                                                                                                                                        |
@@ -586,7 +597,6 @@ which:
 | `Rejected`                 | Databricks refused the request itself as invalid. Something has to change in what is being sent; restoring or re-pointing anything does not answer it                                                                                                                             |
 | `MalformedRecord`          | An id this operator wrote into `status` can no longer be read as one. It is in the status, not in any spec, so there is nothing in the spec to correct                                                                                                                            |
 | `NotFound`                 | Databricks looked and the thing named is not there. Something has to be restored or re-pointed                                                                                                                                                                                    |
-| `AccountUnknown`           | The record names a service principal and not the account it was made in, so a "not found" cannot be told from a lookup in the wrong place. Nothing is done for it and nothing about it is concluded                                                                               |
 | `DatabricksUnavailable`    | Databricks did not answer, whatever it was asked. Nothing has been concluded from it and it is retried                                                                                                                                                                            |
 | `DeleteFailed`             | Deletion is being held because the service principal is still there. This is reported on the record, in the operator's namespace                                                                                                                                                  |
 | `NotServed`                | This identity is in a namespace the operator's account no longer names. Its trust has been removed, so no token from this cluster can be exchanged for it. Nothing was destroyed: naming the namespace again puts the trust back on the same client id, with every grant on it    |

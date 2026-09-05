@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/databricks/databricks-sdk-go/apierr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -42,18 +43,32 @@ const (
 func newDatabricksAccountReconciler(t *testing.T, tokenPath string, verify func() error,
 	objects ...client.Object) (*DatabricksAccountReconciler, client.Client, *dbx.AccountInUse) {
 	t.Helper()
-	c, scheme := newFakeClient(t, objects...)
+	c, _ := newFakeClient(t, objects...)
+	r, accountInUse := restartedDatabricksAccountReconciler(t, c, tokenPath, verify)
+	return r, c, accountInUse
+}
+
+// restartedDatabricksAccountReconciler is this operator coming up again over a
+// cluster already in some state.
+//
+// A new process, so a new AccountInUse holding nothing: what is installed lives
+// in memory and no restart inherits it. That is the difference a test about a
+// half-finished deletion has to be able to make, since the pass that installed
+// the clients happened in the process that died.
+func restartedDatabricksAccountReconciler(t *testing.T, c client.Client, tokenPath string,
+	verify func() error) (*DatabricksAccountReconciler, *dbx.AccountInUse) {
+	t.Helper()
 	accountInUse := dbx.NewAccountInUse(operatorNamespace, databricksAccountName)
 	built := &stubClients{}
 	return &DatabricksAccountReconciler{
 		Client:                          c,
-		Scheme:                          scheme,
+		Scheme:                          c.Scheme(),
 		DatabricksAccountNamespacedName: types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName},
 		AccountInUse:                    accountInUse,
 		OwnToken:                        dbx.Config{OIDCTokenFilepath: tokenPath, TokenAudience: "databricks"},
 		build:                           func(dbx.Config) (dbx.Clients, error) { return built, nil },
 		verify:                          func(context.Context, dbx.Clients) error { return verify() },
-	}, c, accountInUse
+	}, accountInUse
 }
 
 func databricksAccountCondition(t *testing.T, c client.Client, name string) *metav1.Condition {
@@ -65,6 +80,32 @@ func databricksAccountCondition(t *testing.T, c client.Client, name string) *met
 		t.Fatalf("getting %s: %v", name, err)
 	}
 	return meta.FindStatusCondition(got.Status.Conditions, conditionReady)
+}
+
+// databricksAccountOrNil is the object as the cluster holds it, or nil when it
+// is gone -- which is what a finalizer that has been released looks like.
+func databricksAccountOrNil(t *testing.T, c client.Client, name string) *dbxv1alpha1.DatabricksAccount {
+	t.Helper()
+	var got dbxv1alpha1.DatabricksAccount
+	err := c.Get(context.Background(), types.NamespacedName{Namespace: operatorNamespace, Name: name}, &got)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("getting %s: %v", name, err)
+	}
+	return &got
+}
+
+func deleteDatabricksAccount(t *testing.T, c client.Client, name string) {
+	t.Helper()
+	live := databricksAccountOrNil(t, c, name)
+	if live == nil {
+		t.Fatalf("%s is already gone", name)
+	}
+	if err := c.Delete(context.Background(), live); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func databricksAccountStatus(t *testing.T, c client.Client, name string) dbxv1alpha1.DatabricksAccountStatus {
@@ -305,113 +346,216 @@ func identityMadeIn(name, accountID string) *dbxv1alpha1.IssuedDatabricksService
 }
 
 // identityOfAnotherOperator is a record in another operator's namespace. Nothing
-// this operator reports may count it: it was issued by another operator, holding
-// another account admin credential, and saying this operator stranded it is
-// saying something untrue about somebody else's work.
+// this operator does may hold on it: it was issued by another operator, holding
+// another account admin credential, and only that one can destroy what it names.
 func identityOfAnotherOperator(name, accountID string) *dbxv1alpha1.IssuedDatabricksServicePrincipal {
 	issued := identityMadeIn(name, accountID)
 	issued.Namespace = "another-operator"
 	return issued
 }
 
-// TestIdentitiesMadeElsewhereAreCountedHere covers the gap between the object
-// somebody edits and the objects that carry the consequence.
+// TestTheAccountIsHeldWhileARecordNamesIt is the second of the three doors that
+// make the account this operator acts in fixed for its lifetime.
 //
-// Pointing this object at a different account leaves every identity made in the
-// old one reporting AccountMismatch, and none of them fails: their workloads
-// keep working, because exchanging a token does not go through this operator.
-// Nothing alerts and nothing resolves on its own, so the state is permanent and
-// invisible, and finding it means reading every identity's status one at a time.
-func TestIdentitiesMadeElsewhereAreCountedHere(t *testing.T) {
+// spec.accountId being immutable is worth nothing on its own: deleting the
+// object and writing another one naming a different account is the same edit
+// with a longer handle, and every id this operator wrote down would then mean
+// nothing. So the object waits for the records, and says on itself how many.
+func TestTheAccountIsHeldWhileARecordNamesIt(t *testing.T) {
 	t.Parallel()
 	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testIssuer, testAudience),
 		func() error { return nil },
 		databricksAccountNamed(databricksAccountName),
-		identityMadeIn("etl", "an-older-account"),
-		identityMadeIn("loader", "an-older-account"),
-		identityMadeIn("current", testAccountID))
+		identityMadeIn("etl", testAccountID),
+		identityMadeIn("loader", testAccountID))
 	reconcileDatabricksAccount(t, r, databricksAccountName)
 
-	var got dbxv1alpha1.DatabricksAccount
-	if err := c.Get(context.Background(),
-		types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName}, &got); err != nil {
-		t.Fatal(err)
+	deleteDatabricksAccount(t, c, databricksAccountName)
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	held := databricksAccountOrNil(t, c, databricksAccountName)
+	if held == nil {
+		t.Fatal("the DatabricksAccount went while two records name the Databricks account it " +
+			"declares; the next one written here can name any account it likes")
+	}
+	remain := meta.FindStatusCondition(held.Status.Conditions, conditionRecordsReleased)
+	if remain == nil || remain.Status != metav1.ConditionFalse {
+		t.Fatalf("RecordsReleased is %v; a deletion that does not happen and says nothing reads "+
+			"as one nobody has got to yet", remain)
+	}
+	if !strings.Contains(remain.Message, "2") {
+		t.Errorf("message is %q, want the count of what is holding it", remain.Message)
+	}
+	if !strings.Contains(remain.Message, testAccountID) {
+		t.Errorf("message is %q, want the Databricks account being held", remain.Message)
+	}
+	// The way out, for an account that can never be drained because it can no
+	// longer be reached. Without it this finalizer is a trap.
+	if !strings.Contains(remain.Message, "finalizer") {
+		t.Errorf("message is %q, want the way out written where somebody reads it", remain.Message)
 	}
 
-	agree := meta.FindStatusCondition(got.Status.Conditions, conditionAccountsAgree)
-	if agree == nil || agree.Status != metav1.ConditionFalse {
-		t.Fatalf("AccountsAgree is %v, want it to say some identities were made elsewhere", agree)
-	}
-	if !strings.Contains(agree.Message, "2") {
-		t.Errorf("message is %q, want the count -- one at a time is the thing this replaces",
-			agree.Message)
-	}
-	if !strings.Contains(agree.Message, "an-older-account") {
-		t.Errorf("message is %q, want the account to point back at", agree.Message)
+	// The operator still installs its clients while it is held, and that is what
+	// makes the hold escapable at all: those clients are what deletes the
+	// service principals the records name. Asked of a restart, because that is
+	// where it fails -- an operator that gave up on the deletion would come up
+	// holding nothing, and nothing would then be able to drain it.
+	restarted, itsClients := restartedDatabricksAccountReconciler(t, c,
+		writeToken(t, testIssuer, testAudience), func() error { return nil })
+	reconcileDatabricksAccount(t, restarted, databricksAccountName)
+	if !itsClients.Configured() {
+		t.Error("an operator restarted while its account is held installed nothing, so nothing " +
+			"can destroy what is holding it and the only way out is by hand")
 	}
 
-	// Ready is unaffected: the operator can act in this account perfectly well.
-	ready := databricksAccountCondition(t, c, databricksAccountName)
-	if ready == nil || ready.Status != metav1.ConditionTrue {
-		t.Errorf("Ready is %v; holding identities from another account does not stop the "+
-			"operator acting in this one", ready)
+	// And it goes once nothing names it. The records are what a person deletes;
+	// each destroys its own service principal on the way out.
+	for _, name := range []string{"etl", "loader"} {
+		record := &dbxv1alpha1.IssuedDatabricksServicePrincipal{
+			ObjectMeta: metav1.ObjectMeta{Namespace: operatorNamespace, Name: name},
+		}
+		if err := c.Delete(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	if databricksAccountOrNil(t, c, databricksAccountName) != nil {
+		t.Error("the DatabricksAccount is still held with no record naming its account; the " +
+			"finalizer would have to be removed by hand to uninstall a drained operator")
 	}
 }
 
-// TestAnotherOperatorsIdentitiesAreNotCounted covers the boundary, on the one
-// report that reads more than one object.
+// TestAnOperatorThatNeverReachedDatabricksLetsItsAccountGo is what keeps a typo
+// at install from bricking anything.
 //
-// Two operators in a cluster hold two account admin credentials for two Databricks
-// accounts, and each is the trust boundary of its own. An operator that counted
-// the other's records would say, on the object somebody reads when they are
-// worried, that it has stranded identities it never issued -- and it would say it
-// permanently, since nothing it does can resolve them.
-func TestAnotherOperatorsIdentitiesAreNotCounted(t *testing.T) {
+// A record names an account only once a create has been sent, so an operator
+// whose host or account id was wrong from the start has records naming nothing
+// and nothing in Databricks. Holding its object would mean the first thing a
+// person got wrong is the one thing they cannot undo.
+func TestAnOperatorThatNeverReachedDatabricksLetsItsAccountGo(t *testing.T) {
+	t.Parallel()
+	never := identityMadeIn("etl", "")
+	never.Status.ServicePrincipalID = ""
+	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testIssuer, testAudience),
+		func() error { return nil },
+		databricksAccountNamed(databricksAccountName), never)
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	deleteDatabricksAccount(t, c, databricksAccountName)
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	if databricksAccountOrNil(t, c, databricksAccountName) != nil {
+		t.Error("the DatabricksAccount is held by a record that never sent a create, so nothing " +
+			"can exist for it anywhere; a mistyped account id would be permanent")
+	}
+}
+
+// TestAnotherOperatorsRecordsDoNotHoldThisAccount covers the boundary, on the
+// one question this controller answers by reading another kind.
+//
+// Two operators in a cluster hold two account admin credentials, each in its own
+// namespace, and neither is the other's to drain. A record somewhere else
+// holding this object would make uninstalling this operator wait on identities
+// it never issued and cannot delete.
+func TestAnotherOperatorsRecordsDoNotHoldThisAccount(t *testing.T) {
 	t.Parallel()
 	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testIssuer, testAudience),
 		func() error { return nil },
 		databricksAccountNamed(databricksAccountName),
-		identityMadeIn("current", testAccountID),
+		identityOfAnotherOperator("theirs", testAccountID))
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	deleteDatabricksAccount(t, c, databricksAccountName)
+	reconcileDatabricksAccount(t, r, databricksAccountName)
+
+	if databricksAccountOrNil(t, c, databricksAccountName) != nil {
+		t.Error("a record in another operator's namespace is holding this object; nothing this " +
+			"operator can do would ever release it")
+	}
+}
+
+// TestAnAccountThisOperatorDoesNotUseIsNotHeld covers the way the flag is meant
+// to be moved: write the new object, see it accepted, then move the flag.
+//
+// The one it moved off is nothing this operator uses, so it holds nothing of
+// this operator's. A finalizer left there would make deleting it hang on a
+// controller that does nothing but report the object as not selected.
+func TestAnAccountThisOperatorDoesNotUseIsNotHeld(t *testing.T) {
+	t.Parallel()
+	const other = "staging-account"
+	stale := databricksAccountNamed(other)
+	stale.Finalizers = []string{dbxv1alpha1.AccountFinalizer}
+	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testIssuer, testAudience),
+		func() error { return nil },
+		databricksAccountNamed(databricksAccountName), stale)
+
+	deleteDatabricksAccount(t, c, other)
+	reconcileDatabricksAccount(t, r, other)
+
+	if databricksAccountOrNil(t, c, other) != nil {
+		t.Error("a DatabricksAccount this operator was not told to use is held by it, and nothing " +
+			"it does will ever let go")
+	}
+}
+
+// TestAnOperatorToldToUseAnotherAccountRefusesToServe is the third door, and the
+// only one nothing in the API server can hold.
+//
+// spec.accountId is immutable and the object cannot be deleted while records
+// name its account, but --databricks-account is a flag on a Deployment: pointing
+// it at a second object naming a second account walks past both. Admission never
+// sees that edit, so it is asked once, at startup, and the answer is not to
+// serve.
+func TestAnOperatorToldToUseAnotherAccountRefusesToServe(t *testing.T) {
+	t.Parallel()
+	c, _ := newFakeClient(t,
+		databricksAccountNamed(databricksAccountName),
+		identityMadeIn("etl", "the-account-it-was-made-in"))
+
+	err := CheckSelectedAccount(context.Background(), c, testOperatorRef)
+	if err == nil {
+		t.Fatal("the operator started against an account none of its records was made in; every " +
+			"identity in the cluster is one 404 away from being latched as deleted")
+	}
+	// Which record, which account it names, and which this operator was told to
+	// use. Without all three the person reading it cannot tell whether the flag
+	// or the object is the thing that is wrong.
+	for _, want := range []string{"etl", "the-account-it-was-made-in", testAccountID, "databricks-account"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal is %q, want it to name %q", err, want)
+		}
+	}
+}
+
+// TestAnOperatorWhoseRecordsAgreeServes is the other half. The check is made at
+// startup, where refusing wrongly is an operator that will not come up at all.
+func TestAnOperatorWhoseRecordsAgreeServes(t *testing.T) {
+	t.Parallel()
+	// A record made here, one that never sent a create and so names no account,
+	// and another operator's, in its own namespace.
+	c, _ := newFakeClient(t,
+		databricksAccountNamed(databricksAccountName),
+		identityMadeIn("etl", testAccountID),
+		identityMadeIn("unsent", ""),
 		identityOfAnotherOperator("theirs", "an-account-this-operator-never-saw"))
-	reconcileDatabricksAccount(t, r, databricksAccountName)
 
-	var got dbxv1alpha1.DatabricksAccount
-	if err := c.Get(context.Background(),
-		types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName}, &got); err != nil {
-		t.Fatal(err)
-	}
-
-	agree := meta.FindStatusCondition(got.Status.Conditions, conditionAccountsAgree)
-	if agree == nil || agree.Status != metav1.ConditionTrue {
-		t.Fatalf("AccountsAgree is %v; the only identity this operator issued was made in this "+
-			"account, and the other one is not this operator's to count", agree)
-	}
-	if strings.Contains(agree.Message, "an-account-this-operator-never-saw") {
-		t.Errorf("message is %q; it names another operator's Databricks account", agree.Message)
+	if err := CheckSelectedAccount(context.Background(), c, testOperatorRef); err != nil {
+		t.Errorf("refused to serve: %v", err)
 	}
 }
 
-// TestAllIdentitiesHereIsSaidRatherThanLeftBlank covers the ordinary case.
+// TestAnOperatorWithNoDatabricksAccountServes covers the ordinary first install.
 //
-// An absent condition reads the same as an operator that has not looked, and the
-// question it answers -- are the identities in this cluster this account's -- is
-// one somebody asks precisely when they are unsure.
-func TestAllIdentitiesHereIsSaidRatherThanLeftBlank(t *testing.T) {
+// The operator is deployed before the account is declared, and it runs and says
+// so on every object rather than crashlooping with the reason only in its log.
+// Refusing here would make that impossible.
+func TestAnOperatorWithNoDatabricksAccountServes(t *testing.T) {
 	t.Parallel()
-	r, c, _ := newDatabricksAccountReconciler(t, writeToken(t, testIssuer, testAudience),
-		func() error { return nil },
-		databricksAccountNamed(databricksAccountName),
-		identityMadeIn("etl", testAccountID))
-	reconcileDatabricksAccount(t, r, databricksAccountName)
+	c, _ := newFakeClient(t, identityMadeIn("etl", "some-account"))
 
-	var got dbxv1alpha1.DatabricksAccount
-	if err := c.Get(context.Background(),
-		types.NamespacedName{Namespace: operatorNamespace, Name: databricksAccountName}, &got); err != nil {
-		t.Fatal(err)
-	}
-	agree := meta.FindStatusCondition(got.Status.Conditions, conditionAccountsAgree)
-	if agree == nil || agree.Status != metav1.ConditionTrue {
-		t.Errorf("AccountsAgree is %v, want it said rather than left to be inferred", agree)
+	if err := CheckSelectedAccount(context.Background(), c, testOperatorRef); err != nil {
+		t.Errorf("refused to serve with no DatabricksAccount to disagree with: %v", err)
 	}
 }
 
@@ -424,13 +568,15 @@ func TestAllIdentitiesHereIsSaidRatherThanLeftBlank(t *testing.T) {
 // screen named another and reported that it could not be verified -- so a
 // reader's only reasonable conclusion, that nothing was happening, was wrong.
 //
-// The guard added for identities recorded elsewhere could not see it either: it
-// asks which account the operator is acting in, and the answer was still the old
-// one, so it compared that account against itself and passed.
-//
 // And a restart changed the answer. What is installed lives in memory, so the
 // same cluster with the same spec behaved differently depending on whether the
 // operator had happened to restart -- which nothing on either object records.
+//
+// The spec is edited here because that is the cheap way to reach the state. In a
+// cluster it is reached by deleting the object and writing another one, which is
+// what an install that never got its account id right does: accountId itself
+// cannot be edited, and while any record names the account the deletion is
+// refused.
 func TestRepointingAtAnAccountThatFailsClearsTheOldOne(t *testing.T) {
 	t.Parallel()
 	failing := errors.New("this account cannot be verified")

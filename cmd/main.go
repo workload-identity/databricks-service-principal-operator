@@ -17,9 +17,11 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -49,6 +51,9 @@ var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 )
+
+// startupCheckTimeout bounds the one read made before the manager starts.
+const startupCheckTimeout = 30 * time.Second
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -274,6 +279,28 @@ func main() {
 	decided.DatabricksAccountNamespacedName = databricksAccountNamespacedName
 	decided.AccountInUse = dbClients
 	decided.OwnToken = runtimeCfg
+
+	// Which account this operator acts in is fixed for its lifetime, and this is
+	// the half of that nothing in the API server can hold: spec.accountId is
+	// immutable and the DatabricksAccount cannot be deleted while records name
+	// its account, but --databricks-account lives on a Deployment, where no
+	// admission plugin sees it being edited. So it is checked here, once, and a
+	// disagreement stops the process rather than degrading it.
+	//
+	// Before the controllers are started and after the manager is built, because
+	// what it reads is the manager's uncached reader: the cache is not running
+	// yet, and a check that answered from an empty one would pass every time.
+	//
+	// A deadline, because nothing else is listening yet. The health probes come
+	// up with the manager, so a read that hangs here is a pod that never becomes
+	// ready and is never restarted either.
+	startup, endStartup := context.WithTimeout(context.Background(), startupCheckTimeout)
+	selected := controller.CheckSelectedAccount(startup, mgr.GetAPIReader(), databricksAccountNamespacedName)
+	endStartup()
+	if selected != nil {
+		setupLog.Error(selected, "Refusing to serve")
+		os.Exit(1)
+	}
 
 	databricksAccountReconciler, databricksServiceAccountReconciler, issuedReconciler := reconcilers(
 		decided, mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme())

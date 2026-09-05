@@ -51,6 +51,10 @@ type DatabricksAccountSpecApplyConfiguration struct {
 	//
 	// On unified deployments the account and its workspaces share one host, so
 	// this is not always an "accounts." name.
+	//
+	// It cannot be changed, for the reason accountId cannot: one account has one
+	// host, so an edit here is either a correction or a move, and a move is the
+	// same thing accountId's own immutability refuses.
 	Host *string `json:"host,omitempty"`
 	// accountId identifies the Databricks account.
 	//
@@ -59,6 +63,19 @@ type DatabricksAccountSpecApplyConfiguration struct {
 	// It is in the account console URL, and in the CLI's own profile:
 	//
 	// databricks auth describe -p <account profile>
+	//
+	// It cannot be changed. A service principal id means nothing outside the
+	// account it was made in, so an operator pointed at another one would delete
+	// something it never made, or read the 404 that means "not here" as the one
+	// that means "gone" -- for every identity in the cluster, in one reconcile
+	// interval, with nothing anywhere reporting an error.
+	//
+	// This is one of three doors, and closing it alone would not be worth much.
+	// Deleting the object and creating another naming a different account is the
+	// same edit with a longer handle, which is what AccountFinalizer refuses,
+	// and pointing a running operator at a second object is a third, which is
+	// checked when it starts. Together they make the account this operator acts
+	// in fixed for its lifetime, and an id it wrote down always meaningful.
 	AccountID *string `json:"accountId,omitempty"`
 	// clientId is the applicationId of the service principal the operator acts
 	// as -- not its numeric id, and not its display name.

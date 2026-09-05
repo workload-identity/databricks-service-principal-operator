@@ -189,6 +189,26 @@ const (
 	// not go through. A person can remove it by hand, which is the same decision
 	// made by somebody who can see what is left behind.
 	ServicePrincipalFinalizer = "databricks.workload-identity.io/delete-service-principal"
+
+	// AccountFinalizer holds a DatabricksAccount while any record in the
+	// operator's namespace still names the Databricks account it declares.
+	//
+	// Deleting the object and creating another one naming a different account is
+	// how spec.accountId would be changed after it was made immutable, and it is
+	// the same change with a longer handle: every id this operator wrote down
+	// was issued in one account and means nothing in another. So the object
+	// cannot leave while anything here still points at that account.
+	//
+	// It refuses rather than acting: nothing is deleted on the way out, because
+	// what would be deleted is somebody else's identities in Databricks and this
+	// object is not where that decision is made. Deleting the records is, and
+	// each one destroys its own service principal.
+	//
+	// A person can remove it by hand, and the object says so while it is held.
+	// An account that has become unreachable can never be drained -- its records
+	// hold their own finalizers waiting for a delete that will not land -- so a
+	// finalizer with no way out would be a trap rather than a door.
+	AccountFinalizer = "databricks.workload-identity.io/records-name-this-account"
 )
 
 // ProjectedIdentity is one identity this ServiceAccount was issued, copied from

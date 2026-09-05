@@ -55,7 +55,15 @@ rules:
   verbs:
   - get
   - list
+  - update
   - watch
+- apiGroups:
+  - databricks.workload-identity.io
+  resources:
+  - databricksaccounts/finalizers
+  - issueddatabricksserviceprincipals/finalizers
+  verbs:
+  - update
 - apiGroups:
   - databricks.workload-identity.io
   resources:
@@ -76,9 +84,3 @@ rules:
   - list
   - update
   - watch
-- apiGroups:
-  - databricks.workload-identity.io
-  resources:
-  - issueddatabricksserviceprincipals/finalizers
-  verbs:
-  - update

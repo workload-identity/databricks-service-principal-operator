@@ -1092,62 +1092,6 @@ func TestNamingNoNamespacesServesNothing(t *testing.T) {
 	}
 }
 
-// TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted covers the inference this
-// operator must not make.
-//
-// Databricks answers a lookup in the wrong account with the same 404 it gives
-// for an identity that is really gone. Reading the second as the first latches
-// the record as Gone and never rebuilds, over a service principal that is alive
-// somewhere this operator was not looking. One edit to the DatabricksAccount did
-// that to every identity in a cluster in one reconcile interval, with nothing
-// anywhere reporting an error.
-func TestAnIdentityFromAnotherAccountIsNotDeclaredDeleted(t *testing.T) {
-	t.Parallel()
-	serviceAccount := asking(testNamespace, testName)
-	existing := recordFor(serviceAccount)
-	existing.Status.ServicePrincipalID = "7788"
-	existing.Status.ClientID = "app-uuid"
-	existing.Status.AccountID = "the-account-it-was-made-in"
-
-	// Absent from this account, which is what a lookup in the wrong one answers.
-	stub := &stubClients{accountID: "somewhere-else", gone: "7788"}
-	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, existing)
-
-	c.settle(t)
-
-	got := c.issuedOf(t, serviceAccount)
-	if got == nil {
-		t.Fatal("the record is gone")
-	}
-	if got.Status.ServicePrincipalRemovedAt != nil {
-		t.Errorf("recorded %s as deleted in Databricks on a lookup made in another account",
-			got.Status.ServicePrincipalID)
-	}
-	if got.Status.ServicePrincipalID != "7788" {
-		t.Errorf("servicePrincipalId is %q, want it untouched -- it is the only record of where "+
-			"the live identity is", got.Status.ServicePrincipalID)
-	}
-	ready := meta.FindStatusCondition(got.Status.Conditions, conditionReady)
-	if ready == nil || ready.Reason != reasonAccountMismatch {
-		t.Fatalf("Ready is %v, want it to say which account it was made in", ready)
-	}
-	if !strings.Contains(ready.Message, "the-account-it-was-made-in") {
-		t.Errorf("message is %q; it has to name the account to point back at", ready.Message)
-	}
-
-	// And the owner of the namespace can read all of that without being able to
-	// read the operator's own.
-	databricksServiceAccount := principalOf(t, c.Client)
-	if databricksServiceAccount == nil {
-		t.Fatal("nothing was databricksServiceAccount")
-	}
-	shown := meta.FindStatusCondition(
-		identityIn(t, databricksServiceAccount).Conditions, conditionReady)
-	if shown == nil || shown.Reason != reasonAccountMismatch {
-		t.Errorf("the DatabricksServiceAccount says %v; it carries the record's words or it is no use", shown)
-	}
-}
-
 // TestTheAccountIsRecordedWithTheId covers where the comparison's other half
 // comes from. An id recorded with no account cannot be compared, so the two are
 // written together or the check above is inert for everything made after it.

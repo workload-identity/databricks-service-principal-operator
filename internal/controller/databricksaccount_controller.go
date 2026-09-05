@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -111,9 +112,9 @@ type DatabricksAccountReconciler struct {
 	verify func(context.Context, databricks.Clients) error
 }
 
-// The identities are read to count the ones made in another account, and to find
-// the namespaces this account has stopped naming. Read only: this controller
-// writes none of them.
+// The identities are read to count the ones that still name this Databricks
+// account, and to find the namespaces this account has stopped naming. Read
+// only: this controller writes none of them.
 // +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksserviceaccounts,verbs=get;list;watch
 
 // The only object this operator writes that it does not own -- the
@@ -131,8 +132,13 @@ type DatabricksAccountReconciler struct {
 // read found the Namespace -- so a namespace deleted mid-pass is refused rather
 // than recreated with nothing in it.
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;patch
-// +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksaccounts,verbs=get;list;watch,namespace=system
+// update on the object itself is for its finalizer and nothing else. A
+// finalizer is metadata, so there is no narrower verb for it, and the spec this
+// permission also reaches is one nobody but the team holding this namespace can
+// write anyway.
+// +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksaccounts,verbs=get;list;watch;update,namespace=system
 // +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksaccounts/status,verbs=get;update;patch,namespace=system
+// +kubebuilder:rbac:groups=databricks.workload-identity.io,resources=databricksaccounts/finalizers,verbs=update,namespace=system
 
 // Reconcile builds the clients and reports whether they work.
 //
@@ -165,6 +171,21 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
+	// Put on before this pass can install any clients, which is what makes it
+	// hold everything this operator ever creates: nothing is made in Databricks
+	// until the clients are installed, and they are installed below.
+	//
+	// Not while the object is terminating. Putting it back then would be the
+	// operator arguing on a timer with the person who removed it by hand, and
+	// the object would never go.
+	if databricksAccount.DeletionTimestamp.IsZero() &&
+		!controllerutil.ContainsFinalizer(&databricksAccount, dbxv1alpha1.AccountFinalizer) {
+		controllerutil.AddFinalizer(&databricksAccount, dbxv1alpha1.AccountFinalizer)
+		if err := r.Update(ctx, &databricksAccount); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Read before anything else, so the subject and audience are reported even
 	// when the exchange fails -- that is exactly when somebody needs to see them.
 	//
@@ -188,13 +209,18 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	// Written before anything is attempted, because it is knowable without
-	// attempting anything: it compares what this operator recorded against what
-	// this object names. Computed only after a successful verification, a failed
-	// switch left the previous pass's "every identity was made in this account"
-	// standing under a spec naming another -- a present-tense claim, about the
-	// wrong account, on the object whose edit caused it.
-	r.reportAgreement(&databricksAccount, records)
+	// The deletion, decided from the records and nothing else. A held object
+	// carries on through the rest of this pass rather than returning here: the
+	// clients installed below are what deletes the service principals those
+	// records name, so an operator that stopped at this line would be holding an
+	// object nothing could ever drain.
+	if !databricksAccount.DeletionTimestamp.IsZero() {
+		naming := recordsNaming(records, databricksAccount.Spec.AccountID)
+		if naming == 0 {
+			return ctrl.Result{}, r.release(ctx, &databricksAccount)
+		}
+		r.reportHeld(&databricksAccount, naming)
+	}
 
 	// Also before the account is contacted, and for a stronger reason than
 	// knowability: suspending minting needs nothing from Databricks, and a
@@ -285,9 +311,9 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // the DatabricksServiceAccounts in tenants' namespaces are copies of them, and
 // a copy is missing exactly when these questions are most worth asking -- an
 // identity whose namespace was torn down still has its record and no longer has
-// its copy. And another operator's identities are not this one's to read:
-// they are in another namespace, in another account, and counting them here
-// would say this operator has stranded something it never issued.
+// its copy. And another operator's identities are not this one's to read: they
+// are in another namespace, in another account, and counting them here would
+// hold this object over something this operator never issued.
 func (r *DatabricksAccountReconciler) records(ctx context.Context) (
 	[]dbxv1alpha1.IssuedDatabricksServicePrincipal, error) {
 	var identities dbxv1alpha1.IssuedDatabricksServicePrincipalList
@@ -297,50 +323,113 @@ func (r *DatabricksAccountReconciler) records(ctx context.Context) (
 	return identities.Items, nil
 }
 
-// reportAgreement counts the identities this operator issued that were made in
-// some other Databricks account.
+// recordsNaming counts the records that were acted on in one Databricks
+// account.
 //
-// Read from what this operator recorded rather than from Databricks, and the
-// count is only a report -- a failure to produce it makes the line wrong, never
-// the operator unusable.
-func (r *DatabricksAccountReconciler) reportAgreement(databricksAccount *dbxv1alpha1.DatabricksAccount,
-	records []dbxv1alpha1.IssuedDatabricksServicePrincipal) {
-	elsewhere := map[string]int{}
+// A record that has never sent a create names no account and is not counted:
+// nothing can exist for it, so nothing is held by it. That is what makes a typo
+// at install harmless -- an operator that never reached Databricks wrote no
+// account anywhere, and the object it was declared in deletes freely.
+func recordsNaming(records []dbxv1alpha1.IssuedDatabricksServicePrincipal, accountID string) int {
+	var naming int
 	for i := range records {
-		made := records[i].Status.AccountID
-		if made == "" || made == databricksAccount.Spec.AccountID {
-			continue
+		if records[i].Status.AccountID == accountID {
+			naming++
 		}
-		elsewhere[made]++
+	}
+	return naming
+}
+
+// CheckSelectedAccount refuses to let an operator serve records that were acted
+// on in a Databricks account other than the one it was told to use.
+//
+// It is the third of the three doors that make the account fixed for an
+// operator's lifetime, and the only one admission cannot hold: spec.accountId
+// is immutable and AccountFinalizer keeps the object from being replaced, but
+// --databricks-account is edited on a Deployment, where no CEL rule and no
+// webhook can see it. So it is asked once, at startup, before anything is
+// reconciled.
+//
+// Refusing is not serving. A partly-serving operator in the wrong account is
+// exactly what the three doors exist to prevent, and every path downstream of
+// here is written on the assumption that an id it reads is one it can act on.
+//
+// No DatabricksAccount is not a refusal: an operator installed before its
+// account is declared runs and says so on every object. Neither is a record
+// that names no account, which has sent no create and so has nothing anywhere
+// to be wrong about.
+func CheckSelectedAccount(ctx context.Context, reader client.Reader, selected types.NamespacedName) error {
+	var databricksAccount dbxv1alpha1.DatabricksAccount
+	if err := reader.Get(ctx, selected, &databricksAccount); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("reading DatabricksAccount %s: %w", selected, err)
 	}
 
-	if len(elsewhere) == 0 {
-		setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionAccountsAgree,
-			metav1.ConditionTrue, reasonHere,
-			"every identity this operator issued was made in this account")
-		return
+	var records dbxv1alpha1.IssuedDatabricksServicePrincipalList
+	if err := reader.List(ctx, &records, client.InNamespace(selected.Namespace)); err != nil {
+		return fmt.Errorf("reading the records in %s: %w", selected.Namespace, err)
 	}
 
-	accountIDs := make([]string, 0, len(elsewhere))
-	for made := range elsewhere {
-		accountIDs = append(accountIDs, made)
+	var named []dbxv1alpha1.IssuedDatabricksServicePrincipal
+	for i := range records.Items {
+		made := records.Items[i].Status.AccountID
+		if made != "" && made != databricksAccount.Spec.AccountID {
+			named = append(named, records.Items[i])
+		}
 	}
-	slices.Sort(accountIDs)
-
-	var total int
-	parts := make([]string, 0, len(accountIDs))
-	for _, made := range accountIDs {
-		total += elsewhere[made]
-		parts = append(parts, fmt.Sprintf("%d in %s", elsewhere[made], made))
+	if len(named) == 0 {
+		return nil
 	}
 
-	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionAccountsAgree,
-		metav1.ConditionFalse, reasonElsewhere,
-		fmt.Sprintf("%d identit(ies) this operator issued were made in another Databricks account "+
-			"(%s). Nothing is done for them and nothing about them is known from here; their "+
-			"workloads are unaffected. Pointing this object back at the other account resumes "+
-			"them, and does the same to the ones made here.",
-			total, strings.Join(parts, ", ")))
+	slices.SortFunc(named, func(a, b dbxv1alpha1.IssuedDatabricksServicePrincipal) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	others := ""
+	if len(named) > 1 {
+		others = fmt.Sprintf(", and %d other record(s) in %s do the same", len(named)-1, selected.Namespace)
+	}
+	return fmt.Errorf("record %s/%s names Databricks account %s%s, and this operator was told to act in "+
+		"%s by --databricks-account naming %s. A service principal id means nothing outside the account "+
+		"it was made in, so serving these from here would delete something this operator never made, or "+
+		"read the 404 that means \"not here\" as the one that means \"gone\". Point --databricks-account "+
+		"at the DatabricksAccount naming %s, or install a second operator, in a namespace of its own, for "+
+		"%s",
+		named[0].Namespace, named[0].Name, named[0].Status.AccountID, others,
+		databricksAccount.Spec.AccountID, selected,
+		named[0].Status.AccountID, databricksAccount.Spec.AccountID)
+}
+
+// release lets a DatabricksAccount go, and stops acting in the account it
+// named.
+//
+// The clients are withdrawn here rather than on the pass that finds the object
+// gone, because between those two this operator would be creating identities in
+// an account nobody declares any more.
+func (r *DatabricksAccountReconciler) release(ctx context.Context,
+	databricksAccount *dbxv1alpha1.DatabricksAccount) error {
+	r.AccountInUse.Clear(fmt.Sprintf("DatabricksAccount %s was deleted", r.DatabricksAccountNamespacedName))
+	log.FromContext(ctx).Info("Cleared the Databricks clients: the DatabricksAccount is being deleted and no "+
+		"record names its Databricks account", "accountId", databricksAccount.Spec.AccountID)
+	controllerutil.RemoveFinalizer(databricksAccount, dbxv1alpha1.AccountFinalizer)
+	return client.IgnoreNotFound(r.Update(ctx, databricksAccount))
+}
+
+// reportHeld says why this object is not going, on the object somebody deleted.
+//
+// Only ever False. The moment it would be true the finalizer is released and
+// the object is gone, and a condition on a deleted object is one nobody reads.
+func (r *DatabricksAccountReconciler) reportHeld(databricksAccount *dbxv1alpha1.DatabricksAccount, naming int) {
+	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionRecordsReleased,
+		metav1.ConditionFalse, reasonRecordsRemain,
+		fmt.Sprintf("%d record(s) in %s still name Databricks account %s, so this object is held: "+
+			"letting it go and creating another one naming a different account is the edit "+
+			"accountId's immutability refuses, and an id means nothing outside the account it "+
+			"was made in. Deleting a record destroys the service principal it names. An account "+
+			"that can no longer be reached never drains, so whoever has looked at what is left "+
+			"in Databricks removes the finalizer.",
+			naming, r.DatabricksAccountNamespacedName.Namespace, databricksAccount.Spec.AccountID))
 }
 
 // databricksAccountServes reports whether one namespace is this operator's to
@@ -694,6 +783,19 @@ func (r *DatabricksAccountReconciler) setNotSelected(ctx context.Context,
 	if err := r.Get(ctx, databricksAccountNamespacedName, &databricksAccount); err != nil {
 		return client.IgnoreNotFound(err)
 	}
+
+	// An object this operator does not use carries nothing of this operator's.
+	// Moving --databricks-account is meant to be staged -- write the new object,
+	// see it accepted, then move the flag -- and a finalizer left on the one it
+	// moved off would make deleting that one hang on a controller that no longer
+	// looks at it.
+	if controllerutil.ContainsFinalizer(&databricksAccount, dbxv1alpha1.AccountFinalizer) {
+		controllerutil.RemoveFinalizer(&databricksAccount, dbxv1alpha1.AccountFinalizer)
+		if err := client.IgnoreNotFound(r.Update(ctx, &databricksAccount)); err != nil {
+			return err
+		}
+	}
+
 	setCondition(&databricksAccount.Status.Conditions, databricksAccount.Generation, conditionReady,
 		metav1.ConditionFalse, reasonNotSelected,
 		fmt.Sprintf("this operator uses %s; change --databricks-account to select this one instead",
@@ -704,7 +806,7 @@ func (r *DatabricksAccountReconciler) setNotSelected(ctx context.Context,
 // reportReady ends the pass: it writes Ready, comes back at the interval that
 // status asks for, and does the status update.
 //
-// The update is what tells it from reportAgreement and reportPrepared, which set
+// The update is what tells it from reportHeld and reportPrepared, which set
 // their condition on the object in memory and return nothing. This is what
 // carries them to the API server.
 func (r *DatabricksAccountReconciler) reportReady(ctx context.Context,

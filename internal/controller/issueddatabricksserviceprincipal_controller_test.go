@@ -303,68 +303,6 @@ func TestTheDestroyingReadIsNotTakenFromTheCache(t *testing.T) {
 	}
 }
 
-// TestARecordIsHeldRatherThanActedOnInTheWrongAccount covers switching the
-// DatabricksAccount and switching it back.
-//
-// An id means nothing in another account: deleting it there removes something
-// this operator never made, or answers 404 and reads as already gone. So a
-// record whose account is not the one being acted in waits, and says so. It
-// costs nothing to wait -- the record is in the operator's own namespace, so
-// nothing anybody else owns is held up by it.
-func TestARecordIsHeldRatherThanActedOnInTheWrongAccount(t *testing.T) {
-	t.Parallel()
-	serviceAccount := asking(testNamespace, testName)
-	issued := recordFor(serviceAccount)
-	issued.Status.ServicePrincipalID = "7788"
-	issued.Status.AccountID = "the-account-it-was-made-in"
-
-	// Already on its way out, and stuck: the delete has not landed yet. That is
-	// what makes the account able to change underneath a revoke, which is the
-	// case this is about.
-	stub := &stubClients{
-		accountID: "the-account-it-was-made-in",
-		deleteErr: errors.New("the service is temporarily unavailable"),
-	}
-	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, issued)
-	stopsAsking(t, c.Client)
-	c.settle(t)
-
-	if c.issuedOf(t, serviceAccount).DeletionTimestamp.IsZero() {
-		t.Fatal("the record is not on its way out; this test is about one that is")
-	}
-
-	// And now the operator is pointed somewhere else.
-	stub.accountID = "somewhere-else"
-	stub.deleteErr = nil
-	c.settle(t)
-
-	held := c.issuedOf(t, serviceAccount)
-	if held == nil {
-		t.Fatal("the record went while its service principal is alive in another account")
-	}
-	if len(stub.deleted) != 0 {
-		t.Errorf("deleted %v while acting in another account; that id names something this "+
-			"operator never made, or nothing at all", stub.deleted)
-	}
-	ready := meta.FindStatusCondition(held.Status.Conditions, conditionReady)
-	if ready == nil || ready.Reason != reasonAccountMismatch {
-		t.Fatalf("Ready is %v, want it to name the account to point back at", ready)
-	}
-
-	// It resumes when the operator comes back, without anybody having to
-	// remember that it was waiting.
-	stub.accountID = "the-account-it-was-made-in"
-	c.settle(t)
-
-	if len(stub.deleted) != 1 || stub.deleted[0] != "7788" {
-		t.Errorf("deleted %v after the operator came back to the account it was made in, "+
-			"want the identity it was holding", stub.deleted)
-	}
-	if c.issuedOf(t, serviceAccount) != nil {
-		t.Error("the record is still there after what it held was deleted")
-	}
-}
-
 // deleteEverythingIn removes what a namespace teardown removes, which is
 // everything namespaced in it.
 func deleteEverythingIn(t *testing.T, c client.Client, namespace string) {
@@ -489,46 +427,6 @@ func TestRemovingTheFinalizerByHandIsNotArguedWith(t *testing.T) {
 	if len(stub.deleted) != 0 {
 		t.Errorf("deleted %v after being let go by hand; letting go is the person saying they "+
 			"will deal with what is left", stub.deleted)
-	}
-}
-
-// TestAnIdRecordedWithNoAccountIsNotConcludedFrom covers the inference that is
-// only available when both are known.
-//
-// A 404 from Databricks means "gone" or "not in this account", and the code
-// treats it as the first: it records the removal and never rebuilds. That is
-// unrecoverable. With no account recorded there is nothing to tell the two
-// apart, and the comment saying an empty value is not evidence of anything sat
-// above code that proceeded as though it were evidence of sameness.
-func TestAnIdRecordedWithNoAccountIsNotConcludedFrom(t *testing.T) {
-	t.Parallel()
-	serviceAccount := asking(testNamespace, testName)
-	carried := recordFor(serviceAccount)
-	carried.Status.ServicePrincipalID = "7788"
-	carried.Status.ClientID = "app-uuid"
-	// No account: a record written before this was kept, or edited by hand.
-
-	stub := &stubClients{gone: "7788"}
-	c := newControllers(t, stub, mintingNamespace(testNamespace), serviceAccount, carried)
-	c.settle(t)
-
-	issued := c.issuedOf(t, serviceAccount)
-	if issued == nil {
-		t.Fatal("the record is gone")
-	}
-	if issued.Status.ServicePrincipalRemovedAt != nil {
-		t.Errorf("recorded %s as deleted in Databricks on the strength of a 404 that could as "+
-			"readily have meant 'not in this account'", issued.Status.ServicePrincipalID)
-	}
-	if issued.Status.ServicePrincipalID != "7788" {
-		t.Errorf("servicePrincipalId is %q, want it untouched", issued.Status.ServicePrincipalID)
-	}
-	ready := meta.FindStatusCondition(issued.Status.Conditions, conditionReady)
-	if ready == nil || ready.Reason != reasonAccountUnknown {
-		t.Fatalf("Ready is %v, want it to say the account is unknown", ready)
-	}
-	if !strings.Contains(ready.Message, "accountId") {
-		t.Errorf("message is %q; it has to say what would unstick it", ready.Message)
 	}
 }
 

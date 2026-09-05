@@ -43,7 +43,7 @@ var conditionTypes = map[string]string{
 	"conditionReady":                     "Ready",
 	"conditionEquipped":                  "Equipped",
 	"conditionPrepared":                  "Prepared",
-	"conditionAccountsAgree":             "AccountsAgree",
+	"conditionRecordsReleased":           "RecordsReleased",
 	"conditionFederationPoliciesRemoved": "FederationPoliciesRemoved",
 }
 
@@ -63,10 +63,7 @@ var conditionReasons = map[string]string{
 	"reasonRemovedInDatabricks":      "RemovedInDatabricks",
 	"reasonNotEquipped":              "NotEquipped",
 	"reasonEquipped":                 "Equipped",
-	"reasonElsewhere":                "IdentitiesElsewhere",
-	"reasonHere":                     "AllHere",
-	"reasonAccountMismatch":          "AccountMismatch",
-	"reasonAccountUnknown":           "AccountUnknown",
+	"reasonRecordsRemain":            "RecordsRemain",
 	"reasonDeleteFailed":             "DeleteFailed",
 	"reasonCreateUnconfirmed":        "CreateUnconfirmed",
 	"reasonNotServed":                "NotServed",
@@ -79,7 +76,7 @@ var conditionReasons = map[string]string{
 }
 
 // TestEveryConditionTypeAndReasonIsTheStringItWas holds the published spelling
-// of all 33 constants against an accidental edit.
+// of all 30 constants against an accidental edit.
 func TestEveryConditionTypeAndReasonIsTheStringItWas(t *testing.T) {
 	t.Parallel()
 	declared := conditionConstantsIn(t, "conditions.go")
@@ -111,8 +108,8 @@ func TestEveryConditionTypeAndReasonIsInTheTable(t *testing.T) {
 	t.Parallel()
 	declared := conditionConstantsIn(t, "conditions.go")
 
-	if len(conditionTypes) != 5 || len(conditionReasons) != 28 {
-		t.Errorf("the table holds %d condition types and %d reasons, want 5 and 28",
+	if len(conditionTypes) != 5 || len(conditionReasons) != 25 {
+		t.Errorf("the table holds %d condition types and %d reasons, want 5 and 25",
 			len(conditionTypes), len(conditionReasons))
 	}
 	if len(declared) != len(conditionTypes)+len(conditionReasons) {

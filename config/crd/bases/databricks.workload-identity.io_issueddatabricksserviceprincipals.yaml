@@ -174,16 +174,21 @@ spec:
                 description: |-
                   accountId is the Databricks account this record was acted on in.
 
-                  It is recorded because an id means nothing anywhere else: an operator
-                  pointed at another account would delete something it never made, or read
-                  the 404 that means "not here" as the one that means "gone".
+                  It is where somebody reads off which account to search for the service
+                  principal below, and it is the only thing an operator compares at startup:
+                  one of these naming an account other than the one it was told to use is an
+                  operator that refuses to serve, because an id means nothing outside the
+                  account it was made in. Nothing else branches on it -- the account this
+                  operator acts in is fixed for its lifetime, so every record it can see
+                  belongs to it.
 
                   It is in the status rather than the spec because the account is not known
                   to whoever writes the record -- the DatabricksServiceAccount controller
                   knows a ServiceAccount is asking and nothing about Databricks. It is
                   written before the first call is made, not with the answer, so that a pass
                   which creates a service principal and then stops has already said where to
-                  look for it.
+                  look for it. A record that never sent one names no account, which is what
+                  makes an operator that never reached Databricks free to be uninstalled.
                 type: string
               audience:
                 type: string

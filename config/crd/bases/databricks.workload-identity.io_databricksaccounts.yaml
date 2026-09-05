@@ -95,9 +95,28 @@ spec:
                 description: "accountId identifies the Databricks account.\n\n\tdatabricks
                   account users list -o json | jq -r '.[0].id'  # not this\n\nIt is
                   in the account console URL, and in the CLI's own profile:\n\n\tdatabricks
-                  auth describe -p <account profile>"
+                  auth describe -p <account profile>\n\nIt cannot be changed. A service
+                  principal id means nothing outside the\naccount it was made in,
+                  so an operator pointed at another one would delete\nsomething it
+                  never made, or read the 404 that means \"not here\" as the one\nthat
+                  means \"gone\" -- for every identity in the cluster, in one reconcile\ninterval,
+                  with nothing anywhere reporting an error.\n\nThis is one of three
+                  doors, and closing it alone would not be worth much.\nDeleting the
+                  object and creating another naming a different account is the\nsame
+                  edit with a longer handle, which is what AccountFinalizer refuses,\nand
+                  pointing a running operator at a second object is a third, which
+                  is\nchecked when it starts. Together they make the account this
+                  operator acts\nin fixed for its lifetime, and an id it wrote down
+                  always meaningful."
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: 'accountId is immutable: a service principal id means nothing
+                    outside the account it was made in, so this operator acts in one
+                    Databricks account for its whole life. Delete this object and
+                    create the one you meant, or install a second operator for the
+                    other account.'
+                  rule: self == oldSelf
               clientId:
                 description: |-
                   clientId is the applicationId of the service principal the operator acts
@@ -115,9 +134,20 @@ spec:
 
                   On unified deployments the account and its workspaces share one host, so
                   this is not always an "accounts." name.
+
+                  It cannot be changed, for the reason accountId cannot: one account has one
+                  host, so an edit here is either a correction or a move, and a move is the
+                  same thing accountId's own immutability refuses.
                 minLength: 1
                 pattern: ^https://
                 type: string
+                x-kubernetes-validations:
+                - message: 'host is immutable: one account has one host, so an edit
+                    here is either a correction or a move to another account, and
+                    a move would leave every id this operator recorded naming nothing.
+                    Delete this object and create the one you meant, or install a
+                    second operator for the other account.'
+                  rule: self == oldSelf
               namespaces:
                 description: |-
                   namespaces are the namespaces this operator will serve, by name.

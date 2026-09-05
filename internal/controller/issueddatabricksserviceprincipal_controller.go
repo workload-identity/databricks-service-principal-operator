@@ -126,9 +126,10 @@ func (r *IssuedDatabricksServicePrincipalReconciler) Reconcile(ctx context.Conte
 		return ctrl.Result{}, err
 	}
 
-	// One view of the clients for the whole pass. Asking the AccountInUse again
-	// between the guard and the call it guards is what lets a pass check one
-	// account and act in another.
+	// One view of the clients for the whole pass. What is installed can be
+	// withdrawn between two calls -- see Snapshot -- and a pass that looks up in
+	// one account and deletes in another has the two answers that are
+	// unrecoverable.
 	clients := r.Databricks.Snapshot()
 
 	if !issued.DeletionTimestamp.IsZero() {
@@ -158,14 +159,6 @@ func (r *IssuedDatabricksServicePrincipalReconciler) Reconcile(ctx context.Conte
 		// before anything exists to hold" is something a reader can see rather
 		// than trace. The next pass builds.
 		return ctrl.Result{Requeue: true}, nil
-	}
-
-	// Ahead of everything else. An id means nothing outside the account it was
-	// made in: acting on this record from another one would delete something
-	// this operator never made, or read the 404 that means "not here" as the one
-	// that means "gone".
-	if elsewhere, message := r.elsewhere(clients, &issued); elsewhere {
-		return r.reportReady(ctx, &issued, metav1.ConditionUnknown, reasonAccountMismatch, message)
 	}
 
 	switch wanted, err := r.stillWanted(ctx, &issued); {
@@ -243,15 +236,6 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 		return ctrl.Result{}, nil
 	}
 
-	// Held rather than released. Releasing here would leave a live service
-	// principal in another account with nothing anywhere recording it -- which
-	// is the one outcome this whole shape exists to prevent. It waits instead,
-	// and it costs nothing to wait: the record is in the operator's own
-	// namespace, so nothing else is blocked by it.
-	if elsewhere, message := r.elsewhere(clients, issued); elsewhere {
-		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountMismatch, message)
-	}
-
 	// What there is to delete, which each state answers differently and only one
 	// of them by asking Databricks.
 	var id string
@@ -299,18 +283,11 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 		id = found
 
 	case dbxv1alpha1.ServicePrincipalKnown:
-		// The same refusal elsewhere makes, for the same reason and a worse
-		// outcome. Deleting an id in the wrong account answers 404, which reads
-		// as already gone, releases the finalizer, and leaves a live service
-		// principal in the other account with nothing anywhere recording it.
-		if issued.Status.AccountID == "" && clients.AccountID() != "" {
-			return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
-				fmt.Sprintf("service principal %s is recorded with no Databricks account, so it is "+
-					"not deleted from here: an answer of 'not found' would mean 'not in this "+
-					"account' as readily as 'gone'. This record is held until somebody sets "+
-					"status.accountId, or removes the finalizer having seen what is left behind.",
-					issued.Status.ServicePrincipalID))
-		}
+		// The id is authoritative, and it is meaningful because the account this
+		// operator acts in cannot change under it: spec.accountId is immutable,
+		// the DatabricksAccount cannot be deleted while records name its
+		// account, and an operator whose records name another one refuses to
+		// start.
 		id = issued.Status.ServicePrincipalID
 	}
 
@@ -382,27 +359,6 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 	issuer, audience, err := r.issuerAndAudience(ctx)
 	if err != nil {
 		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonUnprepared, err.Error())
-	}
-
-	// A recorded id with no account is not something to conclude from.
-	//
-	// The existence check below reads a 404 as "somebody deleted it in
-	// Databricks", which is recorded and never rebuilt. That reading is only
-	// available when the account this was made in is known and is the one being
-	// asked -- otherwise the same 404 means "not here", and taking it as a
-	// deletion erases the only record of where a live identity is.
-	//
-	// The account is written before the first call, so this is a record carried
-	// across an upgrade or edited by hand. It waits rather than guesses, and
-	// somebody has to say which account it was made in.
-	if issued.Status.ServicePrincipalState() == dbxv1alpha1.ServicePrincipalKnown &&
-		issued.Status.AccountID == "" && clients.AccountID() != "" {
-		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
-			fmt.Sprintf("service principal %s is recorded with no Databricks account, so an "+
-				"answer of 'not found' cannot be told from a lookup in the wrong place. Nothing "+
-				"is done for it and nothing about it is concluded. Set status.accountId to the "+
-				"account it was made in, or delete this record if you have removed it there.",
-				issued.Status.ServicePrincipalID))
 	}
 
 	issuing := r.issuing(issued, issuer)
@@ -651,19 +607,6 @@ func (r *IssuedDatabricksServicePrincipalReconciler) removeFederationPolicies(ct
 				namespace, dbxv1alpha1.RemovingPoliciesLabel, holder, holder))
 	}
 
-	// The same refusal converge and destroy make, for the same reason. Listing
-	// the policies on an id that was made in another account is a lookup in the
-	// wrong place, and whatever it answers -- nothing there, or a 404 -- reads
-	// exactly like the trust already being gone. Reporting that as a removal
-	// would be this operator saying it took back something it never looked at.
-	if issued.Status.AccountID == "" && clients.AccountID() != "" {
-		return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonAccountUnknown,
-			fmt.Sprintf("namespace %s is no longer served and service principal %s is recorded "+
-				"with no Databricks account, so its federation policies are not removed from "+
-				"here: this cluster may still be able to exchange for it. Set status.accountId "+
-				"to the account it was made in.", namespace, issued.Status.ServicePrincipalID))
-	}
-
 	// The issuer alone, as a deletion takes it. The audience is what a policy
 	// being written needs, and holding a removal over a token with no aud
 	// claim would leave the trust in place over a value nothing here sends.
@@ -743,26 +686,6 @@ func (r *IssuedDatabricksServicePrincipalReconciler) issuing(
 		Operator:          r.DatabricksAccountNamespacedName.String(),
 		Identity:          issued.Spec.Identity,
 	}
-}
-
-// elsewhere reports whether this record was made in a different Databricks
-// account than the one the operator is acting in, and says so in the words
-// whoever reads it needs.
-//
-// Only when both are known. An unconfigured AccountInUse reports no account,
-// and that is not evidence of anything.
-func (r *IssuedDatabricksServicePrincipalReconciler) elsewhere(clients databricks.Clients,
-	issued *dbxv1alpha1.IssuedDatabricksServicePrincipal) (bool, string) {
-	here := clients.AccountID()
-	if here == "" || issued.Status.AccountID == "" || issued.Status.AccountID == here {
-		return false, ""
-	}
-	return true, fmt.Sprintf(
-		"this identity was made in Databricks account %s and this operator is acting in %s. "+
-			"Nothing is done for it and nothing about it is concluded: it is not known to be "+
-			"gone, only unreachable from where this is looking. Point the DatabricksAccount "+
-			"back at %s to resume.",
-		issued.Status.AccountID, here, issued.Status.AccountID)
 }
 
 // issuerAndAudience is the issuer and audience this operator's own token
