@@ -300,8 +300,9 @@ func (r *DatabricksAccountReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if claimsErr != nil {
 			message = fmt.Sprintf("%s (and the operator's own token could not be read: %v)", message, claimsErr)
 		}
-		result := outcomeFor(err)
-		return r.reportReady(ctx, &databricksAccount, result.Status, result.Reason, message)
+		failure := outcomeFor(err)
+		failure.Message = message
+		return r.reportFailure(ctx, &databricksAccount, failure)
 	}
 
 	r.AccountInUse.Set(cfg, clients)
@@ -969,6 +970,25 @@ func (r *DatabricksAccountReconciler) reportReady(ctx context.Context,
 	return ctrl.Result{
 		RequeueAfter: retryAfterFor(status, databricksAccountRetryAfterAwaited, databricksAccountRetryAfterSettled),
 	}, client.IgnoreNotFound(r.Status().Update(ctx, databricksAccount))
+}
+
+// reportFailure ends the pass on something Databricks said: reportReady, plus
+// the one thing outcomeFor decides that a condition cannot carry -- whether this
+// failure goes back to the workqueue as an error, which is what outcome.Err is
+// about.
+//
+// The condition is written either way, and first, so what a person reads does
+// not depend on which kind of failure this was.
+func (r *DatabricksAccountReconciler) reportFailure(ctx context.Context,
+	databricksAccount *dbxv1alpha1.DatabricksAccount, failure outcome) (ctrl.Result, error) {
+	result, err := r.reportReady(ctx, databricksAccount, failure.Status, failure.Reason, failure.Message)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if failure.Err != nil {
+		return ctrl.Result{}, failure.Err
+	}
+	return result, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -19,12 +19,14 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/databricks/databricks-sdk-go/apierr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -249,8 +251,13 @@ func TestASettledIdentityIsNotAskedAboutAsOftenAsAFailingOne(t *testing.T) {
 	if ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Fatalf("Ready is %v; this half of the comparison has to be a converged identity", ready)
 	}
+	// A refusal rather than an outage, because those two come back different
+	// ways and only this one comes back on an interval: an unreachable Databricks
+	// is handed to the workqueue as an error and backs off exponentially, which
+	// is what leaves it nothing to compare here.
 	awaited, waiting := comeBackIn(t, &stubClients{
-		policyErr: errors.New("the service is temporarily unavailable"),
+		policyErr: fmt.Errorf("the operator's service principal may not write policies: %w",
+			apierr.ErrPermissionDenied),
 	})
 	if waiting == nil || waiting.Status == metav1.ConditionTrue {
 		t.Fatalf("Ready is %v; this half has to be an identity that is still owed something", waiting)

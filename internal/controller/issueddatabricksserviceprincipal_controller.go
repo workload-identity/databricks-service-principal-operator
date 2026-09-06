@@ -293,8 +293,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 		issuing := r.issuing(issued, issuer)
 		found, _, ok, err := clients.FindServicePrincipal(ctx, issuing)
 		if err != nil {
-			result := outcomeFor(err)
-			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
+			return r.reportFailure(ctx, issued, outcomeFor(err))
 		}
 		if !ok {
 			return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonCreateUnconfirmed,
@@ -323,10 +322,12 @@ func (r *IssuedDatabricksServicePrincipalReconciler) destroy(ctx context.Context
 		if err := clients.DeleteServicePrincipal(ctx, id); err != nil {
 			logger.Error(err, "Could not delete the service principal in Databricks, so this record is held",
 				"servicePrincipalId", id)
-			result := outcomeFor(err)
-			return r.reportReady(ctx, issued, result.Status, reasonDeleteFailed,
-				fmt.Sprintf("%s; the service principal is still there, and this record is held until it is not",
-					result.Message))
+			failure := outcomeFor(err)
+			failure.Reason = reasonDeleteFailed
+			failure.Message = fmt.Sprintf(
+				"%s; the service principal is still there, and this record is held until it is not",
+				failure.Message)
+			return r.reportFailure(ctx, issued, failure)
 		}
 		logger.Info("Deleted the service principal in Databricks", "servicePrincipalId", id)
 	}
@@ -375,8 +376,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 		// listing that has not caught up.
 		switch there, err := clients.ServicePrincipalExists(ctx, issued.Status.ServicePrincipalID); {
 		case err != nil:
-			result := outcomeFor(err)
-			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
+			return r.reportFailure(ctx, issued, outcomeFor(err))
 		case !there:
 			// The moment, and nothing cleared. The id stays where it was
 			// written, which is where somebody searching the audit log for who
@@ -415,8 +415,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 		id, clientID, err := clients.CreateServicePrincipal(ctx, issuing)
 		if err != nil {
 			logger.Error(err, "Could not create the service principal in Databricks")
-			result := outcomeFor(err)
-			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
+			return r.reportFailure(ctx, issued, outcomeFor(err))
 		}
 		logger.Info("Created a service principal in Databricks",
 			"servicePrincipalId", id, "clientId", clientID)
@@ -432,8 +431,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 		// for ever.
 		id, clientID, found, err := clients.FindServicePrincipal(ctx, issuing)
 		if err != nil {
-			result := outcomeFor(err)
-			return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
+			return r.reportFailure(ctx, issued, outcomeFor(err))
 		}
 		if !found {
 			return r.reportReady(ctx, issued, metav1.ConditionUnknown, reasonCreateUnconfirmed,
@@ -466,8 +464,7 @@ func (r *IssuedDatabricksServicePrincipalReconciler) converge(ctx context.Contex
 		logger.Error(err, "Could not write the federation policy, so no token from this cluster can be "+
 			"exchanged for this identity", "servicePrincipalId", issued.Status.ServicePrincipalID,
 			"subject", issued.Spec.Subject)
-		result := outcomeFor(err)
-		return r.reportReady(ctx, issued, result.Status, result.Reason, result.Message)
+		return r.reportFailure(ctx, issued, outcomeFor(err))
 	}
 	if exchangeable {
 		logger.V(1).Info("The federation policy is still in place",
@@ -661,6 +658,25 @@ func (r *IssuedDatabricksServicePrincipalReconciler) reportReady(ctx context.Con
 	return ctrl.Result{
 		RequeueAfter: retryAfterFor(status, issuedRetryAfterAwaited, issuedRetryAfterSettled),
 	}, client.IgnoreNotFound(r.Status().Update(ctx, issued))
+}
+
+// reportFailure ends the pass on something Databricks said: reportReady, plus
+// the one thing outcomeFor decides that a condition cannot carry -- whether this
+// failure goes back to the workqueue as an error, which is what outcome.Err is
+// about.
+//
+// The condition is written either way, and first, so what a person reads does
+// not depend on which kind of failure this was.
+func (r *IssuedDatabricksServicePrincipalReconciler) reportFailure(ctx context.Context,
+	issued *dbxv1alpha1.IssuedDatabricksServicePrincipal, failure outcome) (ctrl.Result, error) {
+	result, err := r.reportReady(ctx, issued, failure.Status, failure.Reason, failure.Message)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if failure.Err != nil {
+		return ctrl.Result{}, failure.Err
+	}
+	return result, nil
 }
 
 // issuedByServiceAccount indexes records by the uid of the ServiceAccount they
