@@ -196,3 +196,4 @@ the two `export` lines. That is the whole of it
 |                      | [When something is wrong](docs/when-something-is-wrong.md)                           | You have a symptom and not yet an object to look at                          |
 | Evaluating this      | [Issuing an identity, not a permission](docs/identity-not-permission.md)             | What the boundary is, why it is load-bearing, and what it costs              |
 |                      | [What was measured](docs/measured.md)                                                | Every claim this rests on, what was asked, and what came back                |
+|                      | [Security](SECURITY.md)                                                              | What is a vulnerability here and what is the design, and how to report one   |
